@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CronScheduler } from "./scheduler.js";
 import type { LoopEntry } from "./types.js";
 

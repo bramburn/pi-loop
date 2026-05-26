@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1]
+
+- Migrated peer dependencies from `@mariozechner/pi-*` to `@earendil-works/pi-*`
+- Fixed `.npmignore` to include `src/` and `dist/` directories
+
 ## [0.1.0] — Initial Release
 
 ### Tools

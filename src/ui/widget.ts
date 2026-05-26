@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { MonitorManager } from "../monitor-manager.js";
 import type { CronScheduler } from "../scheduler.js";
 import type { LoopStore } from "../store.js";
