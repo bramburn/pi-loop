@@ -1,5 +1,5 @@
 <p align="center">
-<h1 align="center">@trevonistrevon/pi-loop</h1>
+<h1 align="center">@pi-loop</h1>
 <h6 align="center">Cron and event loops for the pi coding agent. Background monitors, scheduled re-wakes, pi-tasks integration.</h6>
 </p>
 
