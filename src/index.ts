@@ -439,13 +439,17 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
   pi.registerTool({
     name: "MonitorCreate",
     label: "MonitorCreate",
-    description: `Start a background command and stream its output via pi events. Optionally auto-notify when done.
+    description: `Run a shell command in the background and get notified when it finishes. The core tool for async/parallel work.
 
-The monitor runs a shell command in the background. Each output line is emitted as a "monitor:output" pi event. Use this to watch logs, tail files, poll APIs, run experiments, etc.
+Fire off a build check, CI monitor, experiment, script, or any slow command — then keep working. Output streams back as "monitor:output" events. When the process exits, "monitor:done" fires (or "monitor:error" on failure).
+
+If you pass onDone with a prompt, the monitor auto-creates a one-shot completion loop — you get a system reminder with the exit code and output line count. No need to poll or create a separate loop.
+
+DO NOT use raw Bash while/sleep/for loops to watch something. DO NOT run slow commands inline that could be offloaded. Use MonitorCreate to run work in parallel while you continue.
 
 ## When to Use
 
-Use this tool to:\n- Start a long-running experiment and get notified when it finishes\n- Watch a log file or build output in the background\n- Poll an API and stream results\n- Run any background command whose output you want to track
+Default to MonitorCreate for any long-running or background work:\n- Watch a CI/CD build (hut, gh, curl polling) while you work on something else\n- Run experiments, benchmarks, or training scripts in parallel\n- Tail a log or poll an API endpoint\n- Fire off a slow curl/fetch and check the result later\n- Run any script or command you don't need to wait on inline
 
 ## Events emitted
 
@@ -453,10 +457,11 @@ Use this tool to:\n- Start a long-running experiment and get notified when it fi
 
 ## onDone — auto-notify on completion
 
-Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fires when the process exits. The system reminder includes the exit code and output line count. No need to create a separate LoopCreate or poll MonitorList.\n\nExample: MonitorCreate command="python train.py" onDone="Check training results and report best loss"`,
+Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fires when the process exits. The system reminder includes the exit code and output line count.\n\nExample: MonitorCreate command="python train.py" onDone="Check training results and report best loss"\nExample: MonitorCreate command="hut builds show 1769753" onDone="Analyze the build result and report status"`,
     promptGuidelines: [
-      "Use onDone to auto-notify when a long-running command finishes — no need for a separate LoopCreate.",
-      "When starting experiments or benchmarks, pass onDone so the agent automatically picks up the results.",
+      "Default to MonitorCreate for any long-running or background command — releases the agent to keep working on other tasks in parallel.",
+      "When the user asks to monitor CI builds, watch a build, check a remote job, or run an experiment, use MonitorCreate instead of inline bash/curl/wait.",
+      "Use onDone to auto-notify when a background command finishes — the agent will pick up the results automatically.",
     ],
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to run in background" }),
