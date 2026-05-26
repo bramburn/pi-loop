@@ -1,0 +1,47 @@
+{
+  "name": "@trevonistrevon/pi-loop",
+  "version": "0.1.0",
+  "description": "A pi extension for cron/event-based agent re-wake loops and background process monitoring.",
+  "author": "trevonistrevon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trevonistrevon/pi-loop.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "loop",
+    "cron",
+    "monitor",
+    "scheduler"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.70.5",
+    "@mariozechner/pi-tui": ">=0.70.5"
+  },
+  "dependencies": {
+    "typebox": "^1.1.34"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/ test/",
+    "lint:fix": "biome check --fix src/ test/"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^6.0.0",
+    "@biomejs/biome": "^2.4.13",
+    "vitest": "^4.1.5"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
