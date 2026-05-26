@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2]
+
+- Added `onDone` parameter to `MonitorCreate` — auto-creates a completion loop so the agent is notified when a background process finishes, no polling needed
+- Updated tool descriptions and prompt guidelines for the MonitorCreate + LoopCreate pairing
+
+
+
 ## [0.1.1]
 
 - Migrated peer dependencies from `@mariozechner/pi-*` to `@earendil-works/pi-*`

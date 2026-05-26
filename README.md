@@ -1,5 +1,5 @@
 <p align="center">
-<h1 align="center">@pi-loop</h1>
+<h1 align="center">@trevonistrevon/pi-loop</h1>
 <h6 align="center">Cron and event loops for the pi coding agent. Background monitors, scheduled re-wakes, pi-tasks integration.</h6>
 </p>
 
@@ -20,6 +20,7 @@ LoopDelete id="1"
 
 ```
 MonitorCreate command="tail -n0 -f build.log" description="Watch build"
+MonitorCreate command="python train.py" onDone="Analyze results and report best loss"
 MonitorList
 MonitorStop monitorId="1"
 ```
@@ -40,7 +41,7 @@ MonitorStop monitorId="1"
 | `LoopCreate` | Schedule a prompt on a cron timer, a pi event, or both with debounce |
 | `LoopList` | Show active loops with IDs, triggers, and next-fire times |
 | `LoopDelete` | Delete or pause a loop |
-| `MonitorCreate` | Run a background command, stream output as `monitor:output` events |
+| `MonitorCreate` | Run a background command, stream output as `monitor:output` events. Use `onDone` for auto-notify on completion |
 | `MonitorList` | Show monitors with status, uptime, and output line count |
 | `MonitorStop` | Stop a monitor (SIGTERM → 5s → SIGKILL) |
 

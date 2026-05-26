@@ -439,18 +439,30 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
   pi.registerTool({
     name: "MonitorCreate",
     label: "MonitorCreate",
-    description: `Start a background command and stream its output via pi events.
+    description: `Start a background command and stream its output via pi events. Optionally auto-notify when done.
 
-The monitor runs a shell command in the background. Each output line is emitted as a "monitor:output" pi event. Use this to watch logs, tail files, poll APIs, etc.
+The monitor runs a shell command in the background. Each output line is emitted as a "monitor:output" pi event. Use this to watch logs, tail files, poll APIs, run experiments, etc.
 
-Events emitted:
-- "monitor:output" — { monitorId, line, timestamp } for each output line
-- "monitor:done" — { monitorId, exitCode } on clean exit
-- "monitor:error" — { monitorId, error } on failure`,
+## When to Use
+
+Use this tool to:\n- Start a long-running experiment and get notified when it finishes\n- Watch a log file or build output in the background\n- Poll an API and stream results\n- Run any background command whose output you want to track
+
+## Events emitted
+
+- "monitor:output" — { monitorId, line, timestamp } for each output line\n- "monitor:done" — { monitorId, exitCode, outputLines } on clean exit\n- "monitor:error" — { monitorId, error } on failure
+
+## onDone — auto-notify on completion
+
+Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fires when the process exits. The system reminder includes the exit code and output line count. No need to create a separate LoopCreate or poll MonitorList.\n\nExample: MonitorCreate command="python train.py" onDone="Check training results and report best loss"`,
+    promptGuidelines: [
+      "Use onDone to auto-notify when a long-running command finishes — no need for a separate LoopCreate.",
+      "When starting experiments or benchmarks, pass onDone so the agent automatically picks up the results.",
+    ],
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to run in background" }),
       description: Type.Optional(Type.String({ description: "Human-readable description" })),
       timeout: Type.Optional(Type.Number({ description: "Auto-stop after N ms (default: 300000, 0 = no timeout)", default: 300000 })),
+      onDone: Type.Optional(Type.String({ description: "Prompt to run when the monitor completes. Auto-creates a one-shot completion loop — no need for a separate LoopCreate." })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -461,10 +473,18 @@ Events emitted:
       const entry = monitorManager.create(params.command, params.description, params.timeout);
       widget.update();
 
+      let onDoneMsg = "";
+      if (params.onDone) {
+        const doneTrigger: Trigger = { type: "event", source: "monitor:done", filter: JSON.stringify({ monitorId: entry.id }) };
+        const doneLoop = store.create(doneTrigger, params.onDone, { recurring: false });
+        triggerSystem.add(doneLoop);
+        onDoneMsg = `\nonDone loop #${doneLoop.id}: fires when monitor completes — no polling needed`;
+      }
+
       return Promise.resolve(textResult(
         `Monitor #${entry.id} started: ${entry.command.slice(0, 60)}\n` +
         `Output stream: monitor:output (monitorId: ${entry.id})\n` +
-        `Timeout: ${params.timeout ? `${params.timeout / 1000}s` : "none"}`
+        `Timeout: ${params.timeout ? `${params.timeout / 1000}s` : "none"}${onDoneMsg}`
       ));
     },
   });
