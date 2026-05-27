@@ -41,6 +41,7 @@ interface LoopFireEvent {
   trigger: Trigger | string;
   timestamp: number;
   readOnly?: boolean;
+  recurring?: boolean;
 }
 
 interface SessionSwitchEvent {
@@ -136,6 +137,7 @@ export default function (pi: ExtensionAPI) {
       trigger: entry.trigger,
       timestamp: Date.now(),
       readOnly: entry.readOnly,
+      recurring: entry.recurring,
     });
   }
 
@@ -207,8 +209,8 @@ export default function (pi: ExtensionAPI) {
   pi.events.on("loop:fire", (event: unknown) => {
     const data = event as LoopFireEvent;
 
-    if (_latestCtx?.hasPendingMessages()) {
-      debug(`loop:fire #${data.loopId} — agent has pending messages, skipping`);
+    if (data.recurring && _latestCtx?.hasPendingMessages()) {
+      debug(`loop:fire #${data.loopId} — agent has pending messages, skipping recurring fire`);
       return;
     }
 

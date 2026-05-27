@@ -124,7 +124,7 @@ describe("loop:fire triggers sendUserMessage", () => {
     expect(sentMessages[0].msg).not.toContain("READ-ONLY MODE");
   });
 
-  it("skips sendUserMessage when agent already has pending messages", async () => {
+  it("skips recurring fires when agent already has pending messages", async () => {
     let sentMessages: Array<{ msg: string; opts: any }> = [];
     const turnHandlers: Array<(...args: any[]) => void> = [];
 
@@ -168,9 +168,61 @@ describe("loop:fire triggers sendUserMessage", () => {
       prompt: "Should be skipped",
       trigger: { type: "cron", schedule: "*/1 * * * *" },
       timestamp: Date.now(),
+      recurring: true,
     });
 
     expect(sentMessages.length).toBe(0);
+  });
+
+  it("sends one-shot fires even when agent has pending messages", async () => {
+    let sentMessages: Array<{ msg: string; opts: any }> = [];
+    const turnHandlers: Array<(...args: any[]) => void> = [];
+
+    const mockPi: any = {
+      events: {
+        emit: vi.fn((_event: string, data: any) => {
+          const cbs = eventHandlers.get(_event);
+          if (cbs) for (const cb of cbs) cb(data);
+        }),
+        on: (_event: string, handler: (data: any) => void) => {
+          if (!eventHandlers.has(_event)) eventHandlers.set(_event, []);
+          eventHandlers.get(_event)!.push(handler);
+          return () => {};
+        },
+      },
+      on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+        if (event === "turn_start") turnHandlers.push(handler);
+      }),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendUserMessage: (msg: string, opts: any) => {
+        sentMessages.push({ msg, opts });
+      },
+    };
+
+    const eventHandlers = new Map<string, Array<(data: any) => void>>();
+
+    const extension = await import("../src/index.js");
+    extension.default(mockPi);
+
+    for (const handler of turnHandlers) {
+      handler(null, {
+        ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+        hasPendingMessages: () => true,
+        sessionManager: { getSessionId: () => "test" },
+      });
+    }
+
+    mockPi.events.emit("loop:fire", {
+      loopId: "11",
+      prompt: "Monitor completed — must deliver",
+      trigger: { type: "event", source: "monitor:done" },
+      timestamp: Date.now(),
+      recurring: false,
+    });
+
+    expect(sentMessages.length).toBe(1);
+    expect(sentMessages[0].msg).toContain("Monitor completed");
   });
 
   it("sends message when agent has no pending messages", async () => {
@@ -217,6 +269,7 @@ describe("loop:fire triggers sendUserMessage", () => {
       prompt: "Should be sent",
       trigger: { type: "cron", schedule: "*/1 * * * *" },
       timestamp: Date.now(),
+      recurring: true,
     });
 
     expect(sentMessages.length).toBe(1);
