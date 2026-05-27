@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseInterval } from "./loop-parse.js";
 import { MonitorManager } from "./monitor-manager.js";

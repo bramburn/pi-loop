@@ -1,6 +1,6 @@
+import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { MonitorManager } from "../monitor-manager.js";
 import type { CronScheduler } from "../scheduler.js";
 import type { LoopStore } from "../store.js";
