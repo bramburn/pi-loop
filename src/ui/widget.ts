@@ -1,22 +1,15 @@
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { MonitorManager } from "../monitor-manager.js";
 import type { CronScheduler } from "../scheduler.js";
 import type { LoopStore } from "../store.js";
 
 const MAX_VISIBLE = 6;
 
-export type UICtx = {
-  setStatus(key: string, text: string | undefined): void;
-  setWidget(
-    key: string,
-    content: undefined | ((tui: any, theme: any) => { render(): string[]; invalidate(): void }),
-    options?: { placement?: "aboveEditor" | "belowEditor" },
-  ): void;
-};
-
 export class LoopWidget {
-  private uiCtx: UICtx | undefined;
-  private tui: any | undefined;
+  private uiCtx: ExtensionUIContext | undefined;
+  private tui: TUI | undefined;
   private widgetRegistered = false;
   private interval: ReturnType<typeof setInterval> | undefined;
 
@@ -26,7 +19,7 @@ export class LoopWidget {
     private monitorManager: MonitorManager,
   ) {}
 
-  setUICtx(ctx: UICtx) {
+  setUICtx(ctx: ExtensionUIContext) {
     this.uiCtx = ctx;
   }
 
@@ -61,17 +54,17 @@ export class LoopWidget {
     }
 
     if (!this.widgetRegistered) {
-      this.uiCtx.setWidget("loops", (tui, theme) => {
+      this.uiCtx.setWidget("loops", (tui: TUI, theme: Theme) => {
         this.tui = tui;
-        return { render: () => this.renderWidget(tui, theme), invalidate: () => {} };
+        return { render: () => this.renderWidget(tui, theme), invalidate: () => {} } as Component & { dispose?(): void };
       }, { placement: "aboveEditor" });
       this.widgetRegistered = true;
     } else if (this.tui) {
-      this.tui.requestRender();
+      (this.tui as any).requestRender();
     }
   }
 
-  private renderWidget(tui: any, _theme: any): string[] {
+  private renderWidget(tui: TUI, _theme: Theme): string[] {
     const loops = this.store.list().filter(l => l.status === "active");
     const monitors = this.monitorManager.list().filter(m => m.status === "running");
     const w = tui.terminal.columns;

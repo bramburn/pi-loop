@@ -148,4 +148,67 @@ describe("TriggerSystem", () => {
       }, 1000);
     });
   });
+
+  it("malformed JSON filter falls back to matching all events", () => {
+    const eventTrigger: Trigger = { type: "event", source: "json_filter_test", filter: "{{{bad" };
+    const entry = store.create(eventTrigger, "filter fallback", { recurring: true });
+    system.add(entry);
+
+    pi.events.emit("json_filter_test", { key: "value" });
+
+    const fireCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    expect(fireCalls.length).toBeGreaterThanOrEqual(1);
+    expect(fireCalls[fireCalls.length - 1][1]).toMatchObject({
+      loopId: entry.id,
+    });
+  });
+
+  it("regex filter matches event data stringified", () => {
+    const eventTrigger: Trigger = { type: "event", source: "regex_test", filter: "regex:hello" };
+    const entry = store.create(eventTrigger, "regex filter", { recurring: true });
+    system.add(entry);
+
+    pi.events.emit("regex_test", { msg: "hello world" });
+
+    const fireCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    expect(fireCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("regex filter rejects non-matching event", () => {
+    const eventTrigger: Trigger = { type: "event", source: "regex_no_match", filter: "regex:zzz" };
+    const entry = store.create(eventTrigger, "no match", { recurring: true });
+    system.add(entry);
+
+    const beforeCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    ).length;
+
+    pi.events.emit("regex_no_match", { msg: "hello" });
+
+    const afterCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    ).length;
+    expect(afterCalls).toBe(beforeCalls);
+  });
+
+  it("invalid regex filter does not match", () => {
+    const eventTrigger: Trigger = { type: "event", source: "bad_regex", filter: "regex:[invalid" };
+    const entry = store.create(eventTrigger, "bad regex", { recurring: true });
+    system.add(entry);
+
+    const beforeCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    ).length;
+
+    pi.events.emit("bad_regex", { msg: "anything" });
+
+    const afterCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    ).length;
+    expect(afterCalls).toBe(beforeCalls);
+  });
 });

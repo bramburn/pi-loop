@@ -18,8 +18,8 @@ function acquireLock(lockPath: string): void {
       if (e.code === "EEXIST") {
         try {
           const pid = parseInt(readFileSync(lockPath, "utf-8"), 10);
-          if (pid && !isProcessRunning(pid)) {
-            unlinkSync(lockPath);
+          if (!pid || !isProcessRunning(pid)) {
+            try { unlinkSync(lockPath); } catch { /* ignore */ }
             continue;
           }
         } catch { /* ignore read errors */ }
@@ -95,7 +95,7 @@ export class LoopStore {
     }
   }
 
-  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; selfPaced?: boolean }): LoopEntry {
+  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; selfPaced?: boolean; readOnly?: boolean }): LoopEntry {
     return this.withLock(() => {
       if (this.loops.size >= MAX_LOOPS) {
         throw new Error(`Maximum of ${MAX_LOOPS} loops reached. Delete some before creating new ones.`);
@@ -109,6 +109,7 @@ export class LoopStore {
         recurring: opts.recurring,
         autoTask: opts.autoTask,
         selfPaced: opts.selfPaced,
+        readOnly: opts.readOnly,
         createdAt: now,
         updatedAt: now,
         expiresAt: now + MAX_EXPIRY_DAYS * 24 * 60 * 60 * 1000,

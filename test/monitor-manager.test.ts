@@ -135,4 +135,22 @@ describe("MonitorManager", () => {
     });
     expect(manager.get("1")!.status).toBe("completed");
   });
+
+  it("force-kills with SIGKILL when process ignores SIGTERM", async () => {
+    vi.useFakeTimers();
+    const entry = manager.create(
+      "bash -c 'trap \"\" SIGTERM; while true; do sleep 1; done'",
+      "sigterm ignorer",
+      300000,
+    );
+    expect(manager.get(entry.id)!.status).toBe("running");
+
+    const stopPromise = manager.stop(entry.id);
+    vi.advanceTimersByTime(5100);
+    const stopped = await stopPromise;
+
+    expect(stopped).toBe(true);
+    expect(manager.get(entry.id)!.status).toBe("stopped");
+    vi.useRealTimers();
+  });
 });

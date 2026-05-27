@@ -31,6 +31,7 @@ export interface LoopEntry {
   expiresAt: number;
   autoTask?: boolean;
   selfPaced?: boolean;
+  readOnly?: boolean;
 }
 
 export interface LoopStoreData {

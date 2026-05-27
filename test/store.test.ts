@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -246,5 +246,54 @@ describe("LoopStore (absolute path)", () => {
     const store2 = new LoopStore(absFilePath);
     expect(store2.list()).toHaveLength(1);
     expect(store2.list()[0].prompt).toBe("abs test");
+  });
+
+  it("clears stale pid-based lock on create", () => {
+    const lPath = join(tmpdir(), `pi-loop-stale-${Date.now()}.json`);
+    const lockPath = lPath + ".lock";
+    try {
+      writeFileSync(lockPath, "99999");
+      const s = new LoopStore(lPath);
+      const entry = s.create(cronTrigger, "stale lock test", { recurring: true });
+      expect(entry.id).toBe("1");
+      expect(entry.prompt).toBe("stale lock test");
+    } finally {
+      try { rmSync(lPath); } catch { /* */ }
+      try { rmSync(lPath + ".lock"); } catch { /* */ }
+      try { rmSync(lPath + ".tmp"); } catch { /* */ }
+    }
+  });
+
+  it("clears stale pid-based lock on delete", () => {
+    const lPath = join(tmpdir(), `pi-loop-stale-${Date.now()}.json`);
+    const lockPath = lPath + ".lock";
+    try {
+      const s1 = new LoopStore(lPath);
+      s1.create(cronTrigger, "setup", { recurring: true });
+
+      writeFileSync(lockPath, "99999");
+      const s2 = new LoopStore(lPath);
+      expect(s2.delete("1")).toBe(true);
+      expect(s2.list()).toHaveLength(0);
+    } finally {
+      try { rmSync(lPath); } catch { /* */ }
+      try { rmSync(lPath + ".lock"); } catch { /* */ }
+      try { rmSync(lPath + ".tmp"); } catch { /* */ }
+    }
+  });
+
+  it("survives stale lock with unparseable pid", () => {
+    const lPath = join(tmpdir(), `pi-loop-stale-${Date.now()}.json`);
+    const lockPath = lPath + ".lock";
+    try {
+      writeFileSync(lockPath, "garbage");
+      const s = new LoopStore(lPath);
+      const entry = s.create(cronTrigger, "bad lock", { recurring: true });
+      expect(entry.id).toBe("1");
+    } finally {
+      try { rmSync(lPath); } catch { /* */ }
+      try { rmSync(lPath + ".lock"); } catch { /* */ }
+      try { rmSync(lPath + ".tmp"); } catch { /* */ }
+    }
   });
 });

@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseInterval } from "./loop-parse.js";
 import { MonitorManager } from "./monitor-manager.js";
@@ -24,7 +24,7 @@ import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
 import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry, Trigger } from "./types.js";
-import { LoopWidget, type UICtx } from "./ui/widget.js";
+import { LoopWidget } from "./ui/widget.js";
 
 const DEBUG = !!process.env.PI_LOOP_DEBUG;
 function debug(...args: unknown[]) {
@@ -33,6 +33,18 @@ function debug(...args: unknown[]) {
 
 function textResult(msg: string) {
   return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+}
+
+interface LoopFireEvent {
+  loopId: string;
+  prompt: string;
+  trigger: Trigger | string;
+  timestamp: number;
+  readOnly?: boolean;
+}
+
+interface SessionSwitchEvent {
+  reason?: string;
 }
 
 
@@ -123,6 +135,7 @@ export default function (pi: ExtensionAPI) {
       prompt: entry.prompt,
       trigger: entry.trigger,
       timestamp: Date.now(),
+      readOnly: entry.readOnly,
     });
   }
 
@@ -161,20 +174,20 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_start", async (_event, ctx) => {
     _latestCtx = ctx;
-    widget.setUICtx(ctx.ui as UICtx);
+    widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
     _latestCtx = ctx;
-    widget.setUICtx(ctx.ui as UICtx);
+    widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     showPersistedLoops();
   });
 
-  pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
+  pi.on("session_switch" as any, async (event: SessionSwitchEvent, ctx: ExtensionContext) => {
     _latestCtx = ctx;
-    widget.setUICtx(ctx.ui as UICtx);
+    widget.setUICtx(ctx.ui);
     triggerSystem.stop();
 
     const isResume = event?.reason === "resume";
@@ -191,7 +204,8 @@ export default function (pi: ExtensionAPI) {
 
   // ── Loop fire handler — sends a user message to re-wake the agent ──
 
-  pi.events.on("loop:fire", (data: any) => {
+  pi.events.on("loop:fire", (event: unknown) => {
+    const data = event as LoopFireEvent;
     const triggerInfo = typeof data.trigger === "string"
       ? data.trigger
       : data.trigger?.type === "cron"
@@ -201,8 +215,9 @@ export default function (pi: ExtensionAPI) {
           : `hybrid`;
 
     const prompt = data.prompt || "loop fired";
+    const constraint = data.readOnly ? "\n\nREAD-ONLY MODE — use only read tools (Read, TaskList, LoopList, MonitorList, LoopCreate, etc.). No file writes, shell execution, or destructive changes." : "";
     const message = [
-      `[pi-loop] Loop #${data.loopId || "?"} fired (${triggerInfo}).`,
+      `[pi-loop] Loop #${data.loopId || "?"} fired (${triggerInfo}).${constraint}`,
       prompt,
     ].join("\n");
 
@@ -247,7 +262,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 - **prompt**: what to do when the loop fires (e.g., "check if the build passed")
 - **recurring**: repeat or fire once (default: true)
 - **autoTask**: if pi-tasks is loaded, auto-create a task on each fire
-- **triggerType**: "cron", "event", or "hybrid" (inferred if omitted)`,
+- **readOnly**: restrict the agent to read-only tools when this loop fires (default: false)`,
     promptGuidelines: [
       "When the user asks for a loop, repeating task, periodic check, or scheduled reminder, use LoopCreate — not raw Bash for/sleep/while.",
       "Use LoopCreate for any 'every X seconds/minutes/hours' requests.",
@@ -261,10 +276,11 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       autoTask: Type.Optional(Type.Boolean({ description: "Auto-create pi-tasks task on fire", default: false })),
       triggerType: Type.Optional(Type.String({ description: "cron, event, or hybrid (inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid"] })),
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
+      readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { trigger: triggerInput, prompt, recurring, autoTask, triggerType, debounceMs } = params;
+      const { trigger: triggerInput, prompt, recurring, autoTask, triggerType, debounceMs, readOnly } = params;
 
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
@@ -286,10 +302,14 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         };
       }
 
+      const validationError = validateTrigger(trigger);
+      if (validationError) return Promise.resolve(textResult(validationError));
+
       const entry = store.create(trigger, prompt, {
         recurring: recurring ?? (inferred !== "event"),
         autoTask,
         selfPaced: triggerInput === "self-paced" || prompt.toLowerCase().includes("self-paced"),
+        readOnly,
       });
 
       triggerSystem.add(entry);
@@ -311,6 +331,28 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       ));
     },
   });
+
+  function validateTrigger(trigger: Trigger): string | null {
+    if (trigger.type === "cron") {
+      const parts = trigger.schedule.trim().split(/\s+/);
+      if (parts.length !== 5) {
+        return `Invalid cron trigger. Expected 5 fields, got ${parts.length}: "${trigger.schedule}". Use formats like "5m", "1h", "0 9 * * 1-5", or set triggerType to "event" for event sources.`;
+      }
+    } else if (trigger.type === "event") {
+      if (!trigger.source || trigger.source.trim().length === 0) {
+        return `Invalid event trigger. Event source must be non-empty (e.g., "tool_execution_start").`;
+      }
+    } else if (trigger.type === "hybrid") {
+      const cronParts = trigger.cron.trim().split(/\s+/);
+      if (cronParts.length !== 5) {
+        return `Invalid hybrid trigger. Cron part must have 5 fields, got ${cronParts.length}: "${trigger.cron}".`;
+      }
+      if (!trigger.event.source || trigger.event.source.trim().length === 0) {
+        return `Invalid hybrid trigger. Event source must be non-empty (e.g., "tool_execution_start").`;
+      }
+    }
+    return null;
+  }
 
   function inferTriggerType(input: string): "cron" | "event" | "hybrid" {
     if (input.includes("hybrid") || (input.includes("cron") && input.includes("event"))) return "hybrid";
@@ -554,8 +596,8 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
           triggerSystem.add(entry);
           widget.update();
           ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)}`, "info");
-        } catch (err: any) {
-          ui.notify(err.message, "error");
+        } catch (err: unknown) {
+          ui.notify((err as Error).message, "error");
         }
         return;
       }
@@ -572,7 +614,7 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     },
   });
 
-  async function scheduleLoop(ui: any, prompt?: string) {
+  async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
     if (!p) return;
 
@@ -586,12 +628,12 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
       triggerSystem.add(entry);
       widget.update();
       ui.notify(`Loop #${entry.id} created: every ${parsed.description}`, "info");
-    } catch (err: any) {
-      ui.notify(err.message, "error");
+    } catch (err: unknown) {
+      ui.notify((err as Error).message, "error");
     }
   }
 
-  async function eventLoop(ui: any, prompt?: string) {
+  async function eventLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt");
     if (!p) return;
 
@@ -605,7 +647,7 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     ui.notify(`Event loop #${entry.id} created: fires on "${source}"`, "info");
   }
 
-  async function viewLoops(ui: any) {
+  async function viewLoops(ui: ExtensionUIContext) {
     const loops = store.list();
     if (loops.length === 0) {
       await ui.select("No active loops", ["← Back"]);
@@ -658,7 +700,7 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     return viewLoops(ui);
   }
 
-  async function settings(ui: any) {
+  async function settings(ui: ExtensionUIContext) {
     const loops = store.list();
     const active = loops.filter(l => l.status === "active").length;
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
