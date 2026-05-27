@@ -204,6 +204,8 @@ export default function (pi: ExtensionAPI) {
 
   // ── Loop fire handler — sends a user message to re-wake the agent ──
 
+  const pendingFollowUps = new Set<string>();
+
   pi.events.on("loop:fire", (event: unknown) => {
     const data = event as LoopFireEvent;
     const triggerInfo = typeof data.trigger === "string"
@@ -214,10 +216,17 @@ export default function (pi: ExtensionAPI) {
           ? `event: ${data.trigger.source}`
           : `hybrid`;
 
+    const loopId = data.loopId || "?";
+    if (pendingFollowUps.has(loopId)) {
+      debug(`loop:fire #${loopId} — follow-up already queued, skipping`);
+      return;
+    }
+    pendingFollowUps.add(loopId);
+
     const prompt = data.prompt || "loop fired";
     const constraint = data.readOnly ? "\n\nREAD-ONLY MODE — use only read tools (Read, TaskList, LoopList, MonitorList, LoopCreate, etc.). No file writes, shell execution, or destructive changes." : "";
     const message = [
-      `[pi-loop] Loop #${data.loopId || "?"} fired (${triggerInfo}).${constraint}`,
+      `[pi-loop] Loop #${loopId} fired (${triggerInfo}).${constraint}`,
       prompt,
     ].join("\n");
 
@@ -225,6 +234,8 @@ export default function (pi: ExtensionAPI) {
     // it delivers after the current turn finishes.
     pi.sendUserMessage(message, { deliverAs: "followUp" });
   });
+
+  pi.on("turn_end", () => { pendingFollowUps.clear(); });
 
   // ──────────────────────────────────────────────────
   // Tool 1: LoopCreate
