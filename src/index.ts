@@ -271,10 +271,18 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 - **autoTask**: if pi-tasks is loaded, auto-create a task on each fire
 - **readOnly**: restrict the agent to read-only tools when this loop fires (default: false)`,
     promptGuidelines: [
-      "When the user asks for a loop, repeating task, periodic check, or scheduled reminder, use LoopCreate — not raw Bash for/sleep/while.",
-      "Use LoopCreate for any 'every X seconds/minutes/hours' requests.",
+      "Use LoopCreate when the user asks for a repeating task, periodic check, scheduled reminder, or 'every X' — never use raw Bash for/sleep/while.",
+      "## Choosing an interval",
+      "Default to 5m unless the user specifies a different interval or the task needs faster feedback.",
+      "Use shorter intervals (1m-2m) only when: the task is time-sensitive, the user explicitly asks for it, or you're polling something that completes quickly.",
+      "Use longer intervals (15m-1h) for: build watchers, CI checks, deploy monitors, or anything with natural latency.",
+      "## Recurring vs one-shot",
+      "Use recurring: true (default) for periodic checks. Use recurring: false for one-shot event reactions (monitor completion, tool execution hooks).",
+      "## readOnly mode",
+      "Set readOnly: true for loops that only need to observe and report (checks, status polls, monitoring). This prevents the agent from making unintended changes when it wakes.",
+      "## Task-driven workflows",
+      "After creating tasks with TaskCreate, set up a loop to work through them: LoopCreate trigger='5m' readOnly: false prompt='Run TaskList, pick the next available pending task, work on it.' This keeps the agent making progress across turns.",
       "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
-      "After creating tasks with TaskCreate, create a loop to keep working through them: LoopCreate trigger='5m' prompt='Run TaskList, pick the next available pending task, work on it. Continue until all tasks are completed.' This ensures the agent keeps making progress across turns instead of stopping after one task.",
     ],
     parameters: Type.Object({
       trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), or JSON hybrid spec" }),
