@@ -107,6 +107,9 @@ export class TriggerSystem {
       prompt: entry.prompt,
       trigger: entry.trigger,
       timestamp: Date.now(),
+      readOnly: entry.readOnly,
+      recurring: entry.recurring,
+      autoTask: entry.autoTask,
     });
 
     if (!entry.recurring) {

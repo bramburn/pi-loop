@@ -274,4 +274,98 @@ describe("loop:fire triggers sendUserMessage", () => {
 
     expect(sentMessages.length).toBe(1);
   });
+
+  it("skips fire when autoTask loop has no pending tasks", async () => {
+    let sentMessages: Array<{ msg: string; opts: any }> = [];
+    const turnHandlers: Array<(...args: any[]) => void> = [];
+    let pendingTaskCount = 0;
+
+    const mockPi: any = {
+      events: {
+        emit: vi.fn((_event: string, data: any) => {
+          // Route tasks RPC: reply with pending count when queried
+          if (_event === "tasks:rpc:pending" && data?.requestId) {
+            const replyEvent = `tasks:rpc:pending:reply:${data.requestId}`;
+            const replyHandlers = allHandlers.get(replyEvent);
+            if (replyHandlers) {
+              for (const cb of replyHandlers) {
+                cb({ success: true, data: { pending: pendingTaskCount } });
+              }
+            }
+            return;
+          }
+          if (_event === "tasks:rpc:ping" && data?.requestId) {
+            const replyEvent = `tasks:rpc:ping:reply:${data.requestId}`;
+            const replyHandlers = allHandlers.get(replyEvent);
+            if (replyHandlers) {
+              for (const cb of replyHandlers) {
+                cb({ success: true, data: { version: 1 } });
+              }
+            }
+            return;
+          }
+          const cbs = allHandlers.get(_event);
+          if (cbs) for (const cb of cbs) cb(data);
+        }),
+        on: vi.fn((_event: string, handler: (data: any) => void) => {
+          if (!allHandlers.has(_event)) allHandlers.set(_event, []);
+          allHandlers.get(_event)!.push(handler);
+          return () => {};
+        }),
+      },
+      on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+        if (event === "turn_start") turnHandlers.push(handler);
+      }),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendUserMessage: (msg: string, opts: any) => {
+        sentMessages.push({ msg, opts });
+      },
+    };
+
+    const allHandlers = new Map<string, Array<(data: any) => void>>();
+
+    const extension = await import("../src/index.js");
+    extension.default(mockPi);
+
+    // Simulate pi-tasks available
+    mockPi.events.emit("tasks:ready");
+
+    // Seed turn_start so _latestCtx is set
+    for (const handler of turnHandlers) {
+      handler(null, {
+        ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+        hasPendingMessages: () => false,
+        sessionManager: { getSessionId: () => "test" },
+      });
+    }
+
+    // pendingTaskCount is 0 — loop should skip
+    pendingTaskCount = 0;
+    mockPi.events.emit("loop:fire", {
+      loopId: "12",
+      prompt: "Should be skipped — no tasks",
+      trigger: { type: "cron", schedule: "*/5 * * * *" },
+      timestamp: Date.now(),
+      autoTask: true,
+    });
+
+    // Wait for async hasPendingTasks to resolve
+    await new Promise(r => setTimeout(r, 100));
+    expect(sentMessages.length).toBe(0);
+
+    // pendingTaskCount is 5 — loop should fire
+    pendingTaskCount = 5;
+    mockPi.events.emit("loop:fire", {
+      loopId: "12",
+      prompt: "Should fire — tasks pending",
+      trigger: { type: "cron", schedule: "*/5 * * * *" },
+      timestamp: Date.now(),
+      autoTask: true,
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+    expect(sentMessages.length).toBe(1);
+    expect(sentMessages[0].msg).toContain("Should fire");
+  });
 });

@@ -42,6 +42,7 @@ interface LoopFireEvent {
   timestamp: number;
   readOnly?: boolean;
   recurring?: boolean;
+  autoTask?: boolean;
 }
 
 interface SessionSwitchEvent {
@@ -120,6 +121,25 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function hasPendingTasks(): Promise<number> {
+    if (!tasksAvailable) return -1;
+    try {
+      const requestId = randomUUID();
+      const count = await new Promise<number>((resolve) => {
+        const timer = setTimeout(() => { unsub(); resolve(-1); }, 3000);
+        const unsub = pi.events.on(`tasks:rpc:pending:reply:${requestId}`, (raw: unknown) => {
+          unsub(); clearTimeout(timer);
+          const reply = raw as { success: boolean; data?: { pending: number }; error?: string };
+          resolve(reply.success && reply.data ? reply.data.pending : -1);
+        });
+        pi.events.emit("tasks:rpc:pending", { requestId });
+      });
+      return count;
+    } catch {
+      return -1;
+    }
+  }
+
   // ── Loop fire handler ──
 
   function onLoopFire(entry: LoopEntry): void {
@@ -145,6 +165,7 @@ export default function (pi: ExtensionAPI) {
       timestamp: Date.now(),
       readOnly: entry.readOnly,
       recurring: entry.recurring,
+      autoTask: entry.autoTask,
     });
   }
 
@@ -213,12 +234,20 @@ export default function (pi: ExtensionAPI) {
 
   // ── Loop fire handler — sends a user message to re-wake the agent ──
 
-  pi.events.on("loop:fire", (event: unknown) => {
+  pi.events.on("loop:fire", async (event: unknown) => {
     const data = event as LoopFireEvent;
 
     if (data.recurring && _latestCtx?.hasPendingMessages()) {
       debug(`loop:fire #${data.loopId} — agent has pending messages, skipping recurring fire`);
       return;
+    }
+
+    if (data.autoTask) {
+      const pending = await hasPendingTasks();
+      if (pending === 0) {
+        debug(`loop:fire #${data.loopId} — no pending tasks, skipping`);
+        return;
+      }
     }
 
     const triggerInfo = typeof data.trigger === "string"
@@ -293,7 +322,8 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       "## readOnly mode",
       "Set readOnly: true for loops that only observe and report (checks, status polls). This prevents unintended changes.",
       "## Task-driven workflows",
-      "After creating tasks with TaskCreate, use an event loop bound to 'tasks:created' with maxFires: 30 to pick up work immediately when it arrives: LoopCreate trigger='tasks:created' triggerType='event' maxFires: 30 readOnly: false prompt='Run TaskList, pick the next available pending task, work on it.'",
+      "After creating tasks with TaskCreate, use an event loop with autoTask: true so the system checks for pending tasks before firing: LoopCreate trigger='tasks:created' triggerType='event' autoTask: true maxFires: 30 prompt='Run TaskList, pick the next available pending task, work on it.'",
+      "When no tasks are pending, the loop skips the follow-up — no tokens burned on empty polls.",
       "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
     ],
     parameters: Type.Object({
