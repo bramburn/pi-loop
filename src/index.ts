@@ -274,7 +274,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       "When the user asks for a loop, repeating task, periodic check, or scheduled reminder, use LoopCreate — not raw Bash for/sleep/while.",
       "Use LoopCreate for any 'every X seconds/minutes/hours' requests.",
       "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
-      "After creating tasks with TaskCreate, create a loop to keep working through them: LoopCreate trigger='30s' prompt='Run TaskList, pick the next available pending task, work on it. Continue until all tasks are completed.' This ensures the agent keeps making progress across turns instead of stopping after one task.",
+      "After creating tasks with TaskCreate, create a loop to keep working through them: LoopCreate trigger='5m' prompt='Run TaskList, pick the next available pending task, work on it. Continue until all tasks are completed.' This ensures the agent keeps making progress across turns instead of stopping after one task.",
     ],
     parameters: Type.Object({
       trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), or JSON hybrid spec" }),
