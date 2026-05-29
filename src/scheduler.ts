@@ -93,7 +93,7 @@ export class CronScheduler {
 
       if (current.recurring) {
         const fresh = this.store.get(entry.id);
-        if (fresh && fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+        if (fresh?.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
           this.store.update(entry.id, { status: "expired" });
           this.timers.delete(entry.id);
           this.fireTimes.delete(entry.id);
