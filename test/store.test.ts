@@ -128,8 +128,8 @@ describe("LoopStore (in-memory)", () => {
     expect(s.expireEventLoops(sessionStartedAt)).toBe(2);
 
     expect(s.get("2")!.status).toBe("active"); // cron loop untouched
-    expect(s.get("1")!.status).toBe("expired");
-    expect(s.get("3")!.status).toBe("expired");
+    expect(s.get("1")).toBeUndefined(); // event loops deleted
+    expect(s.get("3")).toBeUndefined();
   });
 
   it("does not expire event loops created in current session", () => {

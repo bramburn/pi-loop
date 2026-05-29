@@ -183,15 +183,17 @@ export class LoopStore {
   expireEventLoops(sessionStartedAt: number): number {
     return this.withLock(() => {
       let count = 0;
-      for (const [_id, entry] of this.loops) {
+      const toDelete: string[] = [];
+      for (const [id, entry] of this.loops) {
         if (entry.status !== "active") continue;
         if (entry.trigger.type === "event" || entry.trigger.type === "hybrid") {
           if (entry.createdAt < sessionStartedAt) {
-            entry.status = "expired";
+            toDelete.push(id);
             count++;
           }
         }
       }
+      for (const id of toDelete) this.loops.delete(id);
       return count;
     });
   }
