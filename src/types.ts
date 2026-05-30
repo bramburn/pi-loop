@@ -1,4 +1,4 @@
-export type LoopStatus = "active" | "paused" | "expired";
+export type LoopStatus = "active" | "paused";
 
 export interface CronTrigger {
   type: "cron";

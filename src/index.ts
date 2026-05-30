@@ -147,7 +147,7 @@ export default function (pi: ExtensionAPI) {
 
     if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
       debug(`loop #${entry.id} — reached maxFires ${entry.maxFires}, expiring`);
-      store.update(entry.id, { status: "expired" });
+      store.delete(entry.id);
       return;
     }
     store.update(entry.id, { fireCount: (entry.fireCount ?? 0) + 1 });
@@ -382,7 +382,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
             if (monitor && monitor.status !== "running") {
               debug(`loop #${entry.id} — monitor #${monitorId} already ${monitor.status}, expiring`);
               triggerSystem.remove(entry.id);
-              store.update(entry.id, { status: "expired" });
+              store.delete(entry.id);
             }
           }
         } catch { /* filter parse failure, ignore */ }
@@ -413,7 +413,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
     if (monitor && monitor.status !== "running") {
       debug(`onDone loop #${doneLoop.id} — monitor #${monitorId} already ${monitor.status}, expiring`);
       triggerSystem.remove(doneLoop.id);
-      store.update(doneLoop.id, { status: "expired" });
+      store.delete(doneLoop.id);
     }
   }
 

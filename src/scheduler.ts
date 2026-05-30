@@ -65,7 +65,7 @@ export class CronScheduler {
     const now = Date.now();
 
     if (fireTime > entry.expiresAt) {
-      this.store.update(entry.id, { status: "expired" });
+      this.store.delete(entry.id);
       return;
     }
 
@@ -85,7 +85,7 @@ export class CronScheduler {
 
       const now2 = Date.now();
       if (now2 >= current.expiresAt) {
-        this.store.update(entry.id, { status: "expired" });
+        this.store.delete(entry.id);
         this.timers.delete(entry.id);
         this.fireTimes.delete(entry.id);
         return;
@@ -96,7 +96,7 @@ export class CronScheduler {
       if (current.recurring) {
         const fresh = this.store.get(entry.id);
         if (fresh?.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
-          this.store.update(entry.id, { status: "expired" });
+          this.store.delete(entry.id);
           this.timers.delete(entry.id);
           this.fireTimes.delete(entry.id);
           return;

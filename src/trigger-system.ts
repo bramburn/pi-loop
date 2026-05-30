@@ -95,7 +95,7 @@ export class TriggerSystem {
 
   private fireLoop(entry: LoopEntry): void {
     if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
-      this.store.update(entry.id, { status: "expired" });
+      this.store.delete(entry.id);
       this.remove(entry.id);
       return;
     }
@@ -114,7 +114,7 @@ export class TriggerSystem {
 
     if (!entry.recurring) {
       this.remove(entry.id);
-      this.store.update(entry.id, { status: "expired" });
+      this.store.delete(entry.id);
     }
   }
 
