@@ -12,6 +12,7 @@ export class TriggerSystem {
     private pi: ExtensionAPI,
     private scheduler: CronScheduler,
     private store: LoopStore,
+    private onFire: (entry: LoopEntry) => void,
   ) {}
 
   start(): void {
@@ -94,27 +95,24 @@ export class TriggerSystem {
   }
 
   private fireLoop(entry: LoopEntry): void {
-    if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
-      this.store.delete(entry.id);
+    const current = this.store.get(entry.id);
+    if (!current || current.status !== "active") {
       this.remove(entry.id);
       return;
     }
-    this.store.update(entry.id, { fireCount: (entry.fireCount ?? 0) + 1 });
 
-    this.lastFireTime.set(entry.id, Date.now());
-    this.pi.events.emit("loop:fire", {
-      loopId: entry.id,
-      prompt: entry.prompt,
-      trigger: entry.trigger,
-      timestamp: Date.now(),
-      readOnly: entry.readOnly,
-      recurring: entry.recurring,
-      autoTask: entry.autoTask,
-    });
+    this.lastFireTime.set(current.id, Date.now());
+    this.onFire(current);
 
-    if (!entry.recurring) {
+    const fresh = this.store.get(entry.id);
+    if (!fresh) {
       this.remove(entry.id);
-      this.store.delete(entry.id);
+      return;
+    }
+
+    if (!fresh.recurring) {
+      this.remove(fresh.id);
+      this.store.delete(fresh.id);
     }
   }
 

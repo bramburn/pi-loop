@@ -9,9 +9,15 @@ interface RegisteredTool {
   execute?: (...args: any[]) => any;
 }
 
+interface RegisteredCommand {
+  description?: string;
+  handler?: (...args: any[]) => any;
+}
+
 function createMockPi(options?: { respondToTaskPing?: boolean }) {
   const toolMap = new Map<string, RegisteredTool>();
-  const commandMap = new Map<string, unknown>();
+  const commandMap = new Map<string, RegisteredCommand>();
+  const sentMessages: Array<{ message: string; options?: unknown }> = [];
   const eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   const extensionHandlers = new Map<string, Set<(payload: unknown, ctx: unknown) => void>>();
 
@@ -42,12 +48,15 @@ function createMockPi(options?: { respondToTaskPing?: boolean }) {
     registerTool(tool: RegisteredTool) {
       toolMap.set(tool.name, tool);
     },
-    registerCommand(name: string, command: unknown) {
+    registerCommand(name: string, command: RegisteredCommand) {
       commandMap.set(name, command);
+    },
+    sendUserMessage(message: string, options?: unknown) {
+      sentMessages.push({ message, options });
     },
   };
 
-  return { pi, toolMap, commandMap, extensionHandlers };
+  return { pi, toolMap, commandMap, extensionHandlers, sentMessages };
 }
 
 describe("native task fallback", () => {
@@ -113,5 +122,85 @@ describe("native task fallback", () => {
     const data = JSON.parse(readFileSync(taskPath, "utf-8"));
     expect(data.tasks).toHaveLength(1);
     expect(data.tasks[0].subject).toBe("Test task");
+  });
+
+  it("quick-creates native tasks through the /tasks command", async () => {
+    const { pi, commandMap } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const tasksCommand = commandMap.get("tasks");
+    expect(tasksCommand?.handler).toBeDefined();
+
+    const ui = { notify: vi.fn() };
+    await tasksCommand!.handler?.("Write README updates", { ui });
+
+    const taskPath = join(cwd, ".pi", "tasks", "tasks.json");
+    const data = JSON.parse(readFileSync(taskPath, "utf-8"));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].subject).toBe("Write README updates");
+    expect(data.tasks[0].description).toBe("Write README updates");
+    expect(ui.notify).toHaveBeenCalledWith("Task #1 created", "info");
+  });
+
+  it("auto-creates native tasks when an event-triggered autoTask loop fires", async () => {
+    const { pi, toolMap } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const loopCreate = toolMap.get("LoopCreate");
+    expect(loopCreate?.execute).toBeDefined();
+
+    await loopCreate!.execute?.("1", {
+      trigger: "native:test:event",
+      prompt: "Follow up on native task work",
+      triggerType: "event",
+      autoTask: true,
+    });
+
+    pi.events.emit("native:test:event", {});
+    await Promise.resolve();
+
+    const taskPath = join(cwd, ".pi", "tasks", "tasks.json");
+    const data = JSON.parse(readFileSync(taskPath, "utf-8"));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].subject).toBe("Follow up on native task work");
+    expect(data.tasks[0].description).toContain("Auto-created from loop #");
+    expect(data.tasks[0].metadata.loopId).toBe("1");
+  });
+
+  it("sweeps completed native tasks and skips follow-up wake when no tasks remain", async () => {
+    const { pi, toolMap, sentMessages } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const taskCreate = toolMap.get("TaskCreate");
+    const taskUpdate = toolMap.get("TaskUpdate");
+    expect(taskCreate?.execute).toBeDefined();
+    expect(taskUpdate?.execute).toBeDefined();
+
+    await taskCreate!.execute?.("1", { subject: "Done task", description: "already finished" });
+    await taskUpdate!.execute?.("2", { id: "1", status: "completed" });
+
+    pi.events.emit("loop:fire", {
+      loopId: "99",
+      prompt: "Should not wake agent",
+      trigger: { type: "event", source: "native:test:event" },
+      timestamp: Date.now(),
+      autoTask: true,
+      recurring: false,
+    });
+    await Promise.resolve();
+
+    const taskPath = join(cwd, ".pi", "tasks", "tasks.json");
+    const data = JSON.parse(readFileSync(taskPath, "utf-8"));
+    expect(data.tasks).toHaveLength(0);
+    expect(sentMessages).toHaveLength(0);
   });
 });

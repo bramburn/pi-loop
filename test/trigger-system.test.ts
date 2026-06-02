@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronScheduler } from "../src/scheduler.js";
 import { LoopStore } from "../src/store.js";
 import { TriggerSystem } from "../src/trigger-system.js";
-import type { Trigger } from "../src/types.js";
+import type { LoopEntry, Trigger } from "../src/types.js";
 
 function createMockPi() {
   const handlers = new Map<string, Array<(...args: any[]) => void>>();
@@ -37,8 +37,24 @@ describe("TriggerSystem", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     pi = createMockPi();
     store = new LoopStore();
-    scheduler = new CronScheduler(store, () => {});
-    system = new TriggerSystem(pi, scheduler, store);
+    const fireLoop = (entry: LoopEntry) => {
+      if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
+        store.delete(entry.id);
+        return;
+      }
+      store.update(entry.id, { fireCount: (entry.fireCount ?? 0) + 1 });
+      pi.events.emit("loop:fire", {
+        loopId: entry.id,
+        prompt: entry.prompt,
+        trigger: entry.trigger,
+        timestamp: Date.now(),
+        readOnly: entry.readOnly,
+        recurring: entry.recurring,
+        autoTask: entry.autoTask,
+      });
+    };
+    scheduler = new CronScheduler(store, fireLoop as any);
+    system = new TriggerSystem(pi, scheduler, store, fireLoop as any);
   });
 
   afterEach(() => {
