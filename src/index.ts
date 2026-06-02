@@ -139,6 +139,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function cleanDoneTasks(): Promise<void> {
+    if (!tasksAvailable) return;
+    try {
+      const requestId = randomUUID();
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { unsub(); resolve(); }, 3000);
+        const unsub = pi.events.on(`tasks:rpc:clean:reply:${requestId}`, () => {
+          unsub(); clearTimeout(timer);
+          debug("tasks:rpc:clean — done tasks swept");
+          resolve();
+        });
+        pi.events.emit("tasks:rpc:clean", { requestId });
+      });
+    } catch { /* timeout or error, ignore */ }
+  }
+
   // ── Loop fire handler ──
 
   function onLoopFire(entry: LoopEntry): void {
@@ -244,7 +260,8 @@ export default function (pi: ExtensionAPI) {
     if (data.autoTask) {
       const pending = await hasPendingTasks();
       if (pending === 0) {
-        debug(`loop:fire #${data.loopId} — no pending tasks, skipping`);
+        debug(`loop:fire #${data.loopId} — no pending tasks, skipping, requesting cleanup`);
+        cleanDoneTasks();
         return;
       }
     }
