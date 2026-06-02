@@ -2,20 +2,22 @@ import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent"
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { MonitorManager } from "../monitor-manager.js";
-import type { CronScheduler } from "../scheduler.js";
 import type { LoopStore } from "../store.js";
 
-const MAX_VISIBLE = 6;
+interface TaskSummary {
+  count: number;
+  focusText?: string;
+}
 
 export class LoopWidget {
   private uiCtx: ExtensionUIContext | undefined;
   private tui: TUI | undefined;
   private widgetRegistered = false;
   private interval: ReturnType<typeof setInterval> | undefined;
+  private taskSummaryProvider: (() => TaskSummary) | undefined;
 
   constructor(
     private store: LoopStore,
-    private scheduler: CronScheduler | undefined,
     private monitorManager: MonitorManager,
   ) {}
 
@@ -27,31 +29,21 @@ export class LoopWidget {
     this.store = store;
   }
 
-  setScheduler(scheduler: CronScheduler) {
-    this.scheduler = scheduler;
+  setTaskSummaryProvider(provider: (() => TaskSummary) | undefined) {
+    this.taskSummaryProvider = provider;
   }
 
   update() {
     if (!this.uiCtx) return;
 
-    const loops = this.store.list().filter(l => l.status === "active");
-    const monitors = this.monitorManager.list();
-    const hasContent = loops.length > 0 || monitors.length > 0;
-
-    if (!hasContent) {
-      if (this.widgetRegistered) {
-        this.uiCtx.setWidget("loops", undefined);
-        this.widgetRegistered = false;
-      }
-      if (this.interval) {
-        clearInterval(this.interval);
-        this.interval = undefined;
-      }
-      return;
-    }
-
-    if (!this.interval) {
+    const taskSummary = this.taskSummaryProvider?.() ?? { count: 0 };
+    const hasContent = this.store.list().some(l => l.status === "active") || this.monitorManager.list().length > 0 || taskSummary.count > 0;
+    if (hasContent && !this.interval) {
       this.interval = setInterval(() => this.update(), 5000);
+    }
+    if (!hasContent && this.interval) {
+      clearInterval(this.interval);
+      this.interval = undefined;
     }
 
     if (!this.widgetRegistered) {
@@ -67,51 +59,23 @@ export class LoopWidget {
 
   private renderWidget(tui: TUI, _theme: Theme): string[] {
     const loops = this.store.list().filter(l => l.status === "active");
-    const runningMonitors = this.monitorManager.list().filter(m => m.status === "running");
-    const completedMonitors = this.monitorManager.list().filter(m => m.status === "completed");
-    const allMonitors = [...runningMonitors, ...completedMonitors];
+    const monitors = this.monitorManager.list();
+    const taskSummary = this.taskSummaryProvider?.() ?? { count: 0 };
     const w = tui.terminal.columns;
     const trunc = (line: string) => truncateToWidth(line, w);
 
-    const lines: string[] = [];
-    const total = loops.length + allMonitors.length;
-
-    if (total === 0) return [];
-
-    const headerParts: string[] = [`${loops.length} loops`];
-    if (runningMonitors.length > 0) headerParts.push(`${runningMonitors.length} running`);
-    if (completedMonitors.length > 0) headerParts.push(`${completedMonitors.length} done`);
-    lines.push(trunc(headerParts.join(" · ")));
-
-    for (const loop of loops.slice(0, MAX_VISIBLE)) {
-      const icon = "~";
-      let schedule = "";
-      if (loop.trigger.type === "cron") {
-        schedule = loop.trigger.schedule;
-      } else if (loop.trigger.type === "event") {
-        schedule = `event: ${loop.trigger.source}`;
-      } else if (loop.trigger.type === "hybrid") {
-        schedule = `hybrid: ${loop.trigger.cron}`;
-      }
-      const nextFire = this.scheduler?.nextFire(loop.id);
-      let timing = "";
-      if (nextFire) {
-        const remaining = Math.max(0, nextFire - Date.now());
-        timing = ` (next: ${formatDuration(remaining)})`;
-      }
-      lines.push(trunc(`  ${icon} #${loop.id} ${loop.prompt.slice(0, 50)} → ${schedule}${timing}`));
+    if (loops.length === 0 && monitors.length === 0 && taskSummary.count === 0) {
+      return [trunc("none")];
     }
 
-    for (const m of allMonitors.slice(0, Math.max(0, MAX_VISIBLE - loops.length))) {
-      const icon = m.status === "running" ? ">" : "ok";
-      const age = Date.now() - m.startedAt;
-      const label = m.description || m.command.replace(/\n/g, " ").replace(/\s+/g, " ").trim().slice(0, 50);
-      let line = `  ${icon} #${m.id} ${label} ${m.outputLines} lines (${formatDuration(age)})`;
-      if (m.exitCode !== undefined && m.status !== "running") line += ` exit=${m.exitCode}`;
-      lines.push(trunc(line));
-    }
+    const parts: string[] = [];
+    if (loops.length > 0) parts.push(formatCount(loops.length, "loop"));
+    if (monitors.length > 0) parts.push(formatCount(monitors.length, "monitor"));
+    if (taskSummary.count > 0) parts.push(formatCount(taskSummary.count, "task"));
 
-    return lines;
+    let line = parts.join(" · ");
+    if (taskSummary.focusText) line += ` | ${taskSummary.focusText}`;
+    return [trunc(line)];
   }
 
   dispose() {
@@ -122,13 +86,6 @@ export class LoopWidget {
   }
 }
 
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  if (min < 60) return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }

@@ -22,6 +22,7 @@ import { parseInterval } from "./loop-parse.js";
 import { MonitorManager } from "./monitor-manager.js";
 import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
+import { TaskStore } from "./task-store.js";
 import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry, Trigger } from "./types.js";
 import { LoopWidget } from "./ui/widget.js";
@@ -68,19 +69,36 @@ export default function (pi: ExtensionAPI) {
     return join(process.cwd(), ".pi", "loops", "loops.json");
   }
 
+  function resolveTaskStorePath(): string | undefined {
+    if (loopScope === "memory") return undefined;
+    return join(process.cwd(), ".pi", "tasks", "tasks.json");
+  }
+
   let store = new LoopStore(resolveStorePath());
   const monitorManager = new MonitorManager(pi);
   let scheduler: CronScheduler;
   let triggerSystem: TriggerSystem;
-  const widget = new LoopWidget(store, undefined, monitorManager);
+  const widget = new LoopWidget(store, monitorManager);
+  widget.setTaskSummaryProvider(() => {
+    if (!nativeTaskStore) return { count: 0 };
+    const tasks = nativeTaskStore.list().filter(t => t.status === "pending" || t.status === "in_progress");
+    const active = tasks.find(t => t.status === "in_progress");
+    const next = tasks.find(t => t.status === "pending");
+    const focus = active
+      ? `active: ${active.subject.slice(0, 50)}`
+      : next
+        ? `next: ${next.subject.slice(0, 50)}`
+        : undefined;
+    return { count: tasks.length, focusText: focus };
+  });
 
   scheduler = new CronScheduler(store, onLoopFire);
-  widget.setScheduler(scheduler);
   triggerSystem = new TriggerSystem(pi, scheduler, store);
 
   // ── pi-tasks integration ──
   let tasksAvailable = false;
-  let nativeTaskStore: import("./task-store.js").TaskStore | undefined;
+  let nativeTaskStore: TaskStore | undefined;
+  let nativeTasksRegistered = false;
 
   function checkTasksVersion() {
     const requestId = randomUUID();
@@ -97,63 +115,80 @@ export default function (pi: ExtensionAPI) {
   pi.events.on("tasks:ready", () => checkTasksVersion());
 
   async function autoCreateTask(entry: LoopEntry): Promise<string | undefined> {
-    if (!tasksAvailable || !entry.autoTask) return undefined;
-    try {
-      const requestId = randomUUID();
-      const taskId = await new Promise<string | undefined>((resolve, _reject) => {
-        const timer = setTimeout(() => { unsub(); resolve(undefined); }, 5000);
-        const unsub = pi.events.on(`tasks:rpc:create:reply:${requestId}`, (raw: unknown) => {
-          unsub(); clearTimeout(timer);
-          const reply = raw as { success: boolean; data?: { id: string }; error?: string };
-          if (reply.success && reply.data) resolve(reply.data.id);
-          else resolve(undefined);
+    if (!entry.autoTask) return undefined;
+    if (tasksAvailable) {
+      try {
+        const requestId = randomUUID();
+        const taskId = await new Promise<string | undefined>((resolve, _reject) => {
+          const timer = setTimeout(() => { unsub(); resolve(undefined); }, 5000);
+          const unsub = pi.events.on(`tasks:rpc:create:reply:${requestId}`, (raw: unknown) => {
+            unsub(); clearTimeout(timer);
+            const reply = raw as { success: boolean; data?: { id: string }; error?: string };
+            if (reply.success && reply.data) resolve(reply.data.id);
+            else resolve(undefined);
+          });
+          pi.events.emit("tasks:rpc:create", {
+            requestId,
+            subject: entry.prompt.slice(0, 80),
+            description: `Auto-created from loop #${entry.id}`,
+            metadata: { loopId: entry.id, trigger: entry.trigger },
+          });
         });
-        pi.events.emit("tasks:rpc:create", {
-          requestId,
-          subject: entry.prompt.slice(0, 80),
-          description: `Auto-created from loop #${entry.id}`,
-          metadata: { loopId: entry.id, trigger: entry.trigger },
-        });
-      });
-      return taskId;
-    } catch {
-      return undefined;
+        return taskId;
+      } catch {
+        return undefined;
+      }
     }
+    if (!nativeTaskStore) return undefined;
+    const task = nativeTaskStore.create(entry.prompt.slice(0, 80), `Auto-created from loop #${entry.id}`, {
+      loopId: entry.id,
+      trigger: entry.trigger,
+    });
+    widget.update();
+    return task.id;
   }
 
   async function hasPendingTasks(): Promise<number> {
-    if (!tasksAvailable) return -1;
-    try {
-      const requestId = randomUUID();
-      const count = await new Promise<number>((resolve) => {
-        const timer = setTimeout(() => { unsub(); resolve(-1); }, 3000);
-        const unsub = pi.events.on(`tasks:rpc:pending:reply:${requestId}`, (raw: unknown) => {
-          unsub(); clearTimeout(timer);
-          const reply = raw as { success: boolean; data?: { pending: number }; error?: string };
-          resolve(reply.success && reply.data ? reply.data.pending : -1);
+    if (tasksAvailable) {
+      try {
+        const requestId = randomUUID();
+        const count = await new Promise<number>((resolve) => {
+          const timer = setTimeout(() => { unsub(); resolve(-1); }, 3000);
+          const unsub = pi.events.on(`tasks:rpc:pending:reply:${requestId}`, (raw: unknown) => {
+            unsub(); clearTimeout(timer);
+            const reply = raw as { success: boolean; data?: { pending: number }; error?: string };
+            resolve(reply.success && reply.data ? reply.data.pending : -1);
+          });
+          pi.events.emit("tasks:rpc:pending", { requestId });
         });
-        pi.events.emit("tasks:rpc:pending", { requestId });
-      });
-      return count;
-    } catch {
-      return -1;
+        return count;
+      } catch {
+        return -1;
+      }
     }
+    return nativeTaskStore ? nativeTaskStore.pendingCount() : -1;
   }
 
   async function cleanDoneTasks(): Promise<void> {
-    if (!tasksAvailable) return;
-    try {
-      const requestId = randomUUID();
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { unsub(); resolve(); }, 3000);
-        const unsub = pi.events.on(`tasks:rpc:clean:reply:${requestId}`, () => {
-          unsub(); clearTimeout(timer);
-          debug("tasks:rpc:clean — done tasks swept");
-          resolve();
+    if (tasksAvailable) {
+      try {
+        const requestId = randomUUID();
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => { unsub(); resolve(); }, 3000);
+          const unsub = pi.events.on(`tasks:rpc:clean:reply:${requestId}`, () => {
+            unsub(); clearTimeout(timer);
+            debug("tasks:rpc:clean — done tasks swept");
+            resolve();
+          });
+          pi.events.emit("tasks:rpc:clean", { requestId });
         });
-        pi.events.emit("tasks:rpc:clean", { requestId });
-      });
-    } catch { /* timeout or error, ignore */ }
+      } catch { /* timeout or error, ignore */ }
+      return;
+    }
+    if (nativeTaskStore) {
+      nativeTaskStore.sweepCompleted();
+      widget.update();
+    }
   }
 
   // ── Loop fire handler ──
@@ -199,7 +234,6 @@ export default function (pi: ExtensionAPI) {
       store = new LoopStore(path);
       widget.setStore(store);
       scheduler = new CronScheduler(store, onLoopFire);
-      widget.setScheduler(scheduler);
       triggerSystem = new TriggerSystem(pi, scheduler, store);
     }
     storeUpgraded = true;
@@ -222,6 +256,7 @@ export default function (pi: ExtensionAPI) {
     _latestCtx = ctx;
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
+    widget.update();
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
@@ -229,6 +264,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     showPersistedLoops();
+    widget.update();
   });
 
   pi.on("session_switch" as any, async (event: SessionSwitchEvent, ctx: ExtensionContext) => {
@@ -246,6 +282,7 @@ export default function (pi: ExtensionAPI) {
 
     upgradeStoreIfNeeded(ctx);
     showPersistedLoops(isResume);
+    widget.update();
   });
 
   // ── Loop fire handler — sends a user message to re-wake the agent ──
@@ -817,15 +854,105 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
   }
 
+  async function createNativeTaskInteractively(ui: ExtensionUIContext) {
+    if (!nativeTaskStore) {
+      ui.notify("Native tasks are unavailable while pi-tasks is active", "warning");
+      return;
+    }
+
+    const subject = await ui.input("Task subject");
+    if (!subject) return;
+    const description = await ui.input("Task description") || subject;
+    const entry = nativeTaskStore.create(subject, description);
+    widget.update();
+    ui.notify(`Task #${entry.id} created`, "info");
+  }
+
+  async function viewNativeTasks(ui: ExtensionUIContext): Promise<void> {
+    if (!nativeTaskStore) {
+      ui.notify("Native tasks are unavailable while pi-tasks is active", "warning");
+      return;
+    }
+
+    const tasks = nativeTaskStore.list();
+    const choices = tasks.map((task) => {
+      const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : "*";
+      return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60)}`;
+    });
+    choices.unshift("+ Create task");
+    choices.push("< Back");
+
+    const selected = await ui.select("Native Tasks", choices);
+    if (!selected || selected === "< Back") return;
+    if (selected === "+ Create task") {
+      await createNativeTaskInteractively(ui);
+      return viewNativeTasks(ui);
+    }
+
+    const match = selected.match(/#(\d+)/);
+    if (!match) return viewNativeTasks(ui);
+
+    const task = nativeTaskStore.get(match[1]);
+    if (!task) return viewNativeTasks(ui);
+
+    const actions = ["x Delete"];
+    if (task.status === "pending") {
+      actions.unshift("ok Complete");
+      actions.unshift("> Start");
+    } else if (task.status === "in_progress") {
+      actions.unshift("ok Complete");
+      actions.unshift("* Return to pending");
+    } else {
+      actions.unshift("* Reopen");
+    }
+    actions.push("< Back");
+
+    const action = await ui.select(`#${task.id}: ${task.subject}\n\n${task.description}`, actions);
+    if (!action || action === "< Back") return viewNativeTasks(ui);
+
+    if (action === "x Delete") {
+      nativeTaskStore.delete(task.id);
+      ui.notify(`Task #${task.id} deleted`, "info");
+    } else if (action === "> Start") {
+      nativeTaskStore.update(task.id, { status: "in_progress" });
+      ui.notify(`Task #${task.id} started`, "info");
+    } else if (action === "ok Complete") {
+      nativeTaskStore.update(task.id, { status: "completed" });
+      ui.notify(`Task #${task.id} completed`, "info");
+    } else if (action === "* Return to pending" || action === "* Reopen") {
+      nativeTaskStore.update(task.id, { status: "pending" });
+      ui.notify(`Task #${task.id} reopened`, "info");
+    }
+
+    widget.update();
+    return viewNativeTasks(ui);
+  }
+
   // ── Native task tools (only when pi-tasks is absent) ──
 
   setTimeout(async () => {
-    if (tasksAvailable) return;
-    const { TaskStore: NativeTaskStore } = await import("./task-store.js");
-    nativeTaskStore = new NativeTaskStore(
-      resolveStorePath(_latestCtx?.sessionManager?.getSessionId())
-    );
+    if (tasksAvailable || nativeTasksRegistered) return;
+    nativeTaskStore = new TaskStore(resolveTaskStorePath());
+    nativeTasksRegistered = true;
     const taskStore = nativeTaskStore;
+
+    pi.registerCommand("tasks", {
+      description: "View or manage native pi-loop tasks when pi-tasks is not installed",
+      handler: async (args: string, ctx: ExtensionCommandContext) => {
+        const trimmed = args.trim();
+        if (!nativeTaskStore) {
+          ctx.ui.notify("Native tasks are unavailable while pi-tasks is active", "warning");
+          return;
+        }
+        if (trimmed) {
+          const entry = nativeTaskStore.create(trimmed.slice(0, 80), trimmed);
+          widget.update();
+          ctx.ui.notify(`Task #${entry.id} created`, "info");
+          return;
+        }
+        await viewNativeTasks(ctx.ui);
+      },
+    });
 
     pi.registerTool({
       name: "TaskCreate",

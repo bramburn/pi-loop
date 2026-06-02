@@ -17,14 +17,10 @@ function createMockMonitorManager() {
     outputLines: number;
   }> = [];
   return {
-    list: () => monitors.filter(m => m.status === "running"),
+    list: () => [...monitors],
     _add: (m: typeof monitors[0]) => monitors.push(m),
     _clear: () => { monitors.length = 0; },
   };
-}
-
-function createMockScheduler() {
-  return { nextFire: () => undefined };
 }
 
 describe("LoopWidget rendering", () => {
@@ -36,7 +32,7 @@ describe("LoopWidget rendering", () => {
   beforeEach(() => {
     store = new LoopStore();
     monitorManager = createMockMonitorManager();
-    widget = new LoopWidget(store, createMockScheduler() as any, monitorManager as any);
+    widget = new LoopWidget(store, monitorManager as any);
     mockTui = { terminal: { columns: 80 }, requestRender: vi.fn() };
   });
 
@@ -44,22 +40,31 @@ describe("LoopWidget rendering", () => {
     widget.dispose();
   });
 
+  function makeMockUiCtx(setWidget: (_key: string, factory: any) => void) {
+    return {
+      setStatus: vi.fn(),
+      setWidget,
+    } as any;
+  }
+
   function extractRenderLines(): string[] {
     let rendered: string[] = [];
-    widget.setUICtx({
-      setStatus: vi.fn(),
-      setWidget: (_key: string, factory: any) => {
-        if (factory) {
-          const widget = factory(mockTui, {});
-          rendered = widget.render();
-        }
-      },
-    });
+    widget.setUICtx(makeMockUiCtx((_key: string, factory: any) => {
+      if (factory) {
+        const widget = factory(mockTui, {});
+        rendered = widget.render();
+      }
+    }));
     widget.update();
     return rendered;
   }
 
-  it("shows monitor with description instead of raw command", () => {
+  it("shows none when no loops or monitors are active", () => {
+    const lines = extractRenderLines();
+    expect(lines).toEqual(["none"]);
+  });
+
+  it("shows a compact monitor count", () => {
     monitorManager._add({
       id: "1",
       command: "bash -lc 'set -euo pipefail\nwhile sleep 30; do hut builds show 1769753; done'",
@@ -70,35 +75,17 @@ describe("LoopWidget rendering", () => {
     });
 
     const lines = extractRenderLines();
-
-    const hasDescription = lines.some(l => l.includes("Watch SourceHut build"));
-    const hasRawCommand = lines.some(l => l.includes("pipefail") || l.includes("hut builds"));
-    expect(hasDescription).toBe(true);
-    expect(hasRawCommand).toBe(false);
+    expect(lines).toEqual(["1 monitor"]);
   });
 
-  it("collapses multi-line commands when no description is set", () => {
+  it("shows compact loop and monitor counts", () => {
+    store.create(
+      { type: "event", source: "monitor:done", filter: '{"monitorId":"5"}' },
+      "Summarize the GitHub Actions run result",
+      { recurring: false },
+    );
     monitorManager._add({
       id: "2",
-      command: "bash -lc '\nset -euo pipefail\nhut builds show 1770173\n'",
-      status: "running",
-      startedAt: Date.now(),
-      outputLines: 5,
-    });
-
-    const lines = extractRenderLines();
-
-    const monitorLine = lines.find(l => l.includes("#2"));
-    expect(monitorLine).toBeDefined();
-    // Multi-line command is collapsed to single line: no literal newlines
-    expect(monitorLine!).not.toContain("\n");
-    // The collapsed command text should appear, just on one line
-    expect(monitorLine!).toMatch(/bash -lc/);
-  });
-
-  it("shows simple commands directly when no description is set", () => {
-    monitorManager._add({
-      id: "3",
       command: "curl -s https://api.github.com/repos/u/r/actions/runs",
       status: "running",
       startedAt: Date.now(),
@@ -106,52 +93,43 @@ describe("LoopWidget rendering", () => {
     });
 
     const lines = extractRenderLines();
-
-    const monitorLine = lines.find(l => l.includes("#3"));
-    expect(monitorLine).toBeDefined();
-    expect(monitorLine!).toContain("curl -s");
+    expect(lines).toEqual(["1 loop · 1 monitor"]);
   });
 
-  it("renders loop with event trigger type", () => {
-    const entry = store.create(
-      { type: "event", source: "monitor:done", filter: '{"monitorId":"5"}' },
-      "Summarize the GitHub Actions run result",
-      { recurring: false },
-    );
+  it("shows task counts and only the active task focus text", () => {
+    widget.setTaskSummaryProvider(() => ({
+      count: 2,
+      focusText: "active: Fix native task fallback",
+    }));
 
     const lines = extractRenderLines();
-
-    const loopLine = lines.find(l => l.includes(`#${entry.id}`));
-    expect(loopLine).toBeDefined();
-    expect(loopLine!).toContain("Summarize the GitHub Actions");
-    expect(loopLine!).toContain("event: monitor:done");
+    expect(lines).toEqual(["2 tasks | active: Fix native task fallback"]);
   });
 
-  it("hides widget when no loops or monitors are active", () => {
-    // Register widget first with active content
+  it("shows next task when no task is in progress", () => {
+    widget.setTaskSummaryProvider(() => ({
+      count: 3,
+      focusText: "next: Write README updates",
+    }));
+
+    const lines = extractRenderLines();
+    expect(lines).toEqual(["3 tasks | next: Write README updates"]);
+  });
+
+  it("keeps widget registered and updates to none after content clears", () => {
     monitorManager._add({
       id: "x", command: "true", status: "running", startedAt: Date.now(), outputLines: 0,
     });
 
     let currentFactory: any = null;
-    widget.setUICtx({
-      setStatus: vi.fn(),
-      setWidget: vi.fn((_key: string, factory: any) => {
-        currentFactory = factory;
-      }),
-    });
-    widget.update(); // registers widget
+    widget.setUICtx(makeMockUiCtx(vi.fn((_key: string, factory: any) => {
+      currentFactory = factory;
+    })));
+    widget.update();
     expect(currentFactory).not.toBeNull();
 
-    // Now remove the monitor — widget should hide
     monitorManager._clear();
-
-    let hideCalled = false;
-    (widget as any).uiCtx!.setWidget = vi.fn((_key: string, factory: any) => {
-      if (factory === undefined) hideCalled = true;
-    });
-    widget.update();
-
-    expect(hideCalled).toBe(true);
+    const rendered = currentFactory(mockTui, {}).render();
+    expect(rendered).toEqual(["none"]);
   });
 });
