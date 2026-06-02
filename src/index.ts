@@ -1130,7 +1130,12 @@ Fields:
           status: entry.status,
         });
         widget.update();
-        return Promise.resolve(textResult(`Task #${entry.id} created: ${entry.subject}`));
+
+        const pending = taskStore.pendingCount();
+        const hint = pending >= 5
+          ? `\n(${pending} pending tasks — consider creating a worker loop: LoopCreate trigger='tasks:created' recurring: true maxFires: 30 prompt='Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, complete it. If no pending tasks remain, call LoopDelete on your own loop ID.')`
+          : "";
+        return Promise.resolve(textResult(`Task #${entry.id} created: ${entry.subject}${hint}`));
       },
     });
 
