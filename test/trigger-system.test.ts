@@ -227,4 +227,49 @@ describe("TriggerSystem", () => {
     ).length;
     expect(afterCalls).toBe(beforeCalls);
   });
+
+  it("deletes recurring event loops immediately when final maxFires is reached", () => {
+    const eventTrigger: Trigger = { type: "event", source: "event_limit" };
+    const entry = store.create(eventTrigger, "limited event", { recurring: true, maxFires: 1 });
+    system.add(entry);
+
+    pi.events.emit("event_limit", {});
+
+    expect(store.get(entry.id)).toBeUndefined();
+
+    const fireCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    expect(fireCalls).toHaveLength(1);
+
+    pi.events.emit("event_limit", {});
+
+    const afterCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    expect(afterCalls).toHaveLength(1);
+  });
+
+  it("deletes recurring hybrid loops immediately when event-side final maxFires is reached", () => {
+    const hybridTrigger: Trigger = {
+      type: "hybrid",
+      cron: "*/10 * * * *",
+      event: { source: "hybrid_limit" },
+      debounceMs: 0,
+    };
+    const entry = store.create(hybridTrigger, "limited hybrid", { recurring: true, maxFires: 1 });
+    system.add(entry);
+
+    expect(scheduler.nextFire(entry.id)).toBeDefined();
+
+    pi.events.emit("hybrid_limit", {});
+
+    expect(store.get(entry.id)).toBeUndefined();
+    expect(scheduler.nextFire(entry.id)).toBeUndefined();
+
+    const fireCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    expect(fireCalls).toHaveLength(1);
+  });
 });

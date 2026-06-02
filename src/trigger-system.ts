@@ -110,6 +110,12 @@ export class TriggerSystem {
       return;
     }
 
+    if (fresh.recurring && fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+      this.remove(fresh.id);
+      this.store.delete(fresh.id);
+      return;
+    }
+
     if (!fresh.recurring) {
       this.remove(fresh.id);
       this.store.delete(fresh.id);

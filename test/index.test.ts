@@ -18,6 +18,7 @@ function createMockPi(options?: { respondToTaskPing?: boolean }) {
   const toolMap = new Map<string, RegisteredTool>();
   const commandMap = new Map<string, RegisteredCommand>();
   const sentMessages: Array<{ message: string; options?: unknown }> = [];
+  const sentCustomMessages: Array<{ message: unknown; options?: unknown }> = [];
   const eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   const extensionHandlers = new Map<string, Set<(payload: unknown, ctx: unknown) => void>>();
 
@@ -51,12 +52,15 @@ function createMockPi(options?: { respondToTaskPing?: boolean }) {
     registerCommand(name: string, command: RegisteredCommand) {
       commandMap.set(name, command);
     },
+    sendMessage(message: unknown, options?: unknown) {
+      sentCustomMessages.push({ message, options });
+    },
     sendUserMessage(message: string, options?: unknown) {
       sentMessages.push({ message, options });
     },
   };
 
-  return { pi, toolMap, commandMap, extensionHandlers, sentMessages };
+  return { pi, toolMap, commandMap, extensionHandlers, sentMessages, sentCustomMessages };
 }
 
 describe("native task fallback", () => {
@@ -202,5 +206,86 @@ describe("native task fallback", () => {
     const data = JSON.parse(readFileSync(taskPath, "utf-8"));
     expect(data.tasks).toHaveLength(0);
     expect(sentMessages).toHaveLength(0);
+  });
+
+  it("drops a buffered native autoTask wake when tasks finish before agent_end", async () => {
+    const { pi, toolMap, extensionHandlers, sentCustomMessages, sentMessages } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const taskCreate = toolMap.get("TaskCreate");
+    const taskUpdate = toolMap.get("TaskUpdate");
+    expect(taskCreate?.execute).toBeDefined();
+    expect(taskUpdate?.execute).toBeDefined();
+
+    await taskCreate!.execute?.("1", { subject: "Buffered task", description: "will complete before flush" });
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    pi.events.emit("loop:fire", {
+      loopId: "100",
+      prompt: "Should be canceled before flush",
+      trigger: { type: "event", source: "native:test:event" },
+      timestamp: Date.now(),
+      autoTask: true,
+      recurring: false,
+    });
+    await Promise.resolve();
+
+    expect(sentCustomMessages).toHaveLength(0);
+    expect(sentMessages).toHaveLength(0);
+
+    await taskUpdate!.execute?.("2", { id: "1", status: "completed" });
+
+    for (const handler of extensionHandlers.get("agent_end") ?? []) {
+      await handler(null, ctx);
+    }
+    await Promise.resolve();
+
+    const taskPath = join(cwd, ".pi", "tasks", "tasks.json");
+    const data = JSON.parse(readFileSync(taskPath, "utf-8"));
+    expect(data.tasks).toHaveLength(0);
+    expect(sentCustomMessages).toHaveLength(0);
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it("removes recurring event loops immediately after the final allowed fire", async () => {
+    const { pi, toolMap } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const loopCreate = toolMap.get("LoopCreate");
+    const loopList = toolMap.get("LoopList");
+    expect(loopCreate?.execute).toBeDefined();
+    expect(loopList?.execute).toBeDefined();
+
+    await loopCreate!.execute?.("1", {
+      trigger: "maxfires:test:event",
+      prompt: "Fire once then disappear",
+      triggerType: "event",
+      recurring: true,
+      maxFires: 1,
+    });
+
+    pi.events.emit("maxfires:test:event", {});
+    await Promise.resolve();
+
+    const result = await loopList!.execute?.("2", {});
+    expect(result.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
   });
 });
