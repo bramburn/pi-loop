@@ -80,6 +80,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── pi-tasks integration ──
   let tasksAvailable = false;
+  let nativeTaskStore: import("./task-store.js").TaskStore | undefined;
 
   function checkTasksVersion() {
     const requestId = randomUUID();
@@ -815,4 +816,103 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     const active = loops.filter(l => l.status === "active").length;
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
   }
+
+  // ── Native task tools (only when pi-tasks is absent) ──
+
+  setTimeout(async () => {
+    if (tasksAvailable) return;
+    const { TaskStore: NativeTaskStore } = await import("./task-store.js");
+    nativeTaskStore = new NativeTaskStore(
+      resolveStorePath(_latestCtx?.sessionManager?.getSessionId())
+    );
+    const taskStore = nativeTaskStore;
+
+    pi.registerTool({
+      name: "TaskCreate",
+      label: "TaskCreate",
+      description: `Create a task for tracking work across turns. Use when you need to track progress on complex multi-step tasks.
+
+Fields:
+- subject: brief actionable title
+- description: detailed requirements
+- metadata: optional tags/metadata`,
+      parameters: Type.Object({
+        subject: Type.String({ description: "Brief actionable title for the task" }),
+        description: Type.String({ description: "Detailed description of what needs to be done" }),
+      }),
+      execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+        const entry = taskStore.create(params.subject, params.description);
+        widget.update();
+        return Promise.resolve(textResult(`Task #${entry.id} created: ${entry.subject}`));
+      },
+    });
+
+    pi.registerTool({
+      name: "TaskList",
+      label: "TaskList",
+      description: `List all tasks with status. Use to check progress and find available work.`,
+      parameters: Type.Object({}),
+      execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+        const tasks = taskStore.list();
+        if (tasks.length === 0) return Promise.resolve(textResult("No tasks."));
+
+        const lines: string[] = [];
+        const statuses: Record<"pending" | "in_progress" | "completed", number> = {
+          pending: 0,
+          in_progress: 0,
+          completed: 0,
+        };
+        for (const t of tasks) {
+          statuses[t.status]++;
+          const icon = t.status === "completed" ? "ok" : t.status === "in_progress" ? ">" : "*";
+          lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`);
+        }
+        lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done)`);
+        return Promise.resolve(textResult(lines.join("\n")));
+      },
+    });
+
+    pi.registerTool({
+      name: "TaskUpdate",
+      label: "TaskUpdate",
+      description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done.
+
+Statuses: pending → in_progress → completed`,
+      parameters: Type.Object({
+        id: Type.String({ description: "Task ID to update" }),
+        status: Type.Optional(Type.String({ description: "New status", enum: ["pending", "in_progress", "completed"] })),
+        subject: Type.Optional(Type.String({ description: "New title" })),
+        description: Type.Optional(Type.String({ description: "New description" })),
+      }),
+      execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+        const { id, status, subject, description } = params;
+        const entry = taskStore.update(id, {
+          status: status as "pending" | "in_progress" | "completed" | undefined,
+          subject,
+          description,
+        });
+        if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
+        widget.update();
+        const statusMsg = status ? ` → ${status}` : "";
+        return Promise.resolve(textResult(`Task #${id} updated${statusMsg}`));
+      },
+    });
+
+    pi.registerTool({
+      name: "TaskDelete",
+      label: "TaskDelete",
+      description: `Delete a task by ID. Use for cleaning up completed or irrelevant tasks.`,
+      parameters: Type.Object({
+        id: Type.String({ description: "Task ID to delete" }),
+      }),
+      execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+        const deleted = taskStore.delete(params.id);
+        widget.update();
+        if (deleted) return Promise.resolve(textResult(`Task #${params.id} deleted`));
+        return Promise.resolve(textResult(`Task #${params.id} not found`));
+      },
+    });
+
+    debug("native task tools registered (pi-tasks not detected)");
+  }, 6000);
 }
