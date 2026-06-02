@@ -80,7 +80,6 @@ export default function (pi: ExtensionAPI) {
 
   // ── pi-tasks integration ──
   let tasksAvailable = false;
-  const _PROTOCOL_VERSION = 1;
 
   function checkTasksVersion() {
     const requestId = randomUUID();
@@ -474,7 +473,7 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           ? scheduler.nextFire(entry.id)
           : undefined;
 
-        const statusIcon = entry.status === "active" ? "⟳" : entry.status === "paused" ? "⏸" : "✗";
+        const statusIcon = entry.status === "active" ? "*" : entry.status === "paused" ? "-" : "x";
         let line = `${statusIcon} #${entry.id} [${entry.status}] ${entry.prompt.slice(0, 60)}`;
         line += ` (${triggerDesc})`;
         if (nextFire) {
@@ -607,7 +606,7 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
 
       const lines: string[] = [];
       for (const m of monitors) {
-        const icon = m.status === "running" ? "◉" : m.status === "completed" ? "✓" : "✗";
+        const icon = m.status === "running" ? ">" : m.status === "completed" ? "ok" : "!!";
         const age = Date.now() - m.startedAt;
         const ageStr = formatRemaining(age);
         let line = `${icon} #${m.id} [${m.status}] ${m.command.slice(0, 60)} — ${m.outputLines} lines (${ageStr})`;
@@ -744,45 +743,45 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
   async function viewLoops(ui: ExtensionUIContext) {
     const loops = store.list();
     if (loops.length === 0) {
-      await ui.select("No active loops", ["← Back"]);
+      await ui.select("No active loops", ["< Back"]);
       return;
     }
 
     const choices = loops.map((l: LoopEntry) => {
-      const icon = l.status === "active" ? "⟳" : l.status === "paused" ? "⏸" : "✗";
+      const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
       const triggerDesc = l.trigger.type === "cron" ? `cron: ${l.trigger.schedule}` : l.trigger.type === "event" ? `event: ${l.trigger.source}` : `hybrid: ${l.trigger.cron}`;
       return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
     });
-    choices.push("← Back");
+    choices.push("< Back");
 
     const selected = await ui.select("Active Loops", choices);
-    if (!selected || selected === "← Back") return;
+    if (!selected || selected === "< Back") return;
 
     const match = selected.match(/#(\d+)/);
     if (match) {
       const entry = store.get(match[1]);
       if (entry) {
-        const actions = ["✗ Delete"];
-        if (entry.status === "active") actions.unshift("⏸ Pause");
-        else if (entry.status === "paused") actions.unshift("▶ Resume");
-        actions.push("← Back");
+        const actions = ["x Delete"];
+        if (entry.status === "active") actions.unshift("- Pause");
+        else if (entry.status === "paused") actions.unshift("* Resume");
+        actions.push("< Back");
 
         const action = await ui.select(
           `#${entry.id}: ${entry.prompt}\nTrigger: ${JSON.stringify(entry.trigger)}`,
           actions,
         );
 
-        if (action === "✗ Delete") {
+        if (action === "x Delete") {
           triggerSystem.remove(entry.id);
           store.delete(entry.id);
           widget.update();
           ui.notify(`Loop #${entry.id} deleted`, "info");
-        } else if (action === "⏸ Pause") {
+        } else if (action === "- Pause") {
           store.update(entry.id, { status: "paused" });
           triggerSystem.remove(entry.id);
           widget.update();
           ui.notify(`Loop #${entry.id} paused`, "info");
-        } else if (action === "▶ Resume") {
+        } else if (action === "* Resume") {
           store.update(entry.id, { status: "active" });
           triggerSystem.add(entry);
           widget.update();

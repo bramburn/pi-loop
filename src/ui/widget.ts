@@ -78,13 +78,13 @@ export class LoopWidget {
 
     if (total === 0) return [];
 
-    const headerParts: string[] = [`⟳ ${loops.length} loops`];
+    const headerParts: string[] = [`${loops.length} loops`];
     if (runningMonitors.length > 0) headerParts.push(`${runningMonitors.length} running`);
     if (completedMonitors.length > 0) headerParts.push(`${completedMonitors.length} done`);
     lines.push(trunc(headerParts.join(" · ")));
 
     for (const loop of loops.slice(0, MAX_VISIBLE)) {
-      const icon = "◷";
+      const icon = "~";
       let schedule = "";
       if (loop.trigger.type === "cron") {
         schedule = loop.trigger.schedule;
@@ -103,7 +103,7 @@ export class LoopWidget {
     }
 
     for (const m of allMonitors.slice(0, Math.max(0, MAX_VISIBLE - loops.length))) {
-      const icon = m.status === "running" ? "◉" : "✓";
+      const icon = m.status === "running" ? ">" : "ok";
       const age = Date.now() - m.startedAt;
       const label = m.description || m.command.replace(/\n/g, " ").replace(/\s+/g, " ").trim().slice(0, 50);
       let line = `  ${icon} #${m.id} ${label} ${m.outputLines} lines (${formatDuration(age)})`;
