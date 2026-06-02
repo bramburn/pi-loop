@@ -555,3 +555,137 @@ describe("dynamic loop pump", () => {
     expect(sentCustomMessages).toHaveLength(0);
   });
 });
+
+describe("LoopDelete tool wrapper", () => {
+  let cwd: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    originalCwd = process.cwd();
+    cwd = mkdtempSync(join(tmpdir(), "pi-loop-delete-"));
+    process.chdir(cwd);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(cwd, { recursive: true, force: true });
+    vi.useRealTimers();
+  });
+
+  function makeCtx() {
+    return {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+  }
+
+  it("deletes an existing loop", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = makeCtx();
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopCreate = toolMap.get("LoopCreate");
+    const loopDelete = toolMap.get("LoopDelete");
+    expect(loopCreate?.execute).toBeDefined();
+    expect(loopDelete?.execute).toBeDefined();
+
+    await loopCreate!.execute?.("1", {
+      trigger: "tool_execution_start",
+      prompt: "Delete me",
+      triggerType: "event",
+      recurring: true,
+    });
+
+    const result = await loopDelete!.execute?.("2", { id: "1" });
+    expect(result.content[0].text).toBe("Loop #1 deleted");
+
+    const loopList = toolMap.get("LoopList");
+    const listResult = await loopList!.execute?.("3", {});
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
+  });
+
+  it("pauses an existing loop", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = makeCtx();
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopCreate = toolMap.get("LoopCreate");
+    const loopDelete = toolMap.get("LoopDelete");
+    await loopCreate!.execute?.("1", {
+      trigger: "tool_execution_start",
+      prompt: "Pause me",
+      triggerType: "event",
+      recurring: true,
+    });
+
+    const result = await loopDelete!.execute?.("2", { id: "1", action: "pause" });
+    expect(result.content[0].text).toBe("Loop #1 paused");
+
+    const loopList = toolMap.get("LoopList");
+    const listResult = await loopList!.execute?.("3", {});
+    expect(listResult.content[0].text).toContain("[paused]");
+  });
+
+  it("returns not found for non-existent loop", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = makeCtx();
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopDelete = toolMap.get("LoopDelete");
+    expect(loopDelete?.execute).toBeDefined();
+
+    const deleteResult = await loopDelete!.execute?.("1", { id: "999" });
+    expect(deleteResult.content[0].text).toBe("Loop #999 not found");
+
+    const pauseResult = await loopDelete!.execute?.("2", { id: "999", action: "pause" });
+    expect(pauseResult.content[0].text).toBe("Loop #999 not found");
+  });
+
+  it("defaults to delete when no action specified", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = makeCtx();
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopCreate = toolMap.get("LoopCreate");
+    const loopDelete = toolMap.get("LoopDelete");
+    await loopCreate!.execute?.("1", {
+      trigger: "tool_execution_start",
+      prompt: "Default delete",
+      triggerType: "event",
+      recurring: true,
+    });
+
+    const result = await loopDelete!.execute?.("2", { id: "1" });
+    expect(result.content[0].text).toBe("Loop #1 deleted");
+  });
+});
