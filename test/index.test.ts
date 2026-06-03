@@ -321,6 +321,53 @@ describe("native task fallback", () => {
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Run TaskList, pick next pending task");
   });
 
+  it("auto-deletes the worker loop after all native tasks are completed", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const taskCreate = toolMap.get("TaskCreate");
+    const taskUpdate = toolMap.get("TaskUpdate");
+    const loopList = toolMap.get("LoopList");
+    expect(taskCreate?.execute).toBeDefined();
+    expect(taskUpdate?.execute).toBeDefined();
+    expect(loopList?.execute).toBeDefined();
+
+    for (let i = 1; i <= 5; i++) {
+      await taskCreate!.execute?.(`${i}`, {
+        subject: `Task ${i}`,
+        description: `Desc ${i}`,
+      });
+    }
+
+    let listResult = await loopList!.execute?.("20", {});
+    expect(listResult.content[0].text).toContain("#1");
+
+    for (let i = 1; i <= 5; i++) {
+      await taskUpdate!.execute?.(`${20 + i}`, { id: `${i}`, status: "completed" });
+    }
+
+    for (const handler of extensionHandlers.get("agent_end") ?? []) {
+      await handler(null, ctx);
+    }
+    await Promise.resolve();
+
+    listResult = await loopList!.execute?.("30", {});
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
+  });
+
   it("wakes immediately when a recurring tasks:created loop is bootstrapped against existing pending tasks", async () => {
     const { pi, toolMap, sentCustomMessages } = createMockPi();
 

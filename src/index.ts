@@ -196,6 +196,7 @@ export default function (pi: ExtensionAPI) {
     if (nativeTaskStore) {
       nativeTaskStore.sweepCompleted();
       widget.update();
+      await cleanupAutoTaskWorkerLoop();
     }
   }
 
@@ -410,6 +411,7 @@ export default function (pi: ExtensionAPI) {
     _latestCtx = ctx;
     widget.setUICtx(ctx.ui);
     await flushPendingNotifications({ ignorePendingMessages: true });
+    await cleanupAutoTaskWorkerLoop();
     await pumpLoops();
   });
 
@@ -1009,12 +1011,28 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
   const AUTO_TASK_WORKER_THRESHOLD = 5;
   const AUTO_TASK_WORKER_PROMPT = "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, complete it. If no pending tasks remain, call LoopDelete on your own loop ID.";
 
-  function findAutoTaskWorkerLoop(): LoopEntry | undefined {
-    return store.list().find(entry =>
-      entry.status === "active"
+  function isAutoTaskWorkerLoop(entry: LoopEntry): boolean {
+    return entry.status === "active"
       && entry.prompt === AUTO_TASK_WORKER_PROMPT
-      && triggerHasEventSource(entry.trigger, "tasks:created")
-    );
+      && triggerHasEventSource(entry.trigger, "tasks:created");
+  }
+
+  function findAutoTaskWorkerLoop(): LoopEntry | undefined {
+    return store.list().find(isAutoTaskWorkerLoop);
+  }
+
+  async function cleanupAutoTaskWorkerLoop(): Promise<boolean> {
+    const existing = findAutoTaskWorkerLoop();
+    if (!existing) return false;
+
+    const pending = await hasPendingTasks();
+    if (pending < 0 || pending > 0) return false;
+
+    debug(`worker loop #${existing.id} — no pending tasks remain, deleting`);
+    triggerSystem.remove(existing.id);
+    store.delete(existing.id);
+    widget.update();
+    return true;
   }
 
   async function ensureAutoTaskWorkerLoop(taskStore: TaskStore): Promise<{ entry?: LoopEntry; created: boolean }> {
@@ -1120,6 +1138,7 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
     }
 
     widget.update();
+    await cleanupAutoTaskWorkerLoop();
     return viewNativeTasks(ui);
   }
 
@@ -1238,7 +1257,7 @@ Parameters: id (required), status, subject, description`,
         subject: Type.Optional(Type.String({ description: "New title" })),
         description: Type.Optional(Type.String({ description: "New description" })),
       }),
-      execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         const { id, status, subject, description } = params;
         const entry = taskStore.update(id, {
           status: status as "pending" | "in_progress" | "completed" | undefined,
@@ -1247,6 +1266,7 @@ Parameters: id (required), status, subject, description`,
         });
         if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
         widget.update();
+        await cleanupAutoTaskWorkerLoop();
         const statusMsg = status ? ` → ${status}` : "";
         return Promise.resolve(textResult(`Task #${id} updated${statusMsg}`));
       },
@@ -1259,10 +1279,13 @@ Parameters: id (required), status, subject, description`,
       parameters: Type.Object({
         id: Type.String({ description: "Task ID to delete" }),
       }),
-      execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         const deleted = taskStore.delete(params.id);
         widget.update();
-        if (deleted) return Promise.resolve(textResult(`Task #${params.id} deleted`));
+        if (deleted) {
+          await cleanupAutoTaskWorkerLoop();
+          return Promise.resolve(textResult(`Task #${params.id} deleted`));
+        }
         return Promise.resolve(textResult(`Task #${params.id} not found`));
       },
     });
