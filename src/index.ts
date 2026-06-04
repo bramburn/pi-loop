@@ -621,11 +621,24 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
   });
 
   function handleMonitorDoneLoop(doneLoop: LoopEntry, monitorId: string): void {
-    triggerSystem.add(doneLoop);
+    const deliver = () => {
+      const current = store.get(doneLoop.id);
+      if (!current) return;
+      debug(`onDone loop #${doneLoop.id} — monitor #${monitorId} completed, delivering directly`);
+      onLoopFire(current);
+      store.delete(doneLoop.id);
+    };
+
+    const registered = monitorManager.onComplete(monitorId, deliver);
+    if (registered) return;
+
     const monitor = monitorManager.get(monitorId);
     if (monitor && monitor.status !== "running") {
+      if (monitor.status === "completed") {
+        deliver();
+        return;
+      }
       debug(`onDone loop #${doneLoop.id} — monitor #${monitorId} already ${monitor.status}, expiring`);
-      triggerSystem.remove(doneLoop.id);
       store.delete(doneLoop.id);
     }
   }

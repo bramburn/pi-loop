@@ -14,7 +14,7 @@ interface RegisteredCommand {
   handler?: (...args: any[]) => any;
 }
 
-function createMockPi(options?: { respondToTaskPing?: boolean }) {
+function createMockPi(options?: { respondToTaskPing?: boolean; suppressMonitorDoneDispatch?: boolean }) {
   const toolMap = new Map<string, RegisteredTool>();
   const commandMap = new Map<string, RegisteredCommand>();
   const sentMessages: Array<{ message: string; options?: unknown }> = [];
@@ -34,6 +34,9 @@ function createMockPi(options?: { respondToTaskPing?: boolean }) {
         queueMicrotask(() => {
           events.emit(`tasks:rpc:ping:reply:${payload.requestId}`, { data: { version: 1 } });
         });
+      }
+      if (name === "monitor:done" && options?.suppressMonitorDoneDispatch) {
+        return;
       }
       for (const cb of eventHandlers.get(name) ?? []) cb(payload);
     },
@@ -1131,6 +1134,28 @@ describe("monitor tool wrappers", () => {
 
     expect(sentCustomMessages).toHaveLength(1);
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor finished");
+  }, 10000);
+
+  it("onDone monitor completion does not rely on monitor:done event dispatch", async () => {
+    vi.useRealTimers();
+    const { pi, toolMap, sentCustomMessages } = createMockPi({ suppressMonitorDoneDispatch: true });
+
+    extension(pi as any);
+    await new Promise(r => setTimeout(r, 6100));
+
+    const monitorCreate = toolMap.get("MonitorCreate");
+    expect(monitorCreate?.execute).toBeDefined();
+
+    const result = await monitorCreate!.execute?.("1", {
+      command: "echo 'monitor done'",
+      onDone: "Monitor finished without event dispatch",
+    });
+    expect(result.content[0].text).toContain("onDone loop");
+
+    await new Promise(r => setTimeout(r, 500));
+
+    expect(sentCustomMessages).toHaveLength(1);
+    expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor finished without event dispatch");
   }, 10000);
 
   it("monitor create list stop lifecycle reflects state changes", async () => {

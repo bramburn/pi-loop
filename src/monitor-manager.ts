@@ -35,6 +35,7 @@ export class MonitorManager {
       proc: child,
       abortController,
       waiters: [],
+      completionCallbacks: [],
     };
 
     child.stdout?.on("data", (data: Buffer) => {
@@ -74,6 +75,10 @@ export class MonitorManager {
         exitCode: code,
         outputLines: entry.outputLines,
       });
+      if (status === "completed") {
+        for (const callback of bp.completionCallbacks) callback();
+      }
+      bp.completionCallbacks = [];
       for (const resolve of bp.waiters) resolve();
       bp.waiters = [];
       // Remove completed/errored monitors after a brief delay so tool
@@ -95,6 +100,7 @@ export class MonitorManager {
           monitorId: id,
           error: err.message,
         });
+        bp.completionCallbacks = [];
         for (const resolve of bp.waiters) resolve();
         bp.waiters = [];
       }
@@ -143,8 +149,21 @@ export class MonitorManager {
     });
 
     bp.entry.completedAt = Date.now();
+    bp.completionCallbacks = [];
     for (const resolve of bp.waiters) resolve();
     bp.waiters = [];
+    return true;
+  }
+
+  onComplete(id: string, callback: () => void): boolean {
+    const bp = this.processes.get(id);
+    if (!bp) return false;
+    if (bp.entry.status === "completed") {
+      callback();
+      return true;
+    }
+    if (bp.entry.status !== "running") return false;
+    bp.completionCallbacks.push(callback);
     return true;
   }
 
