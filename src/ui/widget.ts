@@ -9,7 +9,6 @@ interface TaskSummary {
 
 export class LoopWidget {
   private uiCtx: ExtensionUIContext | undefined;
-  private interval: ReturnType<typeof setInterval> | undefined;
   private taskSummaryProvider: (() => TaskSummary) | undefined;
 
   constructor(
@@ -31,17 +30,7 @@ export class LoopWidget {
 
   update() {
     if (!this.uiCtx) return;
-
-    const status = this.computeStatus();
-    if (status && !this.interval) {
-      this.interval = setInterval(() => this.update(), 5000);
-    }
-    if (!status && this.interval) {
-      clearInterval(this.interval);
-      this.interval = undefined;
-    }
-
-    this.uiCtx.setStatus("loops", status);
+    this.uiCtx.setStatus("loops", this.computeStatus());
   }
 
   private computeStatus(): string | undefined {
@@ -64,10 +53,6 @@ export class LoopWidget {
   }
 
   dispose() {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = undefined;
-    }
     this.uiCtx?.setStatus("loops", undefined);
   }
 }

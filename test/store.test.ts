@@ -234,6 +234,18 @@ describe("LoopStore (file-backed)", () => {
     expect(l.id).toBe("2");
   });
 
+  it("refreshes reads only when the backing file changes", () => {
+    const store1 = new LoopStore(testListId);
+    const store2 = new LoopStore(testListId);
+
+    store1.create(cronTrigger, "first", { recurring: true });
+    expect(store2.list()).toHaveLength(1);
+
+    store1.create(cronTrigger, "second", { recurring: true });
+    expect(store2.list()).toHaveLength(2);
+    expect(store2.get("2")?.prompt).toBe("second");
+  });
+
   it("persists paused status updates", () => {
     const store1 = new LoopStore(testListId);
     store1.create(cronTrigger, "test", { recurring: true });

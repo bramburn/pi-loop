@@ -24,14 +24,17 @@ export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
   pi.registerTool({
     name: "TaskCreate",
     label: "TaskCreate",
-    description: `Create a task for tracking work across turns. Use when you need to track progress on complex multi-step tasks.
+    description: `Create a task for tracking work across turns. Use when you need to track progress on complex multi-step tasks or turn a broad user goal into a concrete backlog.
 
 Fields:
 - subject: brief actionable title
-- description: detailed requirements
-- metadata: optional tags/metadata`,
+- description: detailed requirements and done condition`,
     promptGuidelines: [
       "Use TaskCreate to track complex multi-step work across turns.",
+      "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
+      "Prefer 2-5 tasks that separate investigation, implementation, validation, and reporting or commit-prep when those phases are distinct.",
+      "Make each `subject` a short verb-object action.",
+      "Make each `description` include the expected artifact, outcome, or done condition so another turn can pick the task up cleanly.",
       "Break work into small, independently completable tasks. A task should be finishable in one focused session — if a task would take multiple turns, split it further.",
       "TaskCreate accepts `subject` and `description` parameters only — do not invent extra fields unless the schema explicitly adds them.",
     ],

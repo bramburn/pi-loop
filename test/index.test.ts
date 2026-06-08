@@ -97,6 +97,21 @@ describe("native task fallback", () => {
     expect(commandMap.has("tasks")).toBe(true);
   });
 
+  it("guides TaskCreate toward broad-goal decomposition without advertising unsupported fields", async () => {
+    const { pi, toolMap } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const taskCreate = toolMap.get("TaskCreate") as any;
+    expect(taskCreate.description).toContain("broad user goal");
+    expect(taskCreate.description).not.toContain("metadata");
+    expect(taskCreate.promptGuidelines).toContain(
+      "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
+    );
+  });
+
   it("does not register native task tools when pi-tasks responds", async () => {
     const { pi, toolMap, commandMap } = createMockPi({ respondToTaskPing: true });
 

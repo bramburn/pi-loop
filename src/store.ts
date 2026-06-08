@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { type LoopReducerEvent, type LoopReducerState, reduceLoopState } from "./loop-reducer.js";
@@ -44,6 +44,7 @@ function isProcessRunning(pid: number): boolean {
 export class LoopStore {
   private filePath: string | undefined;
   private lockPath: string | undefined;
+  private lastLoadedSignature: string | undefined;
 
   private nextId = 1;
   private loops = new Map<string, LoopEntry>();
@@ -58,9 +59,17 @@ export class LoopStore {
     this.load();
   }
 
-  private load(): void {
+  private getFileSignature(): string | undefined {
+    if (!this.filePath || !existsSync(this.filePath)) return undefined;
+    const stat = statSync(this.filePath);
+    return `${stat.mtimeMs}:${stat.size}`;
+  }
+
+  private load(force = false): void {
     if (!this.filePath) return;
-    if (!existsSync(this.filePath)) return;
+    const signature = this.getFileSignature();
+    if (!signature) return;
+    if (!force && signature === this.lastLoadedSignature) return;
     try {
       const data: LoopStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
       this.nextId = data.nextId;
@@ -68,6 +77,7 @@ export class LoopStore {
       for (const loop of data.loops) {
         this.loops.set(loop.id, loop);
       }
+      this.lastLoadedSignature = signature;
     } catch { /* corrupt file — start fresh */ }
   }
 
@@ -80,13 +90,14 @@ export class LoopStore {
     const tmpPath = this.filePath + ".tmp";
     writeFileSync(tmpPath, JSON.stringify(data, null, 2));
     renameSync(tmpPath, this.filePath);
+    this.lastLoadedSignature = this.getFileSignature();
   }
 
   private withLock<T>(fn: () => T): T {
     if (!this.lockPath) return fn();
     acquireLock(this.lockPath);
     try {
-      this.load();
+      this.load(true);
       const result = fn();
       this.save();
       return result;

@@ -158,4 +158,16 @@ describe("GoalStore (file-backed)", () => {
     expect(store2.get("1")?.progress.totalTasks).toBe(1);
     expect(store2.get("1")?.title).toBe("updated");
   });
+
+  it("refreshes reads only when the backing file changes", () => {
+    const store1 = new GoalStore(testListId);
+    const store2 = new GoalStore(testListId);
+
+    store1.create("first", "desc", {}, criteria());
+    expect(store2.list()).toHaveLength(1);
+
+    store1.create("second", "desc", {}, criteria());
+    expect(store2.list()).toHaveLength(2);
+    expect(store2.get("2")?.title).toBe("second");
+  });
 });

@@ -98,6 +98,18 @@ describe("TaskStore (file-backed)", () => {
     expect(store2.get("1")?.subject).toBe("updated");
   });
 
+  it("refreshes reads only when the backing file changes", () => {
+    const store1 = new TaskStore(testListId);
+    const store2 = new TaskStore(testListId);
+
+    store1.create("first", "desc");
+    expect(store2.list()).toHaveLength(1);
+
+    store1.create("second", "desc");
+    expect(store2.list()).toHaveLength(2);
+    expect(store2.get("2")?.subject).toBe("second");
+  });
+
   it("preserves monotonic ids after prune", () => {
     const store1 = new TaskStore(testListId);
     store1.create("done", "desc");
