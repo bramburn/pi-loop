@@ -32,7 +32,10 @@ Fields:
     promptGuidelines: [
       "Use TaskCreate to track complex multi-step work across turns.",
       "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
+      "If the user supplies a shared goal or meta-goal, preserve it explicitly using the user's wording and tie each created task back to that goal in its description.",
+      "If several tasks share one goal, keep subjects short and put the shared goal in the first sentence of each description or as an equivalent explicit framing.",
       "Prefer 2-5 tasks that separate investigation, implementation, validation, and reporting or commit-prep when those phases are distinct.",
+      "When the user asks to break work into tasks, create the backlog directly and do not pivot to loops, monitors, or other automation unless the user also asked for ongoing automation.",
       "Make each `subject` a short verb-object action.",
       "Make each `description` include the expected artifact, outcome, or done condition so another turn can pick the task up cleanly.",
       "Break work into small, independently completable tasks. A task should be finishable in one focused session — if a task would take multiple turns, split it further.",
@@ -54,7 +57,7 @@ Fields:
       updateWidget();
 
       const autoLoopMsg = backlog.created && backlog.entry
-        ? `\nWorker loop #${backlog.entry.id} auto-created`
+        ? `\nBacklog worker loop #${backlog.entry.id} created`
         : "";
       return Promise.resolve(textResult(`Task #${entry.id} created: ${entry.subject}${autoLoopMsg}`));
     },
@@ -121,7 +124,7 @@ Parameters: id (required), status, subject, description`,
       const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
       const statusMsg = status ? ` → ${status}` : "";
       const autoLoopMsg = backlog.created && backlog.entry
-        ? `\nWorker loop #${backlog.entry.id} auto-created`
+        ? `\nBacklog worker loop #${backlog.entry.id} created`
         : "";
       return Promise.resolve(textResult(`Task #${id} updated${statusMsg}${autoLoopMsg}`));
     },

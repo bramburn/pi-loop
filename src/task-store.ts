@@ -10,6 +10,7 @@ const LOCK_MAX_RETRIES = 100;
 const MAX_TASKS = 200;
 
 function acquireLock(lockPath: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       writeFileSync(lockPath, `${process.pid}`, { flag: "wx" });

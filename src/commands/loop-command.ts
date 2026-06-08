@@ -66,7 +66,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
   async function viewLoops(ui: ExtensionUIContext) {
     const loops = getStore().list();
     if (loops.length === 0) {
-      await ui.select("No active loops", ["< Back"]);
+      await ui.select("No loops configured", ["< Back"]);
       return;
     }
 
@@ -81,7 +81,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     });
     choices.push("< Back");
 
-    const selected = await ui.select("Active Loops", choices);
+    const selected = await ui.select("Loops", choices);
     if (!selected || selected === "< Back") return;
 
     const match = selected.match(/#(\d+)/);
@@ -136,14 +136,14 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         const choice = await ui.select("Loop", [
           "Create scheduled loop",
           "Create event-triggered loop",
-          "View active loops",
+          "View loops",
           "Settings",
         ]);
 
         if (!choice) return;
         if (choice.startsWith("Create scheduled")) return scheduleLoop(ui);
         if (choice.startsWith("Create event")) return eventLoop(ui);
-        if (choice.startsWith("View active")) return viewLoops(ui);
+        if (choice.startsWith("View loops")) return viewLoops(ui);
         return settings(ui);
       }
 
@@ -173,7 +173,6 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       const choice = await ui.select("Loop mode", [
         `Scheduled: "${trimmed.slice(0, 50)}"`,
         `Event-triggered: "${trimmed.slice(0, 50)}"`,
-        `Self-paced: "${trimmed.slice(0, 50)}"`,
       ]);
 
       if (!choice) return;

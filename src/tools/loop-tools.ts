@@ -149,7 +149,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       "## Task-driven workflows",
       "Do not rely on a past 'tasks:created' event to replay. If tasks already exist, bootstrap the first pass in the current turn or use a hybrid/event loop that can catch future task creation and a cron safety-net.",
       "Use autoTask only when you want the loop itself to create a task on each fire. For processing an existing task backlog, leave autoTask off and have the loop run TaskList to pick the next pending task.",
-      "Set taskBacklog: true for task-worker loops that process the existing pending queue. Task-backlog loops bootstrap against existing pending tasks and auto-delete when the queue reaches zero.",
+      "Set taskBacklog: true for backlog worker loops that process the existing pending queue. Backlog worker loops bootstrap against existing pending tasks and auto-delete when the queue reaches zero.",
       "When no tasks are pending, the loop should stop itself or skip the wake entirely — no tokens burned on empty polls.",
       "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
     ],
@@ -229,10 +229,10 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         `Loop #${entry.id} created: ${entry.prompt.slice(0, 60)}\n` +
         `Trigger: ${triggerDesc}\n` +
         `Recurring: ${entry.recurring}\n` +
-        (entry.autoTask ? "Auto-task: enabled\n" : "") +
-        (entry.taskBacklog ? "Task-backlog: enabled\n" : "") +
-        (bootstrapped ? "Bootstrap: queued initial wake for existing pending tasks\n" : "") +
-        (isTaskSystemReady() ? "" : "(task system not ready yet — autoTask may not fire until native fallback or pi-tasks becomes available)\n") +
+        (entry.autoTask ? "Auto-create task: enabled\n" : "") +
+        (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
+        (bootstrapped ? "Backlog: initial wake queued for existing pending tasks\n" : "") +
+        (isTaskSystemReady() ? "" : "Task system: not ready yet — autoTask may not fire until native fallback or pi-tasks becomes available\n") +
         `ID: ${entry.id} (use LoopDelete to cancel)`
       ));
     },
@@ -266,6 +266,7 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           line += ` next: ${formatRemaining(remaining)}`;
         }
         if (entry.autoTask) line += " [auto-task]";
+        if (entry.taskBacklog) line += " [backlog-worker]";
         lines.push(line);
       }
 

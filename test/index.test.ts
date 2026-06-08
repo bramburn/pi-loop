@@ -110,6 +110,12 @@ describe("native task fallback", () => {
     expect(taskCreate.promptGuidelines).toContain(
       "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
     );
+    expect(taskCreate.promptGuidelines).toContain(
+      "If the user supplies a shared goal or meta-goal, preserve it explicitly using the user's wording and tie each created task back to that goal in its description.",
+    );
+    expect(taskCreate.promptGuidelines).toContain(
+      "When the user asks to break work into tasks, create the backlog directly and do not pivot to loops, monitors, or other automation unless the user also asked for ongoing automation.",
+    );
   });
 
   it("does not register native task tools when pi-tasks responds", async () => {
@@ -320,7 +326,7 @@ describe("native task fallback", () => {
         subject: `Task ${i}`,
         description: `Desc ${i}`,
       });
-      expect(result.content[0].text).not.toContain("Worker loop #");
+      expect(result.content[0].text).not.toContain("Backlog worker loop #");
     }
 
     let listResult = await loopList!.execute?.("10", {});
@@ -330,7 +336,7 @@ describe("native task fallback", () => {
       subject: "Task 5",
       description: "Desc 5",
     });
-    expect(fifth.content[0].text).toContain("Worker loop #1 auto-created");
+    expect(fifth.content[0].text).toContain("Backlog worker loop #1 created");
 
     listResult = await loopList!.execute?.("12", {});
     expect(listResult.content[0].text).toContain("hybrid:");
@@ -422,7 +428,7 @@ describe("native task fallback", () => {
     expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
 
     const thresholdResult = await taskUpdate!.execute?.("50", { id: "5", status: "pending" });
-    expect(thresholdResult.content[0].text).toContain("Worker loop #");
+    expect(thresholdResult.content[0].text).toContain("Backlog worker loop #");
 
     listResult = await loopList!.execute?.("60", {});
     expect(listResult.content[0].text).toContain("tasks:created");
@@ -660,8 +666,8 @@ describe("native task fallback", () => {
       taskBacklog: true,
     });
 
-    expect(result.content[0].text).toContain("Task-backlog: enabled");
-    expect(result.content[0].text).toContain("Bootstrap: queued initial wake for existing pending tasks");
+    expect(result.content[0].text).toContain("Backlog worker: enabled");
+    expect(result.content[0].text).toContain("Backlog: initial wake queued for existing pending tasks");
 
     let listResult = await loopList!.execute?.("3", {});
     expect(listResult.content[0].text).toContain("#1");
@@ -735,7 +741,7 @@ describe("native task fallback", () => {
       recurring: true,
     });
 
-    expect(result.content[0].text).toContain("Bootstrap: queued initial wake for existing pending tasks");
+    expect(result.content[0].text).toContain("Backlog: initial wake queued for existing pending tasks");
     expect(sentCustomMessages).toHaveLength(1);
     expect(sentCustomMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Pick the next pending task and work on it");
@@ -1305,8 +1311,8 @@ describe("monitor tool wrappers", () => {
       onDone: "Report completion",
     });
     expect(result.content[0].text).toContain("Monitor #1 started");
-    expect(result.content[0].text).toContain("onDone loop");
-    expect(result.content[0].text).toContain("fires when monitor completes");
+    expect(result.content[0].text).toContain("Completion wake loop");
+    expect(result.content[0].text).toContain("fires when the monitor completes");
   });
 
   it("MonitorList returns empty-state message when no monitors", async () => {
@@ -1320,7 +1326,7 @@ describe("monitor tool wrappers", () => {
     expect(monitorList?.execute).toBeDefined();
 
     const result = await monitorList!.execute?.("1", {});
-    expect(result.content[0].text).toBe("No monitors running.");
+    expect(result.content[0].text).toBe("No monitors.");
   });
 
   it("MonitorList shows monitors with status and output lines", async () => {
@@ -1385,7 +1391,7 @@ describe("monitor tool wrappers", () => {
       command: "echo 'monitor done'",
       onDone: "Monitor finished — report results",
     });
-    expect(result.content[0].text).toContain("onDone loop");
+    expect(result.content[0].text).toContain("Completion wake loop");
 
     await new Promise(r => setTimeout(r, 500));
 
@@ -1407,7 +1413,7 @@ describe("monitor tool wrappers", () => {
       command: "echo 'monitor done'",
       onDone: "Monitor finished without event dispatch",
     });
-    expect(result.content[0].text).toContain("onDone loop");
+    expect(result.content[0].text).toContain("Completion wake loop");
 
     await new Promise(r => setTimeout(r, 500));
 
@@ -1441,7 +1447,7 @@ describe("monitor tool wrappers", () => {
       command: "echo 'monitor done while busy'",
       onDone: "Monitor finished while agent busy",
     });
-    expect(result.content[0].text).toContain("onDone loop");
+    expect(result.content[0].text).toContain("Completion wake loop");
 
     await new Promise(r => setTimeout(r, 500));
     expect(sentCustomMessages).toHaveLength(0);
@@ -1453,6 +1459,116 @@ describe("monitor tool wrappers", () => {
 
     expect(sentCustomMessages).toHaveLength(1);
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor finished while agent busy");
+  }, 10000);
+
+  it("delivers monitor completion wake immediately in an idle session after agent_end", async () => {
+    vi.useRealTimers();
+    const { pi, toolMap, extensionHandlers, sentCustomMessages } = createMockPi();
+
+    extension(pi as any);
+    await new Promise(r => setTimeout(r, 6100));
+
+    // Simulate session start, running, and then going idle (agent_end)
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_end") ?? []) {
+      await handler(null, ctx);
+    }
+
+    // Start a monitor with onDone
+    const monitorCreate = toolMap.get("MonitorCreate");
+    const result = await monitorCreate!.execute?.("1", {
+      command: "echo 'monitor idle wake'",
+      onDone: "Monitor completed during idle session",
+    });
+    expect(result.content[0].text).toContain("Completion wake loop");
+
+    // Wait for process to exit and wake to deliver
+    await new Promise(r => setTimeout(r, 500));
+
+    // It should deliver the wake immediately because the session is idle!
+    expect(sentCustomMessages).toHaveLength(1);
+    expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor completed during idle session");
+  }, 10000);
+
+  it("delivers monitor completion wake even when the command exits with non-zero status in an idle session", async () => {
+    vi.useRealTimers();
+    const { pi, toolMap, extensionHandlers, sentCustomMessages } = createMockPi();
+
+    extension(pi as any);
+    await new Promise(r => setTimeout(r, 6100));
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_end") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const monitorCreate = toolMap.get("MonitorCreate");
+    const result = await monitorCreate!.execute?.("1", {
+      command: "exit 3", // fails
+      onDone: "Monitor failed in idle session",
+    });
+    expect(result.content[0].text).toContain("Completion wake loop");
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // Wake should still be delivered to notify about the failure!
+    expect(sentCustomMessages).toHaveLength(1);
+    expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor failed in idle session");
+  }, 10000);
+
+  it("does not deliver monitor completion wake if the completion loop is deleted", async () => {
+    vi.useRealTimers();
+    const { pi, toolMap, extensionHandlers, sentCustomMessages } = createMockPi();
+
+    extension(pi as any);
+    await new Promise(r => setTimeout(r, 6100));
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("agent_end") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const monitorCreate = toolMap.get("MonitorCreate");
+    const loopDelete = toolMap.get("LoopDelete");
+
+    const result = await monitorCreate!.execute?.("1", {
+      command: "sleep 10 && echo done",
+      onDone: "Never delivered",
+    });
+    expect(result.content[0].text).toContain("Completion wake loop #1");
+
+    // Delete the one-shot completion loop before it fires
+    await loopDelete!.execute?.("2", { id: "1", action: "delete" });
+
+    await new Promise(r => setTimeout(r, 200));
+    expect(sentCustomMessages).toHaveLength(0);
   }, 10000);
 
   it("monitor create list stop lifecycle reflects state changes", async () => {

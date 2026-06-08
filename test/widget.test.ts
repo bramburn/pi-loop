@@ -65,9 +65,9 @@ describe("LoopWidget status rendering", () => {
 
   it("shows compact loop and monitor counts in status", () => {
     store.create(
-      { type: "event", source: "monitor:done", filter: '{"monitorId":"5"}' },
-      "Summarize the GitHub Actions run result",
-      { recurring: false },
+      { type: "cron", schedule: "*/5 * * * *" },
+      "Check CI status",
+      { recurring: true },
     );
     monitorManager._add({
       id: "2",
@@ -79,6 +79,24 @@ describe("LoopWidget status rendering", () => {
 
     widget.update();
     expect(latestStatusCall()).toEqual(["loops", "1 loop · 1 monitor"]);
+  });
+
+  it("does not count one-shot monitor completion loops as visible loops in status", () => {
+    store.create(
+      { type: "event", source: "monitor:done", filter: '{"monitorId":"5"}' },
+      "Summarize the GitHub Actions run result",
+      { recurring: false },
+    );
+    monitorManager._add({
+      id: "5",
+      command: "curl -s https://api.github.com/repos/u/r/actions/runs",
+      status: "running",
+      startedAt: Date.now(),
+      outputLines: 0,
+    });
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "1 monitor"]);
   });
 
   it("shows task counts and only the active task focus text", () => {

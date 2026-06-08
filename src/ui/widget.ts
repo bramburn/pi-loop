@@ -1,6 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { MonitorManager } from "../monitor-manager.js";
 import type { LoopStore } from "../store.js";
+import type { LoopEntry } from "../types.js";
 
 interface TaskSummary {
   count: number;
@@ -34,7 +35,7 @@ export class LoopWidget {
   }
 
   private computeStatus(): string | undefined {
-    const loops = this.store.list().filter(l => l.status === "active");
+    const loops = this.store.list().filter(isStatusVisibleLoop);
     const monitors = this.monitorManager.list();
     const taskSummary = this.taskSummaryProvider?.() ?? { count: 0 };
 
@@ -59,4 +60,10 @@ export class LoopWidget {
 
 function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function isStatusVisibleLoop(loop: LoopEntry): boolean {
+  if (loop.status !== "active") return false;
+  if (loop.recurring) return true;
+  return !(loop.trigger.type === "event" && loop.trigger.source === "monitor:done");
 }

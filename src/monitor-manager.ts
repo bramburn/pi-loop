@@ -128,9 +128,7 @@ export class MonitorManager {
         exitCode: code,
         outputLines: current.outputLines,
       });
-      if (status === "completed") {
-        for (const callback of bp.completionCallbacks) callback();
-      }
+      for (const callback of bp.completionCallbacks) callback();
       bp.completionCallbacks = [];
       for (const resolve of bp.waiters) resolve();
       bp.waiters = [];
@@ -171,6 +169,7 @@ export class MonitorManager {
           monitorId: id,
           error: err.message,
         });
+        for (const callback of bp.completionCallbacks) callback();
         bp.completionCallbacks = [];
         for (const resolve of bp.waiters) resolve();
         bp.waiters = [];

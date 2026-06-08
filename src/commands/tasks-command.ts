@@ -45,7 +45,7 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     const backlog = await emitCreated(entry);
     ui.notify(`Task #${entry.id} created`, "info");
     if (backlog.created && backlog.entry) {
-      ui.notify(`Worker loop #${backlog.entry.id} auto-created`, "info");
+      ui.notify(`Backlog worker loop #${backlog.entry.id} created`, "info");
     }
   }
 
@@ -64,7 +64,7 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     choices.unshift("+ Create task");
     choices.push("< Back");
 
-    const selected = await ui.select("Native Tasks", choices);
+    const selected = await ui.select("Tasks", choices);
     if (!selected || selected === "< Back") return;
     if (selected === "+ Create task") {
       await createNativeTaskInteractively(ui);
@@ -125,7 +125,7 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         const backlog = await emitCreated(entry);
         ctx.ui.notify(`Task #${entry.id} created`, "info");
         if (backlog.created && backlog.entry) {
-          ctx.ui.notify(`Worker loop #${backlog.entry.id} auto-created`, "info");
+          ctx.ui.notify(`Backlog worker loop #${backlog.entry.id} created`, "info");
         }
         return;
       }

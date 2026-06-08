@@ -10,8 +10,8 @@
  *   MonitorStop   — Stop a running monitor
  *
  * Commands:
- *   /loop    — Schedule a re-wake loop: /loop [interval] [prompt]
- *   /loops   — Interactive menu: view, create, cancel, settings
+ *   /loop    — Schedule or manage re-wake loops: /loop [interval] [prompt]
+ *   /tasks   — View or manage native fallback tasks when pi-tasks is absent
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

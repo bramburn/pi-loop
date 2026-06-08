@@ -85,7 +85,7 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
         const doneTrigger: Trigger = { type: "event", source: "monitor:done", filter: JSON.stringify({ monitorId: entry.id }) };
         const doneLoop = getStore().create(doneTrigger, params.onDone, { recurring: false });
         handleMonitorDoneLoop(doneLoop, entry.id);
-        onDoneMsg = `\nonDone loop #${doneLoop.id}: fires when monitor completes — no polling needed`;
+        onDoneMsg = `\nCompletion wake loop #${doneLoop.id}: fires when the monitor completes — no polling needed`;
       }
 
       return Promise.resolve(textResult(
@@ -103,11 +103,11 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
     parameters: Type.Object({}),
     execute() {
       const monitors = getMonitorManager().list();
-      if (monitors.length === 0) return Promise.resolve(textResult("No monitors running."));
+      if (monitors.length === 0) return Promise.resolve(textResult("No monitors."));
 
       const lines: string[] = [];
       for (const m of monitors) {
-        const icon = m.status === "running" ? ">" : m.status === "completed" ? "ok" : "!!";
+        const icon = m.status === "running" ? ">" : m.status === "completed" ? "ok" : "x";
         const age = Date.now() - m.startedAt;
         const ageStr = formatRemaining(age);
         let line = `${icon} #${m.id} [${m.status}] ${m.command.slice(0, 60)} — ${m.outputLines} lines (${ageStr})`;
