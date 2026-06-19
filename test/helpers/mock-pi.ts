@@ -5,6 +5,8 @@ export interface MockPiOptions {
   respondToTaskPing?: boolean;
   /** Respond to `tasks:rpc:pending` with this count when the extension queries the backlog. */
   pendingTaskCount?: () => number;
+  /** Respond to `tasks:rpc:create` with this task id (treats pi-tasks as the task backend). */
+  respondToTaskCreate?: () => string;
   /** Swallow `monitor:done` emits (used to isolate the direct-callback path). */
   suppressMonitorDoneDispatch?: boolean;
 }
@@ -76,6 +78,16 @@ export function createMockPi(options: MockPiOptions = {}): MockPi {
           events.emit(`tasks:rpc:pending:reply:${payload.requestId}`, {
             success: true,
             data: { pending: options.pendingTaskCount?.() ?? 0 },
+          });
+        });
+        return;
+      }
+
+      if (name === "tasks:rpc:create" && payload?.requestId && options.respondToTaskCreate) {
+        queueMicrotask(() => {
+          events.emit(`tasks:rpc:create:reply:${payload.requestId}`, {
+            success: true,
+            data: { id: options.respondToTaskCreate?.() ?? "rpc-1" },
           });
         });
         return;

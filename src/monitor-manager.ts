@@ -58,7 +58,8 @@ export class MonitorManager {
   // finish() and stop() so every terminal status is pruned consistently — a
   // stopped monitor that is never pruned lingers in list() and the widget count.
   private schedulePrune(id: string): void {
-    setTimeout(() => {
+    // unref so a pending prune never keeps a one-shot (`pi -p`) process alive.
+    const timer = setTimeout(() => {
       this.applyReducerEvent({
         type: "MONITOR_PRUNED",
         at: Date.now(),
@@ -68,6 +69,7 @@ export class MonitorManager {
         payload: { id },
       });
     }, 30000);
+    timer.unref?.();
   }
 
   create(command: string, description?: string, timeout = 300000): MonitorEntry {

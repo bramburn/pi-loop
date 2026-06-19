@@ -61,7 +61,9 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   function ensureHeartbeat(): void {
     if (heartbeatTimer) return;
     heartbeatTimer = setInterval(() => {
-      void pumpLoops();
+      // Swallow pump failures so a transient error never surfaces as an
+      // unhandled rejection; the next tick retries.
+      void pumpLoops().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
   }

@@ -924,28 +924,33 @@ describe("dynamic loop pump", () => {
     const loopCreate = toolMap.get("LoopCreate");
     expect(loopCreate?.execute).toBeDefined();
 
+    // maxFires:1 makes "fires exactly once" structural (the scheduler deletes
+    // the loop after its single fire), so the no-double-fire assertion below is
+    // deterministic rather than dependent on recurring re-arm timing.
     await loopCreate!.execute?.("1", {
       trigger: "*/5 * * * *",
       prompt: "Dynamic idle fire",
       triggerType: "cron",
       recurring: true,
+      maxFires: 1,
     });
 
     // The heartbeat pumps while idle, so the loop fires once its time passes —
     // no turn boundary required.
-    await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
     expect(sentCustomMessages).toHaveLength(1);
     expect(sentCustomMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Dynamic idle fire");
 
-    // A subsequent turn boundary must not re-fire the already-fired (re-armed) loop.
+    // The loop reached its fire cap and was deleted; a later turn boundary
+    // (and further heartbeat ticks) must not deliver a second wake.
     for (const handler of extensionHandlers.get("agent_start") ?? []) {
       await handler(null, ctx);
     }
     for (const handler of extensionHandlers.get("agent_end") ?? []) {
       await handler(null, ctx);
     }
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
 
     expect(sentCustomMessages).toHaveLength(1);
   });

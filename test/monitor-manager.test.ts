@@ -114,6 +114,40 @@ describe("MonitorManager", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("unrefs the retention timer scheduled on stop (so pi -p can exit)", async () => {
+    const realSetTimeout = global.setTimeout;
+    const unref = vi.fn();
+    const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((fn: TimerHandler, ms?: number, ...args: any[]) => {
+      if (ms === 30000) return { unref } as any;
+      return realSetTimeout(fn, ms, ...args);
+    }) as typeof setTimeout);
+
+    const entry = manager.create("sleep 30", "stop unref test", 300000);
+    await manager.stop(entry.id);
+
+    expect(unref).toHaveBeenCalledTimes(1);
+    timeoutSpy.mockRestore();
+  });
+
+  it("unrefs the retention timer scheduled on completion (so pi -p can exit)", async () => {
+    const realSetTimeout = global.setTimeout;
+    const unref = vi.fn();
+    const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((fn: TimerHandler, ms?: number, ...args: any[]) => {
+      if (ms === 30000) return { unref } as any;
+      return realSetTimeout(fn, ms, ...args);
+    }) as typeof setTimeout);
+
+    const entry = manager.create("echo done", "finish unref test");
+    await new Promise<void>((resolve) => {
+      pi.events.on("monitor:done", (data: any) => {
+        if (data.monitorId === entry.id) resolve();
+      });
+    });
+
+    expect(unref).toHaveBeenCalledTimes(1);
+    timeoutSpy.mockRestore();
+  });
+
   it("emits monitor:error on non-zero exit", async () => {
     manager.create("exit 1", "error test");
 
