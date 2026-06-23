@@ -5,6 +5,10 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.test.ts"],
     exclude: ["node_modules", "dist"],
+    // CI runners are slower than local; 15s gives real-child-process
+    // tests (monitor stop, lifecycle) enough headroom.
+    testTimeout: 15000,
+    hookTimeout: 15000,
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "html", "json"],
