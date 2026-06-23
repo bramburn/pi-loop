@@ -1,5 +1,5 @@
 
-import { type ChildProcess, type SpawnOptions, spawn as nodeSpawn } from "node:child_process";
+import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type MonitorReducerEvent,

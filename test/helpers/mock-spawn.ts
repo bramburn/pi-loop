@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 
 export interface MockChildProcessOptions {
   exitCode?: number;
