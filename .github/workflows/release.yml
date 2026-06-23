@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "package.json"
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Version bump type (patch, minor, major)"
+        required: false
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+  schedule:
+    # Midnight UTC every Monday — publishes if version changed
+    - cron: "0 0 * * 1"
+
+jobs:
+  check-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm run test:coverage
+
+      - run: npm run build
+
+      - name: Detect version change
+        id: version
+        run: |
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
+          REGISTRY_VERSION=$(npm view @trevonistrevon/pi-loop version 2>/dev/null || echo "0.0.0")
+          echo "local=${PKG_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "registry=${REGISTRY_VERSION}" >> "${GITHUB_OUTPUT}"
+          if [ "${PKG_VERSION}" != "${REGISTRY_VERSION}" ]; then
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+            echo "Version ${PKG_VERSION} differs from registry ${REGISTRY_VERSION} — will publish"
+          else
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "Version ${PKG_VERSION} matches registry — skipping publish"
+          fi
+
+      - name: Bump version (manual dispatch)
+        if: github.event_name == 'workflow_dispatch' && steps.version.outputs.changed == 'false'
+        run: |
+          BUMP="${{ github.event.inputs.version_bump }}"
+          npm version "$BUMP" --no-git-tag-version
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "local=${PKG_VERSION}" >> "${GITHUB_OUTPUT}"
+        id: bump
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true' || steps.bump.outcome == 'success'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag release
+        if: steps.version.outputs.changed == 'true' || steps.bump.outcome == 'success'
+        run: |
+          TAG="v$(node -e "console.log(require('./package.json').version)")"
+          git tag "$TAG"
+          git push origin "$TAG"
