@@ -16,6 +16,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
+import { registerMonitorsCommand } from "./commands/monitors-command.js";
 import { registerTasksCommand } from "./commands/tasks-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { MonitorManager } from "./monitor-manager.js";
@@ -294,6 +295,14 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
+    updateWidget: () => {
+      widget.update();
+    },
+  });
+
+  registerMonitorsCommand({
+    pi,
+    getMonitorManager: () => monitorManager,
     updateWidget: () => {
       widget.update();
     },
