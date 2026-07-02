@@ -163,15 +163,7 @@ When `MonitorCreate` is called with `onDone`, it creates a one-shot loop via `ge
 
 **Severity: High**
 
-Native task tools (TaskCreate, TaskList, TaskUpdate, TaskDelete) are only registered when pi-tasks is **not** detected. The 6-second fallback timer means tasks are unavailable during that window, and if pi-tasks loads, native tasks are never registered.
-
-```typescript
-// index.ts
-const nativeTaskFallbackTimer = setTimeout(() => {
-  if (tasksAvailable || nativeTasksRegistered) return;
-  // Only registers if pi-tasks is absent
-  registerNativeTaskTools({ ... });
-}, 6000);
+**DEFERRED in @bramburn/pi-loop 1.0.1 — rationale**: changing the fallback to coexist with pi-tasks is an architectural decision. The current design uses the native task store as an exclusive fallback for when pi-tasks is absent. Making both task systems active simultaneously would require deduplication logic to prevent the same task from being tracked twice (once by pi-tasks, once by native), which is a non-trivial design choice that needs a separate proposal and user feedback. Defer to a focused follow-up PR.
 ```
 
 **Impact**: Users of native task fallback have a 6-second delay before tools appear, and cannot use native tasks alongside pi-tasks.
@@ -213,7 +205,7 @@ Non-recurring loops fire once and are deleted regardless of `maxFires`. Setting 
 
 ## G-13: Widget Monitor Count Not Interactive
 
-**Severity: Low**
+**DEFERRED in @bramburn/pi-loop 1.0.1 — rationale**: making the widget interactive requires the underlying pi TUI framework to support clickable status-bar items. The current `LoopWidget.setStatus` API is a one-way text render with no callback mechanism. A proper implementation needs TUI framework support that doesn't exist in the current `ExtensionUIContext` shape. Defer to a focused follow-up PR that addresses the TUI abstraction first.**Severity: Low**
 
 Widget shows `Monitors: 2 >` but is not clickable. No way to open MonitorList from the widget.
 
