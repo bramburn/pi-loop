@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
 
   const getScopeOptions = () => ({ piLoopEnv, loopScope });
 
-  let store = new LoopStore(resolveLoopStorePath(getScopeOptions()));
+  let store = new LoopStore(resolveLoopStorePath(getScopeOptions()), (id) => triggerSystem.remove(id));
   const monitorManager = new MonitorManager(pi);
   let scheduler: CronScheduler;
   let triggerSystem: TriggerSystem;
@@ -221,7 +221,7 @@ export default function (pi: ExtensionAPI) {
     getPiLoopEnv: () => piLoopEnv,
     recreateSessionStore: (sessionId: string) => {
       const path = resolveLoopStorePath(getScopeOptions(), sessionId);
-      store = new LoopStore(path);
+      store = new LoopStore(path, (id) => triggerSystem.remove(id));
       widget.setStore(store);
       scheduler = new CronScheduler(store, onLoopFire);
       triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);

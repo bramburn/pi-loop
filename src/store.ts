@@ -8,7 +8,15 @@ const LOOPS_DIR = join(homedir(), ".pi", "loops");
 const MAX_LOOPS = 25;
 
 export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, LoopReducerEvent, LoopStoreData> {
-  constructor(listIdOrPath?: string) {
+  /**
+   * Optional callback invoked after a loop is removed from the store
+   * (LOOP_EXPIRED, LOOP_DELETED, LOOP_MAX_FIRES_REACHED, LOOP_BACKLOG_EMPTY).
+   * Used to clean up trigger subscriptions so cron timers and event
+   * subscriptions don't accumulate across loop lifecycle events. See G-06/G-07.
+   */
+  onLoopRemoved?: (id: string) => void;
+
+  constructor(listIdOrPath?: string, onLoopRemoved?: (id: string) => void) {
     super(
       {
         baseDir: LOOPS_DIR,
@@ -20,6 +28,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       },
       listIdOrPath,
     );
+    this.onLoopRemoved = onLoopRemoved;
   }
 
   create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number }): LoopEntry {
@@ -135,7 +144,8 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
   }
 
   clearExpired(): number {
-    return this.withLock(() => {
+    const expiredIds: string[] = [];
+    const count = this.withLock(() => {
       const now = Date.now();
       let count = 0;
       for (const [id, entry] of [...this.entries.entries()]) {
@@ -148,14 +158,20 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           entityId: id,
           payload: { id, reason: "expires_at" },
         });
+        expiredIds.push(id);
         count++;
       }
       return count;
     });
+    // Trigger cleanup runs OUTSIDE the lock to avoid deadlocks if
+    // onLoopRemoved touches trigger state. Closes G-07.
+    for (const id of expiredIds) this.onLoopRemoved?.(id);
+    return count;
   }
 
   expireEventLoops(sessionStartedAt: number): number {
-    return this.withLock(() => {
+    const expiredIds: string[] = [];
+    const count = this.withLock(() => {
       let count = 0;
       for (const [id, entry] of [...this.entries.entries()]) {
         if (entry.status !== "active") continue;
@@ -169,14 +185,19 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           entityId: id,
           payload: { id, reason: "resume_event_stale" },
         });
+        expiredIds.push(id);
         count++;
       }
       return count;
     });
+    // Closes G-06.
+    for (const id of expiredIds) this.onLoopRemoved?.(id);
+    return count;
   }
 
   clearAll(): number {
-    return this.withLock(() => {
+    const removedIds: string[] = [];
+    const count = this.withLock(() => {
       const ids = [...this.entries.keys()];
       for (const id of ids) {
         this.applyReducerEvent({
@@ -187,8 +208,11 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           entityId: id,
           payload: { id },
         });
+        removedIds.push(id);
       }
       return ids.length;
     });
+    for (const id of removedIds) this.onLoopRemoved?.(id);
+    return count;
   }
 }
