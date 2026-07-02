@@ -263,6 +263,26 @@ describe("LoopStore (file-backed)", () => {
     const store2 = new LoopStore(testListId);
     expect(store2.list()).toHaveLength(0);
   });
+
+  it("renames a corrupt file to .corrupt.<ts> for recovery (G-25)", () => {
+    try {
+      // Write garbage to the backing file to simulate corruption.
+      writeFileSync(filePath, "not valid json {{{");
+      // Open a new store; load() should detect the corruption and rename.
+      const s = new LoopStore(testListId);
+      expect(s.list()).toEqual([]);
+
+      // The corrupt file should now exist as .corrupt.<ts> in the same dir.
+      const { readdirSync } = require("node:fs") as typeof import("node:fs");
+      const files = readdirSync(loopsDir);
+      const corruptFile = files.find((f) => f.startsWith(`${testListId}.json.corrupt.`));
+      expect(corruptFile).toBeDefined();
+      if (corruptFile) rmSync(join(loopsDir, corruptFile), { force: true });
+    } finally {
+      // Ensure the bad file is gone so afterEach doesn't trip over it
+      rmSync(filePath, { force: true });
+    }
+  });
 });
 
 describe("LoopStore (absolute path)", () => {

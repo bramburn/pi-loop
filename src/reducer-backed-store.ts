@@ -20,6 +20,9 @@ function acquireLock(lockPath: string): void {
             continue;
           }
         } catch { /* ignore read errors */ }
+        // TODO(G-14, G-24): replace with async setTimeout-based wait.
+        // The withLock surface is sync; making it async requires updating
+        // 7+ callers in TaskStore/LoopStore. Defer to a future PR.
         const start = Date.now();
         while (Date.now() - start < LOCK_RETRY_MS) { /* busy wait */ }
         continue;
@@ -108,7 +111,15 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
       this.nextId = nextId;
       this.entries = entries;
       this.lastLoadedSignature = signature;
-    } catch { /* corrupt file — start fresh */ }
+    } catch {
+      // Corrupt file — preserve it for forensic recovery and start fresh.
+      // Closes G-25.
+      if (this.filePath) {
+        try {
+          renameSync(this.filePath, `${this.filePath}.corrupt.${Date.now()}`);
+        } catch { /* ignore rename failure */ }
+      }
+    }
   }
 
   private save(): void {
