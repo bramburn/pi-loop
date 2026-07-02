@@ -1,12 +1,12 @@
 {
-  "name": "@trevonistrevon/pi-loop",
+  "name": "@bramburn/pi-loop",
   "version": "0.5.8",
   "description": "A pi extension for cron/event-based agent re-wake loops and background process monitoring.",
-  "author": "trevonistrevon",
+  "author": "bramburn",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/trvon/pi-loop.git"
+    "url": "https://github.com/bramburn/pi-loop.git"
   },
   "keywords": [
     "pi-package",

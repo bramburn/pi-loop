@@ -8,7 +8,7 @@
 - `typebox` for tool parameter validation
 - `vitest` for tests
 - `biome` for linting (linter: on, formatter: off)
-- npm packaging as `@trevonistrevon/pi-loop`
+- npm packaging as `@bramburn/pi-loop`
 
 ## Architecture
 ```

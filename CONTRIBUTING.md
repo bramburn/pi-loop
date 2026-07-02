@@ -1,11 +1,11 @@
-# Contributing to @trevonistrevon/pi-loop
+# Contributing to @bramburn/pi-loop
 
 Thanks for contributing! This document covers local dev setup, conventions, and workflow.
 
 ## Getting Started
 
 ```bash
-git clone https://github.com/trvon/pi-loop.git
+git clone https://github.com/bramburn/pi-loop.git
 cd pi-loop
 npm install
 ```
