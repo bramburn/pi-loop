@@ -10,6 +10,42 @@ import type { MonitorEntry, MonitorProcess } from "./types.js";
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
+/**
+ * Cross-platform shell invocation. On Unix we use `/bin/sh -c`, on Windows
+ * `cmd.exe /d /s /c`. The `/d` and `/s` flags are required for `cmd.exe` to
+ * handle the command string correctly (spaces, special chars, AutoRun).
+ */
+export function getShellInvocation(command: string): { cmd: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { cmd: "cmd.exe", args: ["/d", "/s", "/c", command] };
+  }
+  return { cmd: "/bin/sh", args: ["-c", command] };
+}
+
+/**
+ * Cross-platform process termination. On Unix we send real POSIX signals;
+ * SIGTERM gives the process a chance to clean up, SIGKILL is the final
+ * fallback. On Windows `child.kill("SIGTERM")` is a no-op for most processes,
+ * so we shell out to `taskkill`: the bare form sends WM_CLOSE (graceful),
+ * `/F /T` force-kills the process and any children.
+ */
+export async function terminateProcess(proc: ChildProcess, mode: "graceful" | "force"): Promise<void> {
+  if (process.platform === "win32") {
+    const pid = proc.pid;
+    if (!pid) return;
+    const { exec } = await import("node:child_process");
+    const flags = mode === "force" ? "/F /T" : "/T";
+    return new Promise<void>((resolve) => {
+      exec(`taskkill /PID ${pid} ${flags}`, () => resolve());
+    });
+  }
+  try {
+    proc.kill(mode === "force" ? "SIGKILL" : "SIGTERM");
+  } catch {
+    /* already dead */
+  }
+}
+
 export class MonitorManager {
   private processes = new Map<string, MonitorProcess>();
   private nextId = 1;
@@ -98,7 +134,8 @@ export class MonitorManager {
     const entry = result.state.monitorsById[id]!;
 
     const abortController = new AbortController();
-    const child = this.spawnFn("sh", ["-c", command], {
+    const { cmd: shellCmd, args: shellArgs } = getShellInvocation(command);
+    const child = this.spawnFn(shellCmd, shellArgs, {
       stdio: ["ignore", "pipe", "pipe"],
       signal: abortController.signal,
       env: { ...process.env },
@@ -247,12 +284,11 @@ export class MonitorManager {
       },
     });
     this.schedulePrune(id);
-    bp.proc.kill("SIGTERM");
+    void terminateProcess(bp.proc, "graceful");
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        try { bp.proc.kill("SIGKILL"); } catch { /* already dead */ }
-        resolve();
+        void terminateProcess(bp.proc, "force").finally(() => resolve());
       }, 5000);
 
       bp.proc.on("close", () => {
