@@ -17,7 +17,7 @@ function makeMonitor(overrides: Partial<MonitorEntry> = {}): MonitorEntry {
   };
 }
 
-function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id: string) => Promise<boolean> }> = {}) {
+function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id: string) => Promise<boolean>; delete: (id: string) => Promise<boolean> }> = {}) {
   const { pi, toolMap } = createMockPi();
   const store = new LoopStore();
   let nextId = 1;
@@ -25,6 +25,7 @@ function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id
     list: managerOverrides.list ?? (() => []),
     create: vi.fn((command: string) => makeMonitor({ id: String(nextId++), command })),
     stop: managerOverrides.stop ?? vi.fn(async () => true),
+    delete: managerOverrides.delete ?? vi.fn(async () => true),
   };
   const handleMonitorDoneLoop = vi.fn();
   registerMonitorTools({
@@ -101,5 +102,18 @@ describe("MonitorStop", () => {
   it("reports when the monitor is not found or not running", async () => {
     const h = setup({ stop: vi.fn(async () => false) });
     expect(await h.text("MonitorStop", { monitorId: "9" })).toContain("not found or not running");
+  });
+});
+
+describe("MonitorDelete", () => {
+  it("removes a monitor immediately", async () => {
+    const h = setup({ delete: vi.fn(async () => true) });
+    expect(await h.text("MonitorDelete", { monitorId: "1" })).toBe("Monitor #1 deleted");
+    expect(h.manager.delete).toHaveBeenCalledWith("1");
+  });
+
+  it("reports when the monitor is not found", async () => {
+    const h = setup({ delete: vi.fn(async () => false) });
+    expect(await h.text("MonitorDelete", { monitorId: "9" })).toBe("Monitor #9 not found");
   });
 });

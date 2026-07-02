@@ -6,6 +6,7 @@ interface MonitorManagerLike {
   list(): MonitorEntry[];
   create(command: string, description?: string, timeout?: number): MonitorEntry;
   stop(id: string): Promise<boolean>;
+  delete(id: string): Promise<boolean>;
 }
 
 interface LoopStoreLike {
@@ -149,6 +150,25 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
       updateWidget();
       if (stopped) return textResult(`Monitor #${params.monitorId} stopped`);
       return textResult(`Monitor #${params.monitorId} not found or not running`);
+    },
+  });
+
+  pi.registerTool({
+    name: "MonitorDelete",
+    label: "MonitorDelete",
+    description: `Remove a monitor from the list immediately, regardless of status.
+
+Unlike MonitorStop (which only stops running monitors and waits 30s for auto-prune),
+MonitorDelete immediately removes a completed/errored/stopped monitor from MonitorList
+output. If the monitor is still running, it is stopped first, then removed.`,
+    parameters: Type.Object({
+      monitorId: Type.String({ description: "Monitor ID to delete" }),
+    }),
+    async execute(_toolCallId, params) {
+      const deleted = await getMonitorManager().delete(params.monitorId);
+      updateWidget();
+      if (deleted) return textResult(`Monitor #${params.monitorId} deleted`);
+      return textResult(`Monitor #${params.monitorId} not found`);
     },
   });
 }

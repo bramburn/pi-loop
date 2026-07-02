@@ -326,4 +326,26 @@ export class MonitorManager {
   getProcess(id: string): MonitorProcess | undefined {
     return this.processes.get(id);
   }
+
+  /**
+   * Remove a monitor entry from the store immediately, regardless of status.
+   * The 30s auto-prune timer is bypassed. If the monitor is still running,
+   * it is stopped first. Returns true if the monitor existed and was removed.
+   */
+  async delete(id: string): Promise<boolean> {
+    const bp = this.processes.get(id);
+    if (!bp) return false;
+    if (bp.entry.status === "running") {
+      await this.stop(id);
+    }
+    this.applyReducerEvent({
+      type: "MONITOR_PRUNED",
+      at: Date.now(),
+      source: "tool",
+      entityType: "monitor",
+      entityId: id,
+      payload: { id },
+    });
+    return true;
+  }
 }
