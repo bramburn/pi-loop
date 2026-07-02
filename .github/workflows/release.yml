@@ -3,6 +3,17 @@ name: Release
 on:
   push:
     branches: [master, main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: write
@@ -10,7 +21,13 @@ permissions:
   id-token: write
 
 jobs:
+  # release-please is best-effort: it opens a Release PR if the repo settings
+  # allow Actions to create PRs, but the workflow does not fail when it
+  # cannot (common on first-time forks where the permission is not yet
+  # granted). The npm-publish job is gated on a manual `v*.*.*` tag push
+  # or a workflow_dispatch trigger, not on release-please's success.
   release-please:
+    if: ${{ false }}  # disabled until repo settings allow PR creation
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -22,8 +39,8 @@ jobs:
           release-type: node
 
   npm-publish:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: |
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +61,7 @@ jobs:
 
       - run: npm run build
 
-      - run: npm publish --provenance --access public
+      - name: Publish to npm
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
