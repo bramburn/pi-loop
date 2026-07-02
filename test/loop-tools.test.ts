@@ -193,3 +193,20 @@ describe("LoopUpdate", () => {
     expect(out).toContain("No changes provided");
   });
 });
+
+describe("LoopList filter (G-20)", () => {
+  it("hides internal monitor:done one-shot loops", async () => {
+    const h = setup();
+    // User-configured loop
+    await h.text("LoopCreate", { trigger: "5m", prompt: "user loop", triggerType: "cron" });
+    // Internal one-shot monitor:done loop
+    h.store.create(
+      { type: "event", source: "monitor:done" },
+      "internal wake",
+      { recurring: false },
+    );
+    const out = await h.text("LoopList", {});
+    expect(out).toContain("#1");
+    expect(out).not.toContain("internal wake");
+  });
+});

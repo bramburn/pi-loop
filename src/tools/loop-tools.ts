@@ -90,6 +90,13 @@ function formatRemaining(ms: number): string {
   return `${Math.round(ms / 3600000)}h`;
 }
 
+function isUserVisibleLoop(loop: LoopEntry): boolean {
+  // Hide the internal monitor:done completion loops. They are stored for
+  // delivery via MonitorOnDoneRuntime but not user-configured.
+  if (loop.recurring) return true;
+  return !(loop.trigger.type === "event" && loop.trigger.source === "monitor:done");
+}
+
 export function registerLoopTools(options: LoopToolsOptions): void {
   const {
     pi,
@@ -251,7 +258,11 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 Use this before creating new loops to avoid duplicates, or to find IDs for LoopDelete.`,
     parameters: Type.Object({}),
     execute() {
-      const loops = getStore().list();
+      // Closes G-20: filter out internal `monitor:done` one-shot loops so
+      // they don't pollute the user's loop list. They are still in the
+      // store and can be deleted via LoopDelete if needed, but LoopList
+      // only shows loops the user actually configured.
+      const loops = getStore().list().filter(isUserVisibleLoop);
       if (loops.length === 0) return Promise.resolve(textResult("No loops configured. Use LoopCreate to set up a schedule."));
 
       const lines: string[] = [];

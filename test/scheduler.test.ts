@@ -15,6 +15,8 @@ describe("CronScheduler", () => {
     store = new LoopStore();
     fired = [];
     scheduler = new CronScheduler(store, (entry) => {
+      // Mimic the real onLoopFire: increment fireCount and emit.
+      store.fire(entry.id);
       fired.push(entry.id);
     });
   });
@@ -31,6 +33,44 @@ describe("CronScheduler", () => {
     vi.advanceTimersByTime(6 * 60 * 1000);
     scheduler.pump(Date.now());
     expect(fired).toContain("1");
+  });
+
+  it("does not fire past the maxFires cap (G-17)", () => {
+    const entry = store.create(cronTrigger, "capped", { recurring: true, maxFires: 1 });
+    scheduler.add(entry);
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    expect(fired.filter((id) => id === "1")).toHaveLength(1);
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    // The 2nd pump must NOT fire — the cap was reached and the entry deleted.
+    expect(fired.filter((id) => id === "1")).toHaveLength(1);
+    expect(store.get("1")).toBeUndefined();
+  });
+
+  it("enforces maxFires on non-recurring loops (G-11)", () => {
+    // A non-recurring loop with maxFires: 1 fires once, then is deleted.
+    // (The cap is now applied symmetrically for both recurring and
+    // non-recurring loops.)
+    const entry = store.create(cronTrigger, "capped one-shot", { recurring: false, maxFires: 1 });
+    scheduler.add(entry);
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    expect(fired).toContain("1");
+    expect(store.get("1")).toBeUndefined();
+  });
+
+  it("does not fire past the maxFires cap (G-17)", () => {
+    const entry = store.create(cronTrigger, "capped", { recurring: true, maxFires: 1 });
+    scheduler.add(entry);
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    expect(fired.filter((id) => id === "1")).toHaveLength(1);
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    // The 2nd pump must NOT fire — the cap was reached and the entry deleted.
+    expect(fired.filter((id) => id === "1")).toHaveLength(1);
+    expect(store.get("1")).toBeUndefined();
   });
 
   it("does not fire paused loops", () => {

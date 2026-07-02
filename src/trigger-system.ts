@@ -52,6 +52,17 @@ export class TriggerSystem {
     this.lastFireTime.delete(id);
   }
 
+  /**
+   * Returns true if the loop was fired (by either the cron or the event
+   * path) within the past `windowMs`. Used by the scheduler's pump to
+   * skip cron fires that would double up with a recent event-driven
+   * fire. Closes G-08.
+   */
+  wasRecentlyFired(id: string, windowMs: number): boolean {
+    const last = this.lastFireTime.get(id);
+    return last !== undefined && Date.now() - last < windowMs;
+  }
+
   private subscribeEvent(entry: LoopEntry, source: string, filter?: string): void {
     if (!this.eventSubscriptions.has(source)) {
       this.eventSubscriptions.set(source, new Map());
@@ -102,6 +113,15 @@ export class TriggerSystem {
       return;
     }
 
+    // Closes G-17: skip the fire if maxFires cap is already reached. Without
+    // this, the Nth call where fireCount === maxFires would still call
+    // onFire() (off-by-one) before the atMaxFires check ran.
+    if (atMaxFires(current)) {
+      this.remove(current.id);
+      this.store.delete(current.id);
+      return;
+    }
+
     this.lastFireTime.set(current.id, Date.now());
     this.onFire(current);
 
@@ -111,7 +131,7 @@ export class TriggerSystem {
       return;
     }
 
-    if (fresh.recurring && atMaxFires(fresh)) {
+    if (atMaxFires(fresh)) {
       this.remove(fresh.id);
       this.store.delete(fresh.id);
       return;
