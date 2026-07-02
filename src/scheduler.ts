@@ -81,6 +81,16 @@ export class CronScheduler {
         continue;
       }
 
+      // Closes G-17: skip the fire entirely if we've already hit the cap.
+      // The last allowed fire (fireCount === maxFires) was already issued
+      // on the previous tick. This prevents an off-by-one where the cap
+      // is reached but one extra fire is delivered.
+      if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
+        this.store.delete(id);
+        this.fireTimes.delete(id);
+        continue;
+      }
+
       this.onFire(entry);
 
       const fresh = this.store.get(id);
@@ -89,7 +99,10 @@ export class CronScheduler {
         continue;
       }
 
-      if (fresh.recurring && fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+      // Closes G-11: maxFires is now applied to non-recurring loops too.
+      // (Previously the recurring-only check meant a one-shot loop with
+      // maxFires would still fire once, ignoring the cap.)
+      if (fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
         this.store.delete(id);
         this.fireTimes.delete(id);
         continue;
@@ -103,3 +116,4 @@ export class CronScheduler {
     }
   }
 }
+

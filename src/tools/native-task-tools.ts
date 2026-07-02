@@ -49,7 +49,10 @@ Fields:
     async execute(_toolCallId, params) {
       const subject = params.subject.slice(0, 80);
       const entry = taskStore.create(subject, params.description);
-      emitNativeTaskEvent(pi, "tasks:created", entry);
+      emitNativeTaskEvent(pi, "tasks:created", entry, undefined, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: false,
+      });
       const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
       updateWidget();
 
@@ -111,19 +114,31 @@ Parameters: id (required), status, subject, description`,
       const previousStatus = entry.status;
       if (status === "in_progress") {
         entry = taskStore.start(id);
-        if (entry) emitNativeTaskEvent(pi, "tasks:started", entry, previousStatus);
+        if (entry) emitNativeTaskEvent(pi, "tasks:started", entry, previousStatus, {
+          suppressIfPiTasks: true,
+          piTasksAvailable: false,
+        });
       } else if (status === "completed") {
         entry = taskStore.complete(id);
-        if (entry) emitNativeTaskEvent(pi, "tasks:completed", entry, previousStatus);
+        if (entry) emitNativeTaskEvent(pi, "tasks:completed", entry, previousStatus, {
+          suppressIfPiTasks: true,
+          piTasksAvailable: false,
+        });
       } else if (status === "pending") {
         entry = taskStore.reopen(id);
-        if (entry) emitNativeTaskEvent(pi, "tasks:reopened", entry, previousStatus);
+        if (entry) emitNativeTaskEvent(pi, "tasks:reopened", entry, previousStatus, {
+          suppressIfPiTasks: true,
+          piTasksAvailable: false,
+        });
       }
 
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
       if (subject !== undefined || description !== undefined) {
         entry = taskStore.updateDetails(id, { subject, description });
-        if (entry) emitNativeTaskEvent(pi, "tasks:updated", entry, previousStatus);
+        if (entry) emitNativeTaskEvent(pi, "tasks:updated", entry, previousStatus, {
+          suppressIfPiTasks: true,
+          piTasksAvailable: false,
+        });
       }
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
       updateWidget();
@@ -148,7 +163,10 @@ Parameters: id (required), status, subject, description`,
       const deleted = taskStore.delete(params.id);
       updateWidget();
       if (deleted) {
-        if (existing) emitNativeTaskEvent(pi, "tasks:deleted", existing, existing.status);
+        if (existing) emitNativeTaskEvent(pi, "tasks:deleted", existing, existing.status, {
+          suppressIfPiTasks: true,
+          piTasksAvailable: false,
+        });
         await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
         return Promise.resolve(textResult(`Task #${params.id} deleted`));
       }

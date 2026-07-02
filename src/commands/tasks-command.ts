@@ -19,7 +19,15 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
   const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget } = options;
 
   async function emitCreated(entry: TaskEntry) {
-    emitNativeTaskEvent(pi, "tasks:created", entry);
+    // Closes G-19: when pi-tasks is active, the native tools are not
+    // registered, so this code path is unreachable in practice. The
+    // suppressIfPiTasks option is defensive — if a future change makes
+    // these tools reachable while pi-tasks is active, events are
+    // suppressed automatically.
+    emitNativeTaskEvent(pi, "tasks:created", entry, undefined, {
+      suppressIfPiTasks: true,
+      piTasksAvailable: !getNativeTaskStore(),
+    });
     const taskStore = getNativeTaskStore();
     if (!taskStore) return { created: false } satisfies TaskBacklogResult;
     const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
@@ -90,19 +98,31 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
 
     if (action === "x Delete") {
       taskStore.delete(task.id);
-      emitNativeTaskEvent(pi, "tasks:deleted", task, task.status);
+      emitNativeTaskEvent(pi, "tasks:deleted", task, task.status, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: !getNativeTaskStore(),
+      });
       ui.notify(`Task #${task.id} deleted`, "info");
     } else if (action === "> Start") {
       const next = taskStore.start(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status);
+      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: !getNativeTaskStore(),
+      });
       ui.notify(`Task #${task.id} started`, "info");
     } else if (action === "ok Complete") {
       const next = taskStore.complete(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status);
+      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: !getNativeTaskStore(),
+      });
       ui.notify(`Task #${task.id} completed`, "info");
     } else if (action === "* Return to pending" || action === "* Reopen") {
       const next = taskStore.reopen(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status);
+      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: !getNativeTaskStore(),
+      });
       ui.notify(`Task #${task.id} reopened`, "info");
     }
 

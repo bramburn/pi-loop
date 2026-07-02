@@ -18,8 +18,8 @@ export interface SessionRuntimeOptions {
   recreateSessionStore: (sessionId: string) => void;
   clearAllLoops: () => void;
   getStore: () => LoopStore;
-  getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string }) => boolean): void };
-  getTriggerSystem: () => { start(): void; stop(): void };
+  getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string; trigger?: { type: string; debounceMs?: number } }) => boolean): void };
+  getTriggerSystem: () => { start(): void; stop(): void; wasRecentlyFired(id: string, windowMs: number): boolean };
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
@@ -107,7 +107,16 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       const pending = await hasPendingTasks();
       if (pending <= 0) pendingTasks.set(entry.id, true);
     }
-    getScheduler().pump(Date.now(), (entry) => !pendingTasks.has(entry.id));
+    getScheduler().pump(Date.now(), (entry) => {
+      if (pendingTasks.has(entry.id)) return false;
+      // Closes G-08: skip hybrid cron fires within the debounce window
+      // of a recent event-driven fire.
+      const trigger = entry.trigger;
+      if (trigger && trigger.type === "hybrid" && trigger.debounceMs !== undefined) {
+        return !getTriggerSystem().wasRecentlyFired(entry.id, trigger.debounceMs);
+      }
+      return true;
+    });
   }
 
   pi.on("turn_start", async (_event, ctx) => {
