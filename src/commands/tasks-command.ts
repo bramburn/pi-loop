@@ -129,7 +129,14 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         }
         return;
       }
-      await viewNativeTasks(ctx.ui);
+      // Top-level menu: matches /loop's interactive UX.
+      const choice = await ctx.ui.select("Tasks", [
+        "Create task",
+        "View tasks",
+      ]);
+      if (!choice) return;
+      if (choice.startsWith("Create")) return createNativeTaskInteractively(ctx.ui);
+      if (choice.startsWith("View")) return viewNativeTasks(ctx.ui);
     },
   });
 }

@@ -43,11 +43,12 @@ Fields:
       "TaskCreate accepts `subject` and `description` parameters only — do not invent extra fields unless the schema explicitly adds them.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "Brief actionable title for the task" }),
+      subject: Type.String({ description: "Brief actionable title for the task (max 80 chars)", maxLength: 80 }),
       description: Type.String({ description: "Detailed description of what needs to be done" }),
     }),
     async execute(_toolCallId, params) {
-      const entry = taskStore.create(params.subject, params.description);
+      const subject = params.subject.slice(0, 80);
+      const entry = taskStore.create(subject, params.description);
       emitNativeTaskEvent(pi, "tasks:created", entry);
       const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
       updateWidget();

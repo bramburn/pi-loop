@@ -8,13 +8,27 @@ export interface CronTrigger {
 export interface EventTrigger {
   type: "event";
   source: string;
+  /**
+   * Optional filter for matching event payloads.
+   * Two formats:
+   *  - "regex:pattern" — tests JSON.stringify(data) against the regex
+   *  - JSON object string — compares top-level keys to expected values
+   *    e.g., '{"monitorId":"abc123"}' matches events where data.monitorId === "abc123"
+   */
   filter?: string;
 }
 
 export interface HybridTrigger {
   type: "hybrid";
   cron: string;
-  event: { source: string; filter?: string };
+  event: {
+    source: string;
+    /**
+     * Optional filter for the event portion. See EventTrigger.filter for
+     * accepted formats ("regex:..." or JSON object string).
+     */
+    filter?: string;
+  };
   debounceMs: number;
 }
 

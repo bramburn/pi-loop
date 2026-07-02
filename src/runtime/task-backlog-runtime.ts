@@ -10,7 +10,14 @@ import {
 import type { TaskStore } from "../task-store.js";
 import type { LoopEntry, Trigger } from "../types.js";
 
-export const AUTO_TASK_WORKER_THRESHOLD = 5;
+export const AUTO_TASK_WORKER_THRESHOLD = (() => {
+  const envVal = process.env.PI_LOOP_TASK_THRESHOLD;
+  if (envVal) {
+    const n = parseInt(envVal, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 5;
+})();
 export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, complete it. If no pending tasks remain, call LoopDelete on your own loop ID.";
 
 export interface TaskBacklogRuntimeOptions {
