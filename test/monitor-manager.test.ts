@@ -298,4 +298,30 @@ describe("MonitorManager", () => {
     expect(manager.get(entry.id)!.status).toBe("stopped");
     vi.useRealTimers();
   });
+
+  it("uses platform-appropriate shell for spawn", () => {
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const capturingManager = new MonitorManager(pi, (cmd, args) => {
+      calls.push({ cmd, args });
+      const { spawn } = require("node:child_process");
+      return spawn("echo", ["stub"]);
+    });
+    capturingManager.create("echo cross-platform", "shell test");
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    if (process.platform === "win32") {
+      expect(call.cmd).toBe("cmd.exe");
+      expect(call.args).toEqual(["/d", "/s", "/c", "echo cross-platform"]);
+    } else {
+      expect(call.cmd).toBe("/bin/sh");
+      expect(call.args).toEqual(["-c", "echo cross-platform"]);
+    }
+  });
+
+  it("terminateProcess path runs without throwing on already-dead processes", async () => {
+    const { terminateProcess } = await import("../src/monitor-manager.js");
+    const fakeProc = { pid: 99999, kill: vi.fn(() => { throw new Error("ESRCH"); }) };
+    await expect(terminateProcess(fakeProc as any, "graceful")).resolves.not.toThrow();
+    await expect(terminateProcess(fakeProc as any, "force")).resolves.not.toThrow();
+  });
 });
