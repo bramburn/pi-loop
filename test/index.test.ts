@@ -1572,12 +1572,7 @@ describe("monitor tool wrappers", () => {
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("Monitor failed in idle session");
   }, 10000);
 
-  it.skipIf(process.platform === "win32")("does not deliver monitor completion wake if the completion loop is deleted", async () => {
-    // Skipped on Windows: this test uses `sleep 10` as the monitor command
-    // to give the test time to delete the loop. The 10s real child process
-    // holds the temp dir file handle past our retry budget, causing EBUSY
-    // in the rmSync cleanup. The test logic is correct on Linux/macOS.
-    // Fixed in PR 7 (G-23).
+  it("does not deliver monitor completion wake if the completion loop is deleted", async () => {
     const { pi, toolMap, extensionHandlers, sentMessages: sentCustomMessages } = createMockPi();
 
     extension(pi as any);
@@ -1599,8 +1594,12 @@ describe("monitor tool wrappers", () => {
     const monitorCreate = toolMap.get("MonitorCreate");
     const loopDelete = toolMap.get("LoopDelete");
 
+    // Use a short sleep so the child process exits quickly on all platforms.
+    // 200ms is enough for the test to delete the loop on the same thread
+    // before the sleep finishes. (The original `sleep 10` worked on Unix
+    // but held the temp dir file handle past Windows' retry budget.)
     const result = await monitorCreate!.execute?.("1", {
-      command: "sleep 10 && echo done",
+      command: "node -e \"setTimeout(()=>{},200)\" || sleep 0.2",
       onDone: "Never delivered",
     });
     expect(result.content[0].text).toContain("Completion wake loop #1");
@@ -1608,9 +1607,9 @@ describe("monitor tool wrappers", () => {
     // Delete the one-shot completion loop before it fires
     await loopDelete!.execute?.("2", { id: "1", action: "delete" });
 
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 500));
     expect(sentCustomMessages).toHaveLength(0);
-  }, 10000);
+  }, 15000);
 
   it("monitor create list stop lifecycle reflects state changes", async () => {
     const { pi, toolMap } = createMockPi();
