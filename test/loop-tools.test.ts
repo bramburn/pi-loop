@@ -121,4 +121,75 @@ describe("LoopDelete", () => {
   it("reports not found for an unknown id", async () => {
     expect(await h.text("LoopDelete", { id: "99", action: "delete" })).toBe("Loop #99 not found");
   });
+
+  it("resumes a paused loop and re-arms the trigger", async () => {
+    await h.text("LoopDelete", { id: "1", action: "pause" });
+    (h.triggerSystem.add as any).mockClear();
+    const out = await h.text("LoopDelete", { id: "1", action: "resume" });
+    expect(out).toBe("Loop #1 resumed");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+  });
+
+  it("resuming an already-active loop is a no-op (does not re-add trigger)", async () => {
+    (h.triggerSystem.add as any).mockClear();
+    const out = await h.text("LoopDelete", { id: "1", action: "resume" });
+    expect(out).toBe("Loop #1 resumed");
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+  });
+});
+
+describe("LoopUpdate", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(async () => {
+    h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
+  });
+
+  it("updates only the prompt and keeps the trigger intact", async () => {
+    (h.triggerSystem.remove as any).mockClear();
+    (h.triggerSystem.add as any).mockClear();
+    const out = await h.text("LoopUpdate", { id: "1", prompt: "new prompt" });
+    expect(out).toContain("Loop #1 updated: prompt");
+    expect(h.store.get("1")?.prompt).toBe("new prompt");
+    expect(h.store.get("1")?.trigger.type).toBe("cron");
+    // Trigger was re-registered with the same value.
+    expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+  });
+
+  it("changes the trigger and re-subscribes", async () => {
+    const out = await h.text("LoopUpdate", { id: "1", trigger: "10m" });
+    expect(out).toContain("Loop #1 updated: trigger");
+    expect(h.store.get("1")?.trigger).toEqual({ type: "cron", schedule: "*/10 * * * *" });
+  });
+
+  it("switches a loop from cron to event trigger", async () => {
+    const out = await h.text("LoopUpdate", { id: "1", trigger: "tool_execution_end" });
+    expect(out).toContain("Loop #1 updated: trigger");
+    expect(h.store.get("1")?.trigger).toEqual({ type: "event", source: "tool_execution_end" });
+  });
+
+  it("updates maxFires and reports the change", async () => {
+    const out = await h.text("LoopUpdate", { id: "1", maxFires: 10 });
+    expect(out).toContain("Loop #1 updated: maxFires");
+    expect(h.store.get("1")?.maxFires).toBe(10);
+  });
+
+  it("returns not-found for an unknown id", async () => {
+    const out = await h.text("LoopUpdate", { id: "99", prompt: "x" });
+    expect(out).toBe("Loop #99 not found");
+  });
+
+  it("rejects an invalid new trigger", async () => {
+    const out = await h.text("LoopUpdate", { id: "1", trigger: "" });
+    expect(out).toContain("Invalid event trigger");
+    // Trigger unchanged.
+    expect(h.store.get("1")?.trigger.type).toBe("cron");
+  });
+
+  it("reports no change when called with no fields", async () => {
+    const out = await h.text("LoopUpdate", { id: "1" });
+    expect(out).toContain("No changes provided");
+  });
 });

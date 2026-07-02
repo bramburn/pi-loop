@@ -14,7 +14,12 @@ interface LoopStoreLike {
     maxFires?: number;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
+  resume(id: string): LoopEntry | undefined;
   delete(id: string): boolean;
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string }): {
+    entry: LoopEntry | undefined;
+    changedFields: string[];
+  };
 }
 
 interface TriggerSystemLike {
@@ -281,8 +286,12 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
 
 Use "pause" to temporarily stop a loop without removing it. Use "delete" to permanently remove it.`,
     parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to delete or pause" }),
-      action: Type.Optional(Type.String({ description: "delete or pause (default: delete)", enum: ["delete", "pause"], default: "delete" })),
+      id: Type.String({ description: "Loop ID to delete, pause, or resume" }),
+      action: Type.Optional(Type.String({
+        description: "delete, pause, or resume (default: delete)",
+        enum: ["delete", "pause", "resume"],
+        default: "delete",
+      })),
     }),
     execute(_toolCallId, params) {
       const { id, action } = params;
@@ -295,11 +304,109 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
         return Promise.resolve(textResult(`Loop #${id} paused`));
       }
 
+      if (action === "resume") {
+        const before = getStore().get(id);
+        const entry = getStore().resume(id);
+        if (!entry) return Promise.resolve(textResult(`Loop #${id} not found`));
+        // Only re-arm the trigger if the loop was actually paused. An
+        // already-active resume is a no-op (idempotent).
+        if (before && before.status === "paused" && entry.status === "active") {
+          getTriggerSystem().add(entry);
+        }
+        updateWidget();
+        return Promise.resolve(textResult(`Loop #${id} resumed`));
+      }
+
       getTriggerSystem().remove(id);
       const deleted = getStore().delete(id);
       updateWidget();
       if (deleted) return Promise.resolve(textResult(`Loop #${id} deleted`));
       return Promise.resolve(textResult(`Loop #${id} not found`));
+    },
+  });
+
+  pi.registerTool({
+    name: "LoopUpdate",
+    label: "LoopUpdate",
+    description: `Update an existing loop's trigger, prompt, or metadata.
+
+Use this when the user wants to:
+- change a loop's interval (e.g., "change loop 5 from 5m to 10m")
+- rewrite a loop's prompt
+- change maxFires or other settings
+
+The change is in-place; the loop ID stays the same. If you change the trigger, the old trigger subscription is removed and the new one is registered.
+
+## When NOT to Use
+
+This tool does NOT support changing readOnly, autoTask, or taskBacklog (those are runtime-bound at create time). Delete and recreate the loop if you need to change those.`,
+    parameters: Type.Object({
+      id: Type.String({ description: "Loop ID to update" }),
+      trigger: Type.Optional(Type.String({ description: "New trigger (cron, event source, or hybrid spec). Replaces the existing trigger." })),
+      prompt: Type.Optional(Type.String({ description: "New prompt text" })),
+      maxFires: Type.Optional(Type.Number({ description: "New maxFires cap. Only enforced for recurring loops." })),
+    }),
+    async execute(_toolCallId, params) {
+      const { id, trigger: triggerInput, prompt, maxFires } = params;
+
+      const existing = getStore().get(id);
+      if (!existing) return Promise.resolve(textResult(`Loop #${id} not found`));
+
+      if (triggerInput === undefined && prompt === undefined && maxFires === undefined) {
+        return Promise.resolve(textResult(`No changes provided for loop #${id}. Specify trigger, prompt, or maxFires.`));
+      }
+
+      // Validate + parse the new trigger if provided
+      let parsedTrigger: Trigger | undefined;
+      if (triggerInput !== undefined) {
+        const inferred = inferTriggerType(triggerInput);
+        if (inferred === "cron") {
+          const parsed = parseInterval(triggerInput);
+          parsedTrigger = { type: "cron", schedule: parsed.cron };
+        } else if (inferred === "event") {
+          parsedTrigger = { type: "event", source: triggerInput };
+        } else {
+          const cronPart = triggerInput.match(/cron:?\s*(\S+)/)?.[1] || triggerInput;
+          const eventPart = triggerInput.match(/event:?\s*(\S+)/)?.[1];
+          const parsed = parseInterval(cronPart);
+          parsedTrigger = {
+            type: "hybrid",
+            cron: parsed.cron,
+            event: { source: eventPart || "tool_execution_start" },
+            debounceMs: 30000,
+          };
+        }
+        const validationError = validateTrigger(parsedTrigger);
+        if (validationError) return Promise.resolve(textResult(validationError));
+      }
+
+      // Remove old trigger before applying the new one so the TriggerSystem
+      // re-subscribes with the new trigger (especially for cron → event changes).
+      getTriggerSystem().remove(id);
+
+      const { entry, changedFields } = getStore().updateMetadata(id, {
+        trigger: parsedTrigger,
+        prompt,
+      });
+
+      // Apply maxFires (separate field, not in updateMetadata signature)
+      if (maxFires !== undefined && entry) {
+        entry.maxFires = maxFires;
+        changedFields.push("maxFires");
+      }
+
+      if (entry) {
+        getTriggerSystem().add(entry);
+      }
+
+      updateWidget();
+
+      if (changedFields.length === 0) {
+        return Promise.resolve(textResult(`Loop #${id} unchanged.`));
+      }
+      return Promise.resolve(textResult(
+        `Loop #${id} updated: ${changedFields.join(", ")}`,
+      ));
     },
   });
 }
