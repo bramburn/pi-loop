@@ -96,3 +96,37 @@ describe("TaskDelete", () => {
     expect(await h.text("TaskDelete", { id: "5" })).toBe("Task #5 not found");
   });
 });
+
+describe("TaskPrune", () => {
+  it("removes all completed tasks and reports the count", async () => {
+    const h = setup();
+    h.taskStore.create("a", "d");
+    h.taskStore.create("b", "d");
+    h.taskStore.create("c", "d");
+    h.taskStore.start("2");
+    h.taskStore.complete("2");
+    h.taskStore.start("3");
+    h.taskStore.complete("3");
+    const out = await h.text("TaskPrune", {});
+    expect(out).toMatch(/Pruned 2 completed task/);
+    expect(h.taskStore.get("2")).toBeUndefined();
+    expect(h.taskStore.get("3")).toBeUndefined();
+    expect(h.taskStore.get("1")).toBeDefined();
+  });
+
+  it("reports zero when no completed tasks exist", async () => {
+    const h = setup();
+    h.taskStore.create("a", "d");
+    const out = await h.text("TaskPrune", {});
+    expect(out).toMatch(/Pruned 0 completed task/);
+    expect(h.taskStore.get("1")).toBeDefined();
+  });
+
+  it("includes the reason in the result message", async () => {
+    const h = setup();
+    h.taskStore.create("a", "d");
+    h.taskStore.complete("1");
+    const out = await h.text("TaskPrune", { reason: "git_commit" });
+    expect(out).toContain("reason: git_commit");
+  });
+});

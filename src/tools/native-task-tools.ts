@@ -154,4 +154,29 @@ Parameters: id (required), status, subject, description`,
       return Promise.resolve(textResult(`Task #${params.id} not found`));
     },
   });
+
+  pi.registerTool({
+    name: "TaskPrune",
+    label: "TaskPrune",
+    description: `Bulk-delete all completed tasks. Use to clear a backlog of done work without calling TaskDelete once per task.
+
+Pending and in-progress tasks are not affected. The git commit hook also calls this internally after a successful commit.`,
+    parameters: Type.Object({
+      reason: Type.Optional(Type.String({
+        description: "Reason for pruning (logged in the events). Default: manual",
+        enum: ["manual", "git_commit", "zero_pending_cleanup"],
+        default: "manual",
+      })),
+    }),
+    async execute(_toolCallId, params) {
+      const reason = params.reason ?? "manual";
+      const before = taskStore.list().length;
+      taskStore.pruneCompleted();
+      const after = taskStore.list().length;
+      updateWidget();
+      const removed = before - after;
+      await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
+      return Promise.resolve(textResult(`Pruned ${removed} completed task(s) (${after} remain; reason: ${reason})`));
+    },
+  });
 }
