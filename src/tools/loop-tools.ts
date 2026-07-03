@@ -27,6 +27,11 @@ interface TriggerSystemLike {
   remove(id: string): void;
 }
 
+interface BindingsStoreLike {
+  add(id: string): void;
+  has(id: string): boolean;
+}
+
 interface SchedulerLike {
   nextFire(id: string): number | undefined;
 }
@@ -44,6 +49,7 @@ export interface LoopToolsOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
+  getBindingsStore: () => BindingsStoreLike;
   getScheduler: () => SchedulerLike;
   getMonitorManager: () => MonitorManagerLike;
   updateWidget: () => void;
@@ -102,6 +108,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     pi,
     getStore,
     getTriggerSystem,
+    getBindingsStore,
     getScheduler,
     getMonitorManager,
     updateWidget,
@@ -211,6 +218,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       });
 
       getTriggerSystem().add(entry);
+      getBindingsStore().add(entry.id);
 
       if (trigger.type === "event" && trigger.source === "monitor:done" && trigger.filter) {
         try {
@@ -245,6 +253,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
         (bootstrapped ? "Backlog: initial wake queued for existing pending tasks\n" : "") +
         (isTaskSystemReady() ? "" : "Task system: not ready yet — autoTask may not fire until native fallback or pi-tasks becomes available\n") +
+        "Bound to this session. Will auto-rearm on session restart.\n" +
         `ID: ${entry.id} (use LoopDelete to cancel)`
       ));
     },

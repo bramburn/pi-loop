@@ -547,7 +547,7 @@ describe("/loop-resume command — governor path", () => {
 });
 
 describe("/loop command", () => {
-  it("schedules a cron loop from a bare interval", async () => {
+  it("schedules a cron loop from a bare interval and auto-binds the creating session", async () => {
     const h = setup();
     const cmd = h.commandMap.get("loop")!;
     await cmd.handler!("5m check the deploy", makeCtx(h.ui) as any);
@@ -555,8 +555,13 @@ describe("/loop command", () => {
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(h.store.list()).toHaveLength(1);
     expect(h.store.list()[0].trigger.type).toBe("cron");
+    expect(h.bindingsStore.has("1")).toBe(true); // auto-bound to creating session
     expect(h.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("Loop #1 created"),
+      "info",
+    );
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("bound to this session"),
       "info",
     );
   });

@@ -9,10 +9,12 @@ function setup() {
   const triggerSystem = { add: vi.fn(), remove: vi.fn() };
   const scheduler = { nextFire: vi.fn(() => undefined) };
   const monitorManager = { get: vi.fn(() => undefined) };
+  const bindingsStore = { add: vi.fn(), has: vi.fn(() => false) };
   registerLoopTools({
     pi,
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
+    getBindingsStore: () => bindingsStore as any,
     getScheduler: () => scheduler as any,
     getMonitorManager: () => monitorManager as any,
     updateWidget: vi.fn(),
@@ -21,7 +23,7 @@ function setup() {
   });
   const text = async (name: string, args: any) =>
     (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
-  return { store, triggerSystem, text };
+  return { store, triggerSystem, bindingsStore, text };
 }
 
 describe("LoopCreate", () => {
@@ -35,7 +37,9 @@ describe("LoopCreate", () => {
     expect(out).toContain("Loop #1 created");
     expect(out).toContain("schedule:");
     expect(out).toContain("Recurring: true");
+    expect(out).toContain("Bound to this session");
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
     expect(h.store.get("1")?.trigger.type).toBe("cron");
   });
 

@@ -161,7 +161,7 @@ describe("native task fallback", () => {
     expect(data.loops).toHaveLength(1);
     expect(data.loops[0].prompt).toBe("check deploy");
     expect(data.loops[0].trigger).toEqual({ type: "cron", schedule: "*/5 * * * *" });
-    expect(ui.notify).toHaveBeenCalledWith("Loop #1 created: every 5 minutes — check deploy", "info");
+    expect(ui.notify).toHaveBeenCalledWith("Loop #1 created: every 5 minutes — check deploy — bound to this session", "info");
   });
 
   it("quick-creates native tasks through the /tasks command", async () => {

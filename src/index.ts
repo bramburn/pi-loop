@@ -289,6 +289,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
     getScheduler: () => scheduler,
     getMonitorManager: () => monitorManager,
     updateWidget: () => {

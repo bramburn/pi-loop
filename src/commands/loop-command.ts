@@ -44,8 +44,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       const trigger: Trigger = { type: "cron", schedule: parsed.cron };
       const entry = getStore().create(trigger, p, { recurring: true });
       getTriggerSystem().add(entry);
+      getBindingsStore().add(entry.id);
       updateWidget();
-      ui.notify(`Loop #${entry.id} created: every ${parsed.description}`, "info");
+      ui.notify(`Loop #${entry.id} created: every ${parsed.description} — bound to this session`, "info");
     } catch (err: unknown) {
       ui.notify((err as Error).message, "error");
     }
@@ -61,8 +62,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     const trigger: Trigger = { type: "event", source };
     const entry = getStore().create(trigger, p, { recurring: true });
     getTriggerSystem().add(entry);
+    getBindingsStore().add(entry.id);
     updateWidget();
-    ui.notify(`Event loop #${entry.id} created: fires on "${source}"`, "info");
+    ui.notify(`Event loop #${entry.id} created: fires on "${source}" — bound to this session`, "info");
   }
 
   async function viewLoops(ui: ExtensionUIContext) {
@@ -218,8 +220,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           const trigger: Trigger = { type: "cron", schedule: parsed.cron };
           const entry = getStore().create(trigger, prompt, { recurring: true });
           getTriggerSystem().add(entry);
+          getBindingsStore().add(entry.id);
           updateWidget();
-          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)}`, "info");
+          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)} — bound to this session`, "info");
         } catch (err: unknown) {
           ui.notify((err as Error).message, "error");
         }
