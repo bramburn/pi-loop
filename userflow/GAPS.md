@@ -446,6 +446,12 @@ No backup, no error message to user.
 | G-33 | Low | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` |
 | G-34 | Low | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
 | G-35 | Low | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
+| G-36 | High | First session_switch creates orphaned undefined-path BindingsStore — second session's bindings silently overwritten with empty file | `src/runtime/session-runtime.ts`, `src/index.ts` |
+| G-37 | Medium | Governor applyPending silently skips deleted loops — user not notified | `src/commands/loop-command.ts` |
+| G-38 | Low | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
+| G-39 | Low | session_switch always creates two BindingsStore instances — orphaned undefined-path store | `src/runtime/session-runtime.ts` |
+| G-40 | Low | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
+| G-41 | Medium | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
 
 ---
 
@@ -471,3 +477,5 @@ No backup, no error message to user.
 7. **G-26 + G-27 (High, Governor + Bindings)**: Two bugs in the bindings loading flow:
    - G-26: Governor `< Continue >` with zero pending toggles calls `applyPending` → empty pending → returns early → `while(true)` exits. Fix: guard with `if (pending.size === 0) { notify + continue }`.
    - G-27: `session_switch` calls `showPersistedLoops` before `setSessionId(sessionId)` — wrong BindingsStore path, empty bindings, zero loops armed on switch. Fix: move `setSessionId(ctx.sessionManager.getSessionId())` to before `showPersistedLoops`. G-27 is the precise root cause; G-17 (#17) was the symptom.
+
+8. **G-36 (High, Bindings)**: First-ever `session_switch` creates an orphaned BindingsStore at `undefined` path via `setSessionId(undefined)`, then immediately swaps to the correct one. On subsequent `before_agent_start` calls, the orphaned undefined-path store is still in memory. More critically: if another terminal creates the bindings file between session_switch and the Governor opening, the current terminal's BindingsStore has stale in-memory data and never reloads. Fix: remove `setSessionId(undefined)` from session_switch; it serves no purpose since `_sessionId` starts as `undefined` at extension load.
