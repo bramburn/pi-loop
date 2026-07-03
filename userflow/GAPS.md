@@ -457,7 +457,7 @@ No backup, no error message to user.
 | G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
 | G-43 | ~~Medium~~ **Closed #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag captured before applyPending | `src/commands/loop-command.ts` |
 | G-44 | ~~Low~~ **Open — #45** | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
-| G-45 | High **Open — #38** | TriggerSystem.add / CronScheduler.add register duplicate listeners/timers — fireLoop fires twice | `src/trigger-system.ts`, `src/scheduler.ts` |
+| G-45 | High **Closed #38** | TriggerSystem.add / CronScheduler.add dedup guards prevent duplicate fires | `src/trigger-system.ts`, `src/scheduler.ts` |
 | G-46 | Medium **Open — #39** | Recurring loop notification key is loop:<id> — intermediate fires overwritten in queue | `src/runtime/notification-runtime.ts` |
 | G-47 | Low **Open — #40** | widget.dispose() never called on session_shutdown — stale status bar after session ends | `src/runtime/session-runtime.ts` |
 | G-48 | Medium **Open — #42** | Governor workflow missing LoopUpdate/LoopResume tools + /monitors + /tasks interactive menus | `src/tools/`, `src/commands/` |
