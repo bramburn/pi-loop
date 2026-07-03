@@ -145,13 +145,14 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
       if (!entry) return { entry: undefined, warnings: {} };
 
       const dangling: string[] = [];
+      let hasSelfDep = false;
       for (const tid of targetIds) {
-        if (tid === id) return { entry, warnings: { selfDependency: true } };
-        if (!this.entries.has(tid)) dangling.push(tid);
+        if (tid === id) hasSelfDep = true;
+        else if (!this.entries.has(tid)) dangling.push(tid);
       }
 
       // Filter valid targets (not dangling, not self)
-      const validIds = targetIds.filter((t) => !dangling.includes(t));
+      const validIds = targetIds.filter((t) => t !== id && !dangling.includes(t));
       const validAndNoCycle = validIds.filter((tid) => !this._wouldCreateCycle(id, tid));
 
       const now = Date.now();
@@ -172,10 +173,11 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
         }
       }
 
-      const hasWarnings = dangling.length > 0 || validAndNoCycle.length < validIds.length;
+      const _hasWarnings = dangling.length > 0 || hasSelfDep || validAndNoCycle.length < validIds.length;
       return {
         entry: this.entries.get(id),
         warnings: {
+          ...(hasSelfDep ? { selfDependency: true } : {}),
           ...(dangling.length > 0 ? { danglingReference: dangling } : {}),
           ...(validAndNoCycle.length < validIds.length ? { cycle: true } : {}),
         },
@@ -218,12 +220,13 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
       if (!entry) return { entry: undefined, warnings: {} };
 
       const dangling: string[] = [];
+      let hasSelfDep = false;
       for (const tid of blockerIds) {
-        if (tid === id) return { entry, warnings: { selfDependency: true } };
-        if (!this.entries.has(tid)) dangling.push(tid);
+        if (tid === id) hasSelfDep = true;
+        else if (!this.entries.has(tid)) dangling.push(tid);
       }
 
-      const validIds = blockerIds.filter((t) => !dangling.includes(t));
+      const validIds = blockerIds.filter((t) => t !== id && !dangling.includes(t));
       const validAndNoCycle = validIds.filter((tid) => !this._wouldCreateCycle(tid, id));
 
       const now = Date.now();
@@ -246,6 +249,7 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
       return {
         entry: this.entries.get(id),
         warnings: {
+          ...(hasSelfDep ? { selfDependency: true } : {}),
           ...(dangling.length > 0 ? { danglingReference: dangling } : {}),
           ...(validAndNoCycle.length < validIds.length ? { cycle: true } : {}),
         },

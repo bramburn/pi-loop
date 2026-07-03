@@ -33,6 +33,7 @@ import { createTaskRuntimeBridge } from "./runtime/task-rpc.js";
 import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
 import { TaskStore } from "./task-store.js";
+import { loadTasksConfig } from "./tasks-config.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
 import { registerMonitorTools } from "./tools/monitor-tools.js";
 import { registerNativeTaskTools } from "./tools/native-task-tools.js";
@@ -58,7 +59,13 @@ export default function (pi: ExtensionAPI) {
   // PI_LOOP_SCOPE=memory to disable on-disk persistence entirely.
   let loopScope: "memory" | "session" | "project" = piLoopScope ?? "project";
 
-  const getScopeOptions = () => ({ piLoopEnv, loopScope });
+  // Task scope: PI_TASKS_SCOPE env var overrides, otherwise from tasks config file.
+  // Default to "session" matching pi-tasks' default.
+  const piTasksScope = process.env.PI_TASKS_SCOPE as "memory" | "session" | "project" | undefined;
+  let taskScope: "memory" | "session" | "project" =
+    piTasksScope ?? loadTasksConfig(process.cwd()).taskScope;
+
+  const getScopeOptions = () => ({ piLoopEnv, loopScope, taskScope });
 
   // Hoisted so the BindingsStore below can reference it on init.
   let _latestCtx: ExtensionContext | undefined;
@@ -346,6 +353,7 @@ export default function (pi: ExtensionAPI) {
         updateWidget: () => {
           widget.update();
         },
+        cwd: process.cwd(),
       });
 
       registerNativeTaskTools({

@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { emitNativeTaskEvent } from "../runtime/task-events.js";
 import { TaskStore } from "../task-store.js";
 import type { TaskEntry } from "../task-types.js";
+import { openSettingsMenu } from "../ui/settings-menu.js";
 
 export interface TaskBacklogResult {
   created: boolean;
@@ -13,10 +14,11 @@ export interface TasksCommandOptions {
   getNativeTaskStore: () => TaskStore | undefined;
   evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
   updateWidget: () => void;
+  cwd: string;
 }
 
 export function registerTasksCommand(options: TasksCommandOptions): void {
-  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget } = options;
+  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget, cwd } = options;
 
   async function emitCreated(entry: TaskEntry) {
     // Closes G-19: when pi-tasks is active, the native tools are not
@@ -151,13 +153,40 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         return;
       }
       // Top-level menu: matches /loop's interactive UX.
+      const allCount = taskStore.list().length;
+      const completedCount = taskStore.list().filter((t) => t.status === "completed").length;
       const choice = await ctx.ui.select("Tasks", [
         "Create task",
-        "View tasks",
+        `View tasks (${allCount})`,
+        `Clear completed (${completedCount})`,
+        "Clear all",
+        "Settings",
       ]);
       if (!choice) return;
       if (choice.startsWith("Create")) return createNativeTaskInteractively(ctx.ui);
       if (choice.startsWith("View")) return viewNativeTasks(ctx.ui);
+      if (choice.startsWith("Clear completed")) {
+        const removed = taskStore.pruneCompleted();
+        ctx.ui.notify(`Pruned ${removed} completed task(s)`, "info");
+        updateWidget();
+        return;
+      }
+      if (choice === "Clear all") {
+        const confirmed = await ctx.ui.select("Clear all tasks?", ["< Cancel", "Clear all"]);
+        if (confirmed !== "Clear all") return;
+        const all = taskStore.list();
+        for (const t of all) taskStore.delete(t.id);
+        ctx.ui.notify(`Cleared ${all.length} task(s)`, "info");
+        updateWidget();
+        return;
+      }
+      if (choice === "Settings") {
+        await openSettingsMenu({
+          cwd,
+          ui: ctx.ui,
+          onSave: () => updateWidget(),
+        });
+      }
     },
   });
 }
