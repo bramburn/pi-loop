@@ -442,7 +442,7 @@ No backup, no error message to user.
 | G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
 | G-28 | ~~Medium~~ **Closed #24/#30** | Governor stale loop list — applyPending now warns on orphaned loops | `src/commands/loop-command.ts` |
 | G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
-| G-30 | ~~Low~~ **Open — #20** | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
+| G-30 | ~~Low~~ **Closed #20** | Governor does not warn when arming a paused loop — visual ~ marker + warning on arm | `src/commands/loop-command.ts` |
 | G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
 | G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
 | G-33 | ~~Low~~ **Closed #26** | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` — full hybrid spec now shown in Governor + /loop view-loops |
