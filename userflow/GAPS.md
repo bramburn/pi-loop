@@ -443,7 +443,7 @@ No backup, no error message to user.
 | G-30 | Low | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
 | G-31 | Low | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
 | G-32 | Low | Governor lacks `< Refresh >` sentinel | `src/commands/loop-command.ts` |
-| G-33 | Low | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` |
+| G-33 | ~~Low~~ **Closed #26** | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` — full hybrid spec now shown in Governor + /loop view-loops |
 | G-34 | Low | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
 | G-35 | Low | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
 | G-36 | High | First session_switch creates orphaned undefined-path BindingsStore — second session's bindings silently overwritten with empty file | `src/runtime/session-runtime.ts`, `src/index.ts` |
@@ -452,6 +452,7 @@ No backup, no error message to user.
 | G-39 | Low | session_switch always creates two BindingsStore instances — orphaned undefined-path store | `src/runtime/session-runtime.ts` |
 | G-40 | Low | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
 | G-41 | Medium | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
+| G-42 | Low | Human-readable debounceMs format (e.g., 60s not 60000ms) in Governor + /loop rows | `src/commands/loop-command.ts` |
 
 ---
 
