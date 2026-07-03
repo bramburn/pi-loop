@@ -299,9 +299,13 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     const pending = new Map<string, Toggle>();
     let dirty = false;
 
+    // G-44: scan all other session bindings files to annotate each row with
+    // a hint showing how many other terminals have the loop bound.
+    const otherSessionCounts = bindings.getOtherSessionBindingCounts();
+
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const rows = buildGovernorRows(loops, bindings, pending);
+      const rows = buildGovernorRows(loops, bindings, pending, otherSessionCounts);
       const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Refresh / < Cancel>", [
         ...rows,
         SENTINEL_OK,
@@ -353,6 +357,12 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       if (selected === SENTINEL_REFRESH) {
         bindings.load();
         loops = getStore().list();
+        // Re-scan other-session bindings in case another terminal armed loops
+        // while the Governor was open.
+        otherSessionCounts.clear();
+        for (const [id, count] of bindings.getOtherSessionBindingCounts()) {
+          otherSessionCounts.set(id, count);
+        }
         pending.clear();
         dirty = false;
         ui.notify("Governor refreshed — loop list and bindings re-read from disk.", "info");
@@ -408,6 +418,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     loops: LoopEntry[],
     bindings: BindingsStore,
     pending: Map<string, Toggle>,
+    otherSessionCounts: Map<string, number>,
   ): string[] {
     return loops.map((l) => {
       const triggerDesc = l.trigger.type === "cron"
@@ -420,7 +431,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       // Paused loops get a `~` suffix on the checkbox so the user can see
       // at a glance that a bound loop won't fire until resumed.
       const pausedMark = l.status === "paused" ? "~" : "";
-      return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
+      // G-44: annotate with per-session binding count so the user can see
+      // which loops are armed by other terminals in project scope.
+      const otherCount = otherSessionCounts.get(l.id) ?? 0;
+      const otherMark = otherCount > 0 ? ` · bound in ${otherCount} other session${otherCount === 1 ? "" : "s"}` : "";
+      return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})${otherMark}`;
     });
   }
 

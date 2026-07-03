@@ -10,8 +10,11 @@ import {
 import type { TaskStore } from "../task-store.js";
 import type { LoopEntry, Trigger } from "../types.js";
 
+// G-18: threshold is now configurable via PI_LOOP_TASK_WORKER_THRESHOLD env var.
+// The fallback default of 5 means a backlog worker loop is created only when
+// 5 or more tasks are pending (after which the loop fires on each new task).
 export const AUTO_TASK_WORKER_THRESHOLD = (() => {
-  const envVal = process.env.PI_LOOP_TASK_THRESHOLD;
+  const envVal = process.env.PI_LOOP_TASK_WORKER_THRESHOLD;
   if (envVal) {
     const n = parseInt(envVal, 10);
     if (Number.isFinite(n) && n > 0) return n;

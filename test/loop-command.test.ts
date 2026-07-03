@@ -884,6 +884,54 @@ describe("/loop-resume command — governor path", () => {
       "info",
     );
   });
+
+  it("Governor rows annotate loops with per-session binding count (G-44)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", { recurring: true });
+    h.bindingsStore.add("1");
+
+    // Patch getOtherSessionBindingCounts to simulate 2 other sessions binding loop #1
+    const origCounts = h.bindingsStore.getOtherSessionBindingCounts.bind(h.bindingsStore);
+    h.bindingsStore.getOtherSessionBindingCounts = () =>
+      new Map([["1", 2], ["999", 1]]); // loop 999 won't appear since it's not in store
+
+    h.ui.select.mockResolvedValueOnce("< Cancel>");
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0];
+    const loopRow = options[0] as string;
+    expect(loopRow).toContain("· bound in 2 other sessions");
+  });
+
+  it("Governor rows show no annotation when no other sessions bind the loop (G-44)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo-loop", { recurring: true });
+
+    // Patch getOtherSessionBindingCounts to return empty (no other sessions)
+    h.bindingsStore.getOtherSessionBindingCounts = () => new Map();
+
+    h.ui.select.mockResolvedValueOnce("< Cancel>");
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0];
+    const loopRow = options[0] as string;
+    // No per-session annotation when no other sessions have the loop bound
+    expect(loopRow).not.toContain("· bound in");
+  });
+
+  it("Governor rows show singular 'session' for exactly 1 other session (G-44)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", { recurring: true });
+
+    h.bindingsStore.getOtherSessionBindingCounts = () => new Map([["1", 1]]);
+
+    h.ui.select.mockResolvedValueOnce("< Cancel>");
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0];
+    const loopRow = options[0] as string;
+    expect(loopRow).toContain("· bound in 1 other session"); // singular
+  });
 });
 
 describe("/loop command", () => {

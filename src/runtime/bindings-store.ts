@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import type { LoopScope } from "./scope.js";
 
 /**
@@ -148,5 +148,41 @@ export class BindingsStore {
   /** For diagnostics — the scope passed at construction. */
   get loopScope(): LoopScope {
     return this.scope;
+  }
+
+  /**
+   * Scans all bindings files in the same directory as this BindingsStore's
+   * file (i.e. `.pi/loops/bindings-*.json`) and returns a Map from loopId
+   * → count of OTHER sessions that have the loop bound.
+   *
+   * Used by the Governor to annotate each row with a hint like
+   * "bound in 2 other sessions", helping the user distinguish loops
+   * created/armed by other terminals in project scope.
+   *
+   * No-op in memory scope (path === undefined) or if the directory cannot
+   * be read; returns an empty Map.
+   */
+  getOtherSessionBindingCounts(): Map<string, number> {
+    if (!this.filePath) return new Map();
+    const dir = dirname(this.filePath);
+    let files: string[];
+    try {
+      files = readdirSync(dir).filter((f) => f.startsWith("bindings-") && f.endsWith(".json"));
+    } catch {
+      return new Map();
+    }
+    const counts = new Map<string, number>();
+    for (const file of files) {
+      if (file === basename(this.filePath)) continue; // skip current session's own file
+      try {
+        const data = JSON.parse(readFileSync(`${dir}/${file}`, "utf-8")) as BindingsData;
+        for (const id of Array.isArray(data.loopIds) ? data.loopIds : []) {
+          counts.set(String(id), (counts.get(String(id)) ?? 0) + 1);
+        }
+      } catch {
+        // Skip unreadable/corrupt files — not our concern here
+      }
+    }
+    return counts;
   }
 }
