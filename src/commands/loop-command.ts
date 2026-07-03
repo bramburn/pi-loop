@@ -128,6 +128,53 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
   }
 
+  // ── viewBindings: read-only diagnostic view of this session's bindings ──
+
+  function triggerDescForLoop(l: LoopEntry): string {
+    return l.trigger.type === "cron"
+      ? `cron: ${l.trigger.schedule}`
+      : l.trigger.type === "event"
+        ? `event: ${l.trigger.source}`
+        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
+  }
+
+  async function viewBindings(ui: ExtensionUIContext) {
+    const bindings = getBindingsStore();
+    bindings.load(); // ensure in-memory Set reflects current file state
+    const allLoops = getStore().list();
+    const bound = allLoops.filter((l) => bindings.has(l.id));
+    const unbound = allLoops.filter((l) => !bindings.has(l.id));
+
+    if (allLoops.length === 0) {
+      await ui.select("No loops in the project store", ["< Back"]);
+      return;
+    }
+
+    const choices: string[] = [];
+
+    if (bound.length > 0) {
+      choices.push("— Armed in this session —");
+      for (const l of bound) {
+        const paused = l.status === "paused" ? " [PAUSED — won't fire]" : "";
+        choices.push(`* #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})${paused}`);
+      }
+    }
+
+    if (unbound.length > 0) {
+      choices.push("— Not bound —");
+      for (const l of unbound) {
+        choices.push(`- #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})`);
+      }
+    }
+
+    choices.push("< Back");
+
+    const header = bindings.path
+      ? `Bindings: ${bindings.path.split("/").pop()}`
+      : "Bindings (memory scope — no file)";
+    await ui.select(header, choices);
+  }
+
   pi.registerCommand("loop", {
     description: "Create a repeating scheduled task: /loop [interval] [prompt]. E.g., /loop 5m check the deploy, /loop 30s am I still here",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -368,4 +415,13 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     ].filter(Boolean).join(" · ");
     ui.notify(summary || "Governor applied.", "info");
   }
+
+  // ── /loop-bindings: read-only diagnostic view of this session's bindings ──
+
+  pi.registerCommand("loop-bindings", {
+    description: "View which loops are bound (armed) in this session. Read-only — use /loop-resume to change bindings.",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      await viewBindings(ctx.ui);
+    },
+  });
 }

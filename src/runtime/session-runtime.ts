@@ -219,7 +219,6 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getTriggerSystem().stop();
     stopHeartbeat();
     notificationRuntime.clear("session_switch");
-    setSessionId(undefined);
 
     const isResume = event?.reason === "resume";
     storeUpgraded = false;
@@ -228,6 +227,10 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     if (!isResume && getLoopScope() === "memory") {
       clearAllLoops();
     }
+
+    // Set the correct sessionId BEFORE showPersistedLoops so the BindingsStore
+    // path is resolved correctly and the right bindings are loaded and armed.
+    setSessionId(ctx.sessionManager.getSessionId());
 
     upgradeStoreIfNeeded(ctx);
     showPersistedLoops(isResume);

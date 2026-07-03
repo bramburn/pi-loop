@@ -406,3 +406,84 @@ describe("/loop command", () => {
     expect(loopOptions[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60000ms debounce)");
   });
 });
+
+describe("/loop-bindings command", () => {
+  it("is registered", () => {
+    const h = setup();
+    expect(h.commandMap.has("loop-bindings")).toBe(true);
+  });
+
+  it("shows empty store message when no loops exist", async () => {
+    const h = setup();
+    h.ui.select.mockResolvedValueOnce("< Back");
+    const cmd = h.commandMap.get("loop-bindings")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+    expect(h.ui.select).toHaveBeenCalledWith(
+      expect.stringContaining("No loops"),
+      expect.arrayContaining(["< Back"]),
+    );
+  });
+
+  it("groups loops into Armed and Not bound sections", async () => {
+    const h = setup();
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "will-be-bound", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "stays-unbound", { recurring: true });
+    h.bindingsStore.add("1"); // loop #1 is bound
+
+    h.ui.select.mockResolvedValueOnce("< Back");
+    const cmd = h.commandMap.get("loop-bindings")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [header, options] = h.ui.select.mock.calls[0] as [string, string[]];
+    expect(header).toContain("Bindings");
+    expect(options.some((o) => o.includes("— Armed in this session —"))).toBe(true);
+    expect(options.some((o) => o.includes("— Not bound —"))).toBe(true);
+    expect(options.find((o) => o.includes("will-be-bound"))).toContain("* #1");
+    expect(options.find((o) => o.includes("stays-unbound"))).toContain("- #2");
+  });
+
+  it("marks paused-but-bound loops with a warning suffix", async () => {
+    const h = setup();
+    const entry = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-bound", { recurring: true });
+    h.store.pause(entry.id);
+    h.bindingsStore.add(entry.id);
+
+    h.ui.select.mockResolvedValueOnce("< Back");
+    const cmd = h.commandMap.get("loop-bindings")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0] as [string, string[]];
+    expect(options.find((o) => o.includes("paused-bound"))).toContain("[PAUSED — won't fire]");
+  });
+
+  it("shows only Armed section when all loops are bound", async () => {
+    const h = setup();
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "bound-1", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "bound-2", { recurring: true });
+    h.bindingsStore.add("1");
+    h.bindingsStore.add("2");
+
+    h.ui.select.mockResolvedValueOnce("< Back");
+    const cmd = h.commandMap.get("loop-bindings")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0] as [string, string[]];
+    expect(options.some((o) => o.includes("— Armed in this session —"))).toBe(true);
+    expect(options.some((o) => o.includes("— Not bound —"))).toBe(false);
+  });
+
+  it("shows only Not bound section when no loops are bound", async () => {
+    const h = setup();
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "orphan-1", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "orphan-2", { recurring: true });
+    // bindingsStore is empty (memory scope, no adds)
+
+    h.ui.select.mockResolvedValueOnce("< Back");
+    const cmd = h.commandMap.get("loop-bindings")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0] as [string, string[]];
+    expect(options.some((o) => o.includes("— Not bound —"))).toBe(true);
+    expect(options.some((o) => o.includes("— Armed in this session —"))).toBe(false);
+  });
+});
