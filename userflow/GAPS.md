@@ -449,7 +449,7 @@ No backup, no error message to user.
 | G-34 | ~~Low~~ **Closed #22** | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
 | G-35 | ~~Low~~ **Open — #21** | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
 | G-36 | ~~High~~ **Open — #29** | First session_switch creates orphaned undefined-path BindingsStore | `src/runtime/session-runtime.ts`, `src/index.ts` |
-| G-37 | ~~Medium~~ **Closed #30/#24** | Governor applyPending silently skips deleted loops — warning now emitted | `src/commands/loop-command.ts` |
+| G-37 | ~~Medium~~ **Closed #30/#24/#36** | Governor applyPending silently skips deleted loops — warning now emitted + orphaned bindings removed | `src/commands/loop-command.ts` |
 | G-38 | ~~Low~~ **Open — #31** | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
 | G-39 | ~~Low~~ **Open — #32** | session_switch always creates two BindingsStore instances | `src/runtime/session-runtime.ts` |
 | G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
