@@ -144,9 +144,10 @@ describe("/loop-resume command — governor path", () => {
     expect(h.ui.select).toHaveBeenCalledTimes(1);
     const [title, options] = h.ui.select.mock.calls[0];
     expect(title).toContain("Governor");
-    // First option is the loop row, last three are sentinels
-    expect(options[options.length - 3]).toBe("< OK");
-    expect(options[options.length - 2]).toBe("< Continue");
+    // First option is the loop row; last four are sentinels (OK, Continue, Disarm all, Cancel)
+    expect(options[options.length - 4]).toBe("< OK");
+    expect(options[options.length - 3]).toBe("< Continue");
+    expect(options[options.length - 2]).toBe("< Disarm all");
     expect(options[options.length - 1]).toBe("< Cancel");
     // Loop row uses [x] for currently-bound, [ ] for not
     expect(options[0]).toMatch(/^\[ \] #1 /);
@@ -476,6 +477,72 @@ describe("/loop-resume command — governor path", () => {
       expect.stringContaining("Armed"),
       "info",
     );
+  });
+
+  it("< Disarm all > disarms all currently-bound loops", async () => {
+    // Three loops; loop 1 and 3 are currently bound.
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/15 * * * *" }, "gamma", { recurring: true });
+    h.bindingsStore.add("1");
+    h.bindingsStore.add("3");
+
+    // 1) picker: < Disarm all -> all bound marked for disarm
+    // 2) picker: < OK -> apply pending
+    h.ui.select
+      .mockResolvedValueOnce("< Disarm all")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.bindingsStore.has("1")).toBe(false);
+    expect(h.bindingsStore.has("2")).toBe(false);
+    expect(h.bindingsStore.has("3")).toBe(false);
+    expect(h.triggerSystem.remove).toHaveBeenCalledTimes(2);
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Disarmed"),
+      "info",
+    );
+  });
+
+  it("< Disarm all > then toggle on a loop undoes the disarm and leaves it bound", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
+    h.bindingsStore.add("1");
+
+    // 1) picker: < Disarm all -> pending = {1: "disarm"}
+    // 2) picker: toggle #1 -> prev=disarm -> delete(1) removes the disarm entry
+    // 3) picker: < OK -> no pending for #1, stays in original state (bound)
+    h.ui.select
+      .mockResolvedValueOnce("< Disarm all")
+      .mockResolvedValueOnce("[ ] #1 [active] alpha (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.bindingsStore.has("1")).toBe(true);
+    expect(h.bindingsStore.has("2")).toBe(false);
+    // No pending disarm survived, so the notify shows no changes applied
+    expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
+  });
+
+  it("< Disarm all > with no bound loops is a no-op that refreshes the picker", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo", { recurring: true });
+    // No loops are bound.
+
+    // 1) picker: < Disarm all -> pending stays empty (no bound loops to disarm)
+    // 2) picker: < OK -> no-op
+    h.ui.select
+      .mockResolvedValueOnce("< Disarm all")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.bindingsStore.has("1")).toBe(false);
+    expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
   });
 });
 

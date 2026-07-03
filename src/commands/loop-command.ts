@@ -273,6 +273,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
   // bottom of the row list (no numeric prefix to confuse with loop ids).
   const SENTINEL_OK = "< OK";
   const SENTINEL_CONTINUE = "< Continue";
+  const SENTINEL_DISARM_ALL = "< Disarm all";
   const SENTINEL_CANCEL = "< Cancel";
 
   async function openGovernor(ui: ExtensionUIContext, bindings: BindingsStore): Promise<void> {
@@ -290,10 +291,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const rows = buildGovernorRows(loops, bindings, pending);
-      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Cancel", [
+      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Cancel", [
         ...rows,
         SENTINEL_OK,
         SENTINEL_CONTINUE,
+        SENTINEL_DISARM_ALL,
         SENTINEL_CANCEL,
       ]);
 
@@ -322,6 +324,21 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         continue;
       }
 
+      // Disarm all: mark every currently-bound loop for disarm, then refresh.
+      if (selected === SENTINEL_DISARM_ALL) {
+        for (const l of loops) {
+          if (bindings.has(l.id)) {
+            pending.set(l.id, "disarm");
+          } else {
+            // If user already toggled it to arm, undo that toggle so the
+            // disarm-all truly means "all currently bound → disarmed".
+            pending.delete(l.id);
+          }
+        }
+        dirty = true;
+        continue;
+      }
+
       // Otherwise it must be a loop row — toggle and refresh.
       const match = selected.match(/#(\d+)/);
       if (!match) continue;
@@ -335,6 +352,8 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       } else if (prev === "arm") {
         pending.set(id, "disarm");
       } else {
+        // prev === "disarm" — undo the disarm and leave loop in its original
+        // bound state (no pending entry needed).
         pending.delete(id);
       }
       dirty = true;
