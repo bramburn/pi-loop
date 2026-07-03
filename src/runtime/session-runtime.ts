@@ -95,7 +95,6 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   function showPersistedLoops(_isResume = false) {
     if (persistedShown) return;
-    persistedShown = true;
     const sessionStartedAt = Date.now();
 
     const bindings = getBindingsStore();
@@ -142,6 +141,14 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
         "info",
       );
     }
+
+    // Set the guard AFTER the arming logic completes. This is critical for
+    // session resume: session_switch calls showPersistedLoops (arming runs),
+    // then before_agent_start calls it again — we need both calls to execute
+    // arming since they load the bindings at different points. Only after
+    // the first full execution do we set the guard so subsequent turn_start
+    // calls (which reload the same bindings) don't double-arm.
+    persistedShown = true;
   }
 
   async function pumpLoops(): Promise<void> {

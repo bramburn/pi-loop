@@ -234,4 +234,55 @@ describe("session-runtime per-session bindings filter", () => {
     expect(idsB).toEqual(["3", "7"]);
     expect(idsA).not.toEqual(idsB);
   });
+
+  it("session_switch fires before before_agent_start — both calls arm loops (G-17)", async () => {
+    // Regression: session_switch sets persistedShown=false, then calls
+    // showPersistedLoops. before_agent_start then calls showPersistedLoops.
+    // With persistedShown=true at the TOP of the function, before_agent_start
+    // returns early and loops are never armed on resume. With persistedShown
+    // at the END, both calls run arming logic correctly.
+    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
+    const bindingsStore = new BindingsStore(undefined, "memory");
+    bindingsStore.add("1");
+    bindingsStore.add("3");
+
+    const storedLoops = [
+      { id: "1", status: "active", trigger: { type: "cron", schedule: "*/5 * * * *" } },
+      { id: "3", status: "active", trigger: { type: "event", source: "x" } },
+    ];
+    const triggerSystem = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      add: vi.fn(),
+      remove: vi.fn(),
+      wasRecentlyFired: vi.fn(() => false),
+    };
+    const store = {
+      list: () => storedLoops,
+      clearExpired: vi.fn(),
+      expireEventLoops: vi.fn(),
+    };
+
+    const { drive } = setup({
+      getStore: () => store as any,
+      getTriggerSystem: () => triggerSystem as any,
+      getBindingsStore: () => bindingsStore,
+    });
+
+    // session_switch fires first (e.g. process restart / resume)
+    await drive("session_switch");
+    // before_agent_start fires next — both calls must execute arming
+    await drive("before_agent_start");
+
+    // With the fix (persistedShown set at END of showPersistedLoops):
+    // - session_switch: persistedShown=false → runs arming → sets persistedShown=true
+    // - before_agent_start: persistedShown=false → runs arming again → sets persistedShown=true
+    // Without the fix (persistedShown at TOP):
+    // - session_switch: sets persistedShown=true BEFORE arming → arming runs
+    // - before_agent_start: persistedShown=true → returns early → NO arming ❌
+    expect(triggerSystem.add).toHaveBeenCalledTimes(2);
+    const armedIds = triggerSystem.add.mock.calls.map((c) => c[0].id);
+    expect(armedIds).toContain("1");
+    expect(armedIds).toContain("3");
+  });
 });
