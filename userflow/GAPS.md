@@ -440,7 +440,7 @@ No backup, no error message to user.
 | G-25 | Medium | Silent corrupt-file reset | `src/reducer-backed-store.ts` |
 | G-26 | ~~High~~ **Closed #18** | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
 | G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
-| G-28 | ~~Medium~~ **Open — #24** | Governor stale loop list if store modified while picker open | `src/commands/loop-command.ts` |
+| G-28 | ~~Medium~~ **Closed #24/#30** | Governor stale loop list — applyPending now warns on orphaned loops | `src/commands/loop-command.ts` |
 | G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
 | G-30 | ~~Low~~ **Open — #20** | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
 | G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
@@ -449,7 +449,7 @@ No backup, no error message to user.
 | G-34 | ~~Low~~ **Closed #22** | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
 | G-35 | ~~Low~~ **Open — #21** | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
 | G-36 | ~~High~~ **Open — #29** | First session_switch creates orphaned undefined-path BindingsStore | `src/runtime/session-runtime.ts`, `src/index.ts` |
-| G-37 | ~~Medium~~ **Open — #30** | Governor applyPending silently skips deleted loops — user not notified | `src/commands/loop-command.ts` |
+| G-37 | ~~Medium~~ **Closed #30/#24** | Governor applyPending silently skips deleted loops — warning now emitted | `src/commands/loop-command.ts` |
 | G-38 | ~~Low~~ **Open — #31** | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
 | G-39 | ~~Low~~ **Open — #32** | session_switch always creates two BindingsStore instances | `src/runtime/session-runtime.ts` |
 | G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
@@ -489,8 +489,9 @@ No backup, no error message to user.
 
 6. **G-22 (High)**: On Windows, replace SIGTERM with `taskkill` or `TerminateProcess()` for graceful shutdown.
 
-7. **G-26 + G-27 (High, Governor + Bindings)**: Two bugs in the bindings loading flow:
+7. **G-26 + G-27 + G-28 (Governor + Bindings, closed #24/#30)**: Three bugs in the Governor:
    - G-26: Governor `< Continue >` with zero pending toggles calls `applyPending` → empty pending → returns early → `while(true)` exits. Fix: guard with `if (pending.size === 0) { notify + continue }`.
-   - G-27: `session_switch` calls `showPersistedLoops` before `setSessionId(sessionId)` — wrong BindingsStore path, empty bindings, zero loops armed on switch. Fix: move `setSessionId(ctx.sessionManager.getSessionId())` to before `showPersistedLoops`. G-27 is the precise root cause; G-17 (#17) was the symptom.
+   - G-27: `session_switch` calls `showPersistedLoops` before `setSessionId(sessionId)` — wrong BindingsStore path, empty bindings, zero loops armed on switch. Fix: move `setSessionId(ctx.sessionManager.getSessionId())` to before `showPersistedLoops`.
+   - G-28 (#24, #30): Governor `applyPending` silently skips deleted loops. Fix: track orphaned IDs, emit `warning` notification listing them before the Armed/Disarmed summary.
 
 8. **G-36 (High, Bindings)**: First-ever `session_switch` creates an orphaned BindingsStore at `undefined` path via `setSessionId(undefined)`, then immediately swaps to the correct one. On subsequent `before_agent_start` calls, the orphaned undefined-path store is still in memory. More critically: if another terminal creates the bindings file between session_switch and the Governor opening, the current terminal's BindingsStore has stale in-memory data and never reloads. Fix: remove `setSessionId(undefined)` from session_switch; it serves no purpose since `_sessionId` starts as `undefined` at extension load.
