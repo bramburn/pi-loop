@@ -141,6 +141,69 @@ describe("TaskUpdate", () => {
     const guidelines = (h.tool("TaskUpdate") as any).promptGuidelines as string[];
     expect(guidelines.some((g) => g.includes("`id`, not `taskId`"))).toBe(true);
   });
+
+  it("updates activeForm and owner", async () => {
+    const { taskStore, text } = setup();
+    const t = taskStore.create("task", "desc");
+    const out = await text("TaskUpdate", {
+      id: t.id, activeForm: "Running tests", owner: "agent-1",
+    });
+    expect(out).toContain("updated");
+    expect(taskStore.get(t.id)!.activeForm).toBe("Running tests");
+    expect(taskStore.get(t.id)!.owner).toBe("agent-1");
+  });
+
+  it("shallow-merges metadata; null deletes a key", async () => {
+    const { taskStore, text } = setup();
+    const t = taskStore.create("task", "desc", { a: "1", b: "2" });
+    await text("TaskUpdate", { id: t.id, metadata: { b: null, c: "3" } });
+    const meta = taskStore.get(t.id)!.metadata;
+    expect(meta.a).toBe("1");
+    expect(meta.b).toBeUndefined();
+    expect(meta.c).toBe("3");
+  });
+
+  it("addBlocks: adds bidirectional edge and returns warning for dangling refs", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    const out = await text("TaskUpdate", { id: a.id, addBlocks: [b.id, "999"] });
+    expect(out).toContain("updated");
+    expect(taskStore.get(a.id)!.blocks).toContain(b.id);
+    expect(taskStore.get(b.id)!.blockedBy).toContain(a.id); // bidirectional
+    expect(out).toContain("warning: non-existent tasks: #999");
+  });
+
+  it("addBlockedBy: adds bidirectional edge and returns warning for self-dep", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    const out = await text("TaskUpdate", { id: a.id, addBlockedBy: [b.id, a.id] });
+    expect(out).toContain("updated");
+    expect(taskStore.get(a.id)!.blockedBy).toContain(b.id);
+    expect(taskStore.get(b.id)!.blocks).toContain(a.id); // bidirectional
+    expect(out).toContain("warning: self-dependency");
+  });
+
+  it("addBlocks: warns on cycle", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    taskStore.addBlocks(a.id, [b.id]); // a blocks b
+    const out = await text("TaskUpdate", { id: b.id, addBlocks: [a.id] }); // b blocks a = cycle
+    expect(out).toContain("warning: cycle detected");
+    expect(taskStore.get(b.id)!.blocks).not.toContain(a.id); // cycle edge not added
+  });
+
+  it("removeBlocks: removes the edge from both sides", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    taskStore.addBlocks(a.id, [b.id]);
+    await text("TaskUpdate", { id: a.id, removeBlocks: [b.id] });
+    expect(taskStore.get(a.id)!.blocks).not.toContain(b.id);
+    expect(taskStore.get(b.id)!.blockedBy).not.toContain(a.id);
+  });
 });
 
 describe("TaskDelete", () => {

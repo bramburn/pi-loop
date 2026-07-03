@@ -91,13 +91,18 @@ Fields:
   pi.registerTool({
     name: "TaskUpdate",
     label: "TaskUpdate",
-    description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done.
+    description: `Update task status, details, metadata, and dependency edges. Set status to "in_progress" before starting work, "completed" when done.
 
 Statuses: pending → in_progress → completed
-Parameters: id (required), status, subject, description`,
+Parameters: id (required), status, subject, description, activeForm, owner, agentType, metadata, addBlocks, addBlockedBy, removeBlocks, removeBlockedBy
+
+Metadata: shallow merge — existing keys are preserved; set a key to null to delete it.
+Dependency edges: addBlocks adds task IDs this task blocks; addBlockedBy adds task IDs that block this task. Bidirectional — both sides of the edge are updated. Cycles, self-dependency, and dangling references produce warnings in the response.`,
     promptGuidelines: [
       "TaskUpdate uses parameter `id`, not `taskId`.",
-      "Accepted parameters: `id` (required), `status`, `subject`, `description`.",
+      "Accepted parameters: `id` (required), `status`, `subject`, `description`, `activeForm`, `owner`, `agentType`, `metadata`, `addBlocks`, `addBlockedBy`, `removeBlocks`, `removeBlockedBy`.",
+      "Metadata: shallow merge. Set a key to null to delete it from metadata.",
+      "Dependency edges: addBlocks/addBlockedBy are bidirectional — both sides of the edge update. Cycles and self-dependency are rejected with warnings.",
       "When validation fails with 'must have required properties id', you passed `taskId` instead of `id`. Correct silently and retry.",
     ],
     parameters: Type.Object({
@@ -105,9 +110,17 @@ Parameters: id (required), status, subject, description`,
       status: Type.Optional(Type.String({ description: "New status", enum: ["pending", "in_progress", "completed"] })),
       subject: Type.Optional(Type.String({ description: "New title" })),
       description: Type.Optional(Type.String({ description: "New description" })),
+      activeForm: Type.Optional(Type.String({ description: "Present-continuous text for the active spinner (e.g. 'Running tests')" })),
+      owner: Type.Optional(Type.String({ description: "Agent or owner name" })),
+      agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g. 'general-purpose')" })),
+      metadata: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]))),
+      addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs this task blocks (bidirectional — target's blockedBy is also updated)" })),
+      addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (bidirectional — blocker's blocks is also updated)" })),
+      removeBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to unblock" })),
+      removeBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to remove as blockers" })),
     }),
     async execute(_toolCallId, params) {
-      const { id, status, subject, description } = params;
+      const { id, status, subject, description, activeForm, owner, agentType, metadata, addBlocks, addBlockedBy, removeBlocks, removeBlockedBy } = params;
       let entry = taskStore.get(id);
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
 
@@ -132,14 +145,36 @@ Parameters: id (required), status, subject, description`,
         });
       }
 
-      if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
-      if (subject !== undefined || description !== undefined) {
-        entry = taskStore.updateDetails(id, { subject, description });
+      const hasDetailUpdate = subject !== undefined || description !== undefined ||
+        activeForm !== undefined || owner !== undefined || agentType !== undefined || metadata !== undefined;
+      if (hasDetailUpdate) {
+        entry = taskStore.updateDetails(id, { subject, description, activeForm, owner, agentType, metadata });
         if (entry) emitNativeTaskEvent(pi, "tasks:updated", entry, previousStatus, {
           suppressIfPiTasks: true,
           piTasksAvailable: false,
         });
       }
+
+      const warnings: string[] = [];
+      if (addBlocks?.length) {
+        const r = taskStore.addBlocks(id, addBlocks);
+        if (r.warnings.selfDependency) warnings.push("warning: self-dependency");
+        if (r.warnings.cycle) warnings.push("warning: cycle detected");
+        if (r.warnings.danglingReference?.length) {
+          warnings.push(`warning: non-existent tasks: #${r.warnings.danglingReference.join(", #")}`);
+        }
+      }
+      if (addBlockedBy?.length) {
+        const r = taskStore.addBlockedBy(id, addBlockedBy);
+        if (r.warnings.selfDependency) warnings.push("warning: self-dependency");
+        if (r.warnings.cycle) warnings.push("warning: cycle detected");
+        if (r.warnings.danglingReference?.length) {
+          warnings.push(`warning: non-existent tasks: #${r.warnings.danglingReference.join(", #")}`);
+        }
+      }
+      if (removeBlocks?.length) taskStore.removeBlocks(id, removeBlocks);
+      if (removeBlockedBy?.length) taskStore.removeBlockedBy(id, removeBlockedBy);
+
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
       updateWidget();
       const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
@@ -147,7 +182,8 @@ Parameters: id (required), status, subject, description`,
       const autoLoopMsg = backlog.created && backlog.entry
         ? `\nBacklog worker loop #${backlog.entry.id} created`
         : "";
-      return Promise.resolve(textResult(`Task #${id} updated${statusMsg}${autoLoopMsg}`));
+      const warningsMsg = warnings.length > 0 ? `\n${warnings.join("; ")}` : "";
+      return Promise.resolve(textResult(`Task #${id} updated${statusMsg}${warningsMsg}${autoLoopMsg}`));
     },
   });
 
