@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { TaskEntry } from "./task-types.js";
 import type { TaskStore } from "./task-store.js";
+import type { TaskEntry } from "./task-types.js";
 import type { TasksConfig } from "./tasks-config.js";
 import { loadTasksConfig } from "./tasks-config.js";
 
@@ -26,7 +26,7 @@ export function createAutoClearManager(options: AutoClearOptions) {
 
   // Idle-turn counter — increments on agent idle, resets on task completion
   let idleTurnsSinceCompletion = 0;
-  let lastCompletedIds = new Set<string>();
+  let _lastCompletedIds = new Set<string>();
   let autoClearArmed = false;
 
   // Subscribe to agent idle to increment counter
@@ -39,7 +39,7 @@ export function createAutoClearManager(options: AutoClearOptions) {
 
   // Subscribe to tasks:completed to arm/reset the counter
   pi.events.on("tasks:completed", (raw: unknown) => {
-    const payload = raw as { taskId?: string; task?: TaskEntry };
+    const _payload = raw as { taskId?: string; task?: TaskEntry };
     if (config.autoClearCompleted === "never") return;
 
     if (config.autoClearCompleted === "on_task_complete") {

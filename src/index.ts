@@ -15,6 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createAutoClearManager } from "./auto-clear.js";
 import { registerLoopCommand } from "./commands/loop-command.js";
 import { registerMonitorsCommand } from "./commands/monitors-command.js";
 import { registerTasksCommand } from "./commands/tasks-command.js";
@@ -26,7 +27,6 @@ import {
   createNotificationRuntime,
   type LoopFireEvent,
 } from "./runtime/notification-runtime.js";
-import { createAutoClearManager } from "./auto-clear.js";
 import { resolveBindingsPath, resolveLoopStorePath, resolveTaskStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
 import { createTaskBacklogRuntime } from "./runtime/task-backlog-runtime.js";
