@@ -441,7 +441,7 @@ No backup, no error message to user.
 | G-26 | ~~High~~ **Closed #18** | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
 | G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
 | G-28 | ~~Medium~~ **Closed #24/#30** | Governor stale loop list — applyPending now warns on orphaned loops | `src/commands/loop-command.ts` |
-| G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
+| G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context — should show loop prompt alongside ID | `src/commands/loop-command.ts` |
 | G-30 | ~~Low~~ **Closed #20** | Governor does not warn when arming a paused loop — visual ~ marker + warning on arm | `src/commands/loop-command.ts` |
 | G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
 | G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
@@ -462,6 +462,7 @@ No backup, no error message to user.
 | G-47 | Low **Open — #40** | widget.dispose() never called on session_shutdown — stale status bar after session ends | `src/runtime/session-runtime.ts` |
 | G-48 | Medium **Open — #42** | Governor workflow missing LoopUpdate/LoopResume tools + /monitors + /tasks interactive menus | `src/tools/`, `src/commands/` |
 | G-49 | Medium **Open — #46** | Operational gaps: hybrid debounce design, onDone orphans, maxFires, lock retry, corrupt file | `src/` |
+| G-50 | Low **Closed — #19** | Governor Continue diff shows committed Armed (unchanged) alongside pending changes — prevents false alarm for users with pre-existing bindings | `src/commands/loop-command.ts` |
 
 ---
 
