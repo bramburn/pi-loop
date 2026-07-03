@@ -78,7 +78,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ? `cron: ${l.trigger.schedule}`
         : l.trigger.type === "event"
           ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
+          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
       return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
     });
     choices.push("< Back");
@@ -130,12 +130,19 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
 
   // ── viewBindings: read-only diagnostic view of this session's bindings ──
 
+  /** Formats debounceMs as a human-readable duration: 60000 → "60s", 900000 → "15m", 3600000 → "1h". */
+  function formatDebounceMs(ms: number): string {
+    if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)}h`;
+    if (ms > 60_000) return `${Math.round(ms / 60_000)}m`;
+    return `${Math.round(ms / 1_000)}s`;
+  }
+
   function triggerDescForLoop(l: LoopEntry): string {
     return l.trigger.type === "cron"
       ? `cron: ${l.trigger.schedule}`
       : l.trigger.type === "event"
         ? `event: ${l.trigger.source}`
-        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
+        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
   }
 
   async function viewBindings(ui: ExtensionUIContext) {
@@ -370,7 +377,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ? `cron: ${l.trigger.schedule}`
         : l.trigger.type === "event"
           ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
+          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
       const finalBound = computeFinalBound(l.id, bindings, pending);
       const box = finalBound ? "[x]" : "[ ]";
       return `${box} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;

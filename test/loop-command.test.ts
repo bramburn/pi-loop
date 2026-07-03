@@ -180,7 +180,7 @@ describe("/loop-resume command — governor path", () => {
 
     const [, options] = h.ui.select.mock.calls[0];
     expect(options[0]).toMatch(/^\[ \] #1 /);
-    expect(options[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60000ms debounce)");
+    expect(options[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
   });
 
   it("toggles a row, then OK applies and persists bindings", async () => {
@@ -598,7 +598,7 @@ describe("/loop command", () => {
     // The view loops submenu calls ui.select with all loop rows
     const viewLoopsCall = h.ui.select.mock.calls[1];
     const loopOptions = viewLoopsCall[1];
-    expect(loopOptions[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60000ms debounce)");
+    expect(loopOptions[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
   });
 });
 
