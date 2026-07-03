@@ -460,6 +460,7 @@ No backup, no error message to user.
 | G-45 | High **Open — #38** | TriggerSystem.add / CronScheduler.add register duplicate listeners/timers — fireLoop fires twice | `src/trigger-system.ts`, `src/scheduler.ts` |
 | G-46 | Medium **Open — #39** | Recurring loop notification key is loop:<id> — intermediate fires overwritten in queue | `src/runtime/notification-runtime.ts` |
 | G-47 | Low **Open — #40** | widget.dispose() never called on session_shutdown — stale status bar after session ends | `src/runtime/session-runtime.ts` |
+| G-48 | Medium **Open — #42** | Governor workflow missing LoopUpdate/LoopResume tools + /monitors + /tasks interactive menus | `src/tools/`, `src/commands/` |
 
 ---
 
