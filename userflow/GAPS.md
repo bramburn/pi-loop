@@ -455,7 +455,7 @@ No backup, no error message to user.
 | G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
 | G-41 | ~~Medium~~ **Open — #34** | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
 | G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
-| G-43 | ~~Medium~~ **Open — #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag not captured before applyPending | `src/commands/loop-command.ts` |
+| G-43 | ~~Medium~~ **Closed #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag captured before applyPending | `src/commands/loop-command.ts` |
 | G-44 | ~~Low~~ **Open — #45** | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
 | G-45 | High **Open — #38** | TriggerSystem.add / CronScheduler.add register duplicate listeners/timers — fireLoop fires twice | `src/trigger-system.ts`, `src/scheduler.ts` |
 | G-46 | Medium **Open — #39** | Recurring loop notification key is loop:<id> — intermediate fires overwritten in queue | `src/runtime/notification-runtime.ts` |
