@@ -407,6 +407,8 @@ No backup, no error message to user.
 
 ---
 
+8. **G-36 (High, Bindings)**: First-ever `session_switch` creates an orphaned BindingsStore at `undefined` path via `setSessionId(undefined)`, then immediately swaps to the correct one. On subsequent `before_agent_start` calls, the orphaned undefined-path store is still in memory. More critically: if another terminal creates the bindings file between session_switch and the Governor opening, the current terminal's BindingsStore has stale in-memory data and never reloads. Fix: remove `setSessionId(undefined)` from session_switch; it serves no purpose since `_sessionId` starts as `undefined` at extension load.
+
 ## Gap Summary Table
 
 | ID | Severity | Gap | Files Affected |
@@ -453,12 +455,22 @@ No backup, no error message to user.
 | G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
 | G-41 | ~~Medium~~ **Open — #34** | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
 | G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
-| G-43 | Medium | Governor Continue+OK with XOR-noop pending exits silently — dirty flag not captured before applyPending | `src/commands/loop-command.ts` |
-| G-44 | Low | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
+| G-43 | ~~Medium~~ **Open — #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag not captured before applyPending | `src/commands/loop-command.ts` |
+| G-44 | ~~Low~~ **Pending — Governor terminal-count annotation** | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
+| G-45 | High **Open — #38** | TriggerSystem.add / CronScheduler.add register duplicate listeners/timers — fireLoop fires twice | `src/trigger-system.ts`, `src/scheduler.ts` |
+| G-46 | Medium **Open — #39** | Recurring loop notification key is loop:<id> — intermediate fires overwritten in queue | `src/runtime/notification-runtime.ts` |
+| G-47 | Low **Open — #40** | widget.dispose() never called on session_shutdown — stale status bar after session ends | `src/runtime/session-runtime.ts` |
 
 ---
 
 ## High-Priority Fixes
+
+### Critical new (2026-07-03 review)
+
+9. **G-45 (#38, Critical)**: `TriggerSystem.add()` and `CronScheduler.add()` have no duplicate-guard. Calling `add()` twice for the same loop registers duplicate `pi.events.on()` listeners (for event/hybrid loops) and duplicate `setTimeout` timers (for cron/hybrid loops). The second call to `fireLoop()` fires the loop handler twice per event or tick. Fix: check `eventSubscriptions.get(source)?.has(entry.id)` and `fireTimes.has(entry.id)` before registering.
+
+10. **G-46 (#39, Medium)**: Recurring loop notification key is `loop:<id>` — every fire of the same recurring loop uses the same queue key, so the second fire overwrites the first in `notificationsByKey`. When the agent is still running, multiple fires of a recurring loop collapse into one notification delivery. Fix: use `loop:<id>:<timestamp>` as the key for all notifications.
+
 
 1. **G-06 + G-07**: Add `triggerSystem.remove(id)` calls to `expireEventLoops()` and `clearExpired()` — or create a unified `expireLoop(id)` method in LoopStore that coordinates store + trigger cleanup.
 
