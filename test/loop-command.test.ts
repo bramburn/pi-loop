@@ -533,6 +533,57 @@ describe("/loop-resume command — governor path", () => {
     expect(confirmCall).not.toContain("Armed: #1");  // #1 was disarmed, not unchanged
   });
 
+  it("Continue diff warns about paused loops pending arm", async () => {
+    const paused = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-loop", {
+      recurring: true,
+    });
+    h.store.pause(paused.id);
+    // Not bound — arming it in the Governor
+
+    // 1) picker: toggle loop on → pending arm, warning emitted (tested separately)
+    // 2) picker: Continue → diff shows warning about paused loop
+    h.ui.select
+      .mockResolvedValueOnce("[~] #1 [paused] paused-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Warning: #1 is PAUSED — won't fire until resumed."),
+    );
+  });
+
+  it("Continue diff warns about multiple paused loops pending arm", async () => {
+    const paused1 = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "p1", {
+      recurring: true,
+    });
+    const paused2 = h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "p2", {
+      recurring: true,
+    });
+    h.store.pause(paused1.id);
+    h.store.pause(paused2.id);
+
+    // 1) picker: toggle loop #1 on → pending arm
+    // 2) picker: toggle loop #2 on → pending arm
+    // 3) picker: Continue → diff shows plural warning
+    h.ui.select
+      .mockResolvedValueOnce("[~] #1 [paused] p1 (cron: */5 * * * *)")
+      .mockResolvedValueOnce("[~] #2 [paused] p2 (cron: */10 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Warning: #1, #2 are PAUSED — won't fire until resumed."),
+    );
+  });
+
   // Helper: toggle a loop row and then delete the loop before OK is clicked.
   // This simulates another terminal deleting the loop while the Governor is open.
   function setupOrphanedBeforeOk(

@@ -419,11 +419,20 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     pending: Map<string, Toggle>,
   ): string {
     if (pending.size === 0) return "No changes.";
+
+    // Build pending arm/disarm lists and collect paused-loop warnings.
     const arm: string[] = [];
     const disarm: string[] = [];
+    const loopMap = new Map(loops.map((l) => [l.id, l]));
+    const pausedWarnings: string[] = [];
     for (const [id, toggle] of pending) {
-      if (toggle === "arm") arm.push(`#${id}`);
-      else disarm.push(`#${id}`);
+      if (toggle === "arm") {
+        arm.push(`#${id}`);
+        const entry = loopMap.get(id);
+        if (entry?.status === "paused") pausedWarnings.push(`#${id}`);
+      } else {
+        disarm.push(`#${id}`);
+      }
     }
 
     // Show currently armed loops that will remain armed after pending changes,
@@ -441,6 +450,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     }
     if (arm.length > 0) lines.push(`Arm: ${arm.join(", ")}`);
     if (disarm.length > 0) lines.push(`Disarm: ${disarm.join(", ")}`);
+    // Warn about paused loops pending arm — they won't fire until resumed.
+    if (pausedWarnings.length > 0) {
+      const verb = pausedWarnings.length > 1 ? "are" : "is";
+      lines.push(`Warning: ${pausedWarnings.join(", ")} ${verb} PAUSED — won't fire until resumed.`);
+    }
     return lines.join("\n");
   }
 
