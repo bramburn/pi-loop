@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LoopStore } from "../store.js";
+import { BindingsStore } from "./bindings-store.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -19,7 +20,15 @@ export interface SessionRuntimeOptions {
   clearAllLoops: () => void;
   getStore: () => LoopStore;
   getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string; trigger?: { type: string; debounceMs?: number } }) => boolean): void };
-  getTriggerSystem: () => { start(): void; stop(): void; wasRecentlyFired(id: string, windowMs: number): boolean };
+  getTriggerSystem: () => {
+    start(): void;
+    stop(): void;
+    add(entry: { id: string; trigger: unknown; recurring: boolean; expiresAt: number; maxFires?: number; fireCount?: number }): void;
+    remove(id: string): void;
+    wasRecentlyFired(id: string, windowMs: number): boolean;
+  };
+  getBindingsStore: () => BindingsStore;
+  getLatestCtx: () => ExtensionContext | undefined;
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
@@ -40,6 +49,8 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getStore,
     getScheduler,
     getTriggerSystem,
+    getBindingsStore,
+    getLatestCtx,
     setLatestCtx,
     setSessionId,
     widget,
@@ -86,13 +97,50 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     if (persistedShown) return;
     persistedShown = true;
     const sessionStartedAt = Date.now();
-    const loops = getStore().list();
-    if (loops.length > 0) {
+
+    const bindings = getBindingsStore();
+    const existedBefore = bindings.fileExists();
+    bindings.load();
+    if (!existedBefore && bindings.path !== undefined) {
+      // Fresh session — persist the empty file so subsequent starts know
+      // we've already done the first-start notify.
+      bindings.save();
+    }
+
+    const allLoops = getStore().list();
+    if (allLoops.length > 0) {
       getStore().clearExpired();
       getStore().expireEventLoops(sessionStartedAt);
+    }
+
+    // Arm ONLY loops that are in this session's bindings Set. This is the
+    // core per-session isolation: terminal A binding #5 does not cause
+    // terminal B to fire #5, because each session reads its own bindings
+    // file and arms via its own process-local TriggerSystem. In memory
+    // scope the BindingsStore is in-process only and an empty Set means
+    // "no loops bound" — strict isolation still applies.
+    const boundEntries = allLoops.filter((entry) => bindings.has(entry.id));
+    for (const entry of boundEntries) {
+      getTriggerSystem().add(entry);
+    }
+    if (boundEntries.length > 0) {
       getTriggerSystem().start();
       ensureHeartbeat();
-      widget.update();
+    }
+    widget.update();
+
+    // First-start notify: only when the bindings file did not exist before
+    // we loaded it AND there are stored loops the user could pick from.
+    // We notify even if allLoops is empty — the user can run /loop to create
+    // some and then /loop-resume to bind them.
+    if (!existedBefore) {
+      const ctx = getLatestCtx();
+      // Defensive: minimal test contexts may have a UI stub without notify.
+      const notify = (ctx?.ui as { notify?: (msg: string, type?: "info" | "warning" | "error") => void } | undefined)?.notify;
+      notify?.(
+        "No bindings for this session — run /loop-resume to choose which loops this terminal arms.",
+        "info",
+      );
     }
   }
 
@@ -131,6 +179,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   pi.on("before_agent_start", async (_event, ctx) => {
     setLatestCtx(ctx);
+    setSessionId(ctx.sessionManager.getSessionId());
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();

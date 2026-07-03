@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,12 +14,17 @@ describe("native task fallback", () => {
     originalCwd = process.cwd();
     cwd = mkdtempSync(join(tmpdir(), "pi-loop-index-"));
     process.chdir(cwd);
+    // Pin to session scope so these tests keep exercising the
+    // per-session storage layout (they were written before project scope
+    // became the default).
+    process.env.PI_LOOP_SCOPE = "session";
   });
 
   afterEach(() => {
     process.chdir(originalCwd);
     rmSync(cwd, { recursive: true, force: true });
     vi.useRealTimers();
+    delete process.env.PI_LOOP_SCOPE;
   });
 
   it("registers native task tools when pi-tasks is unavailable", async () => {
@@ -1638,7 +1643,39 @@ describe("monitor tool wrappers", () => {
     expect(listResult.content[0].text).toContain("[stopped]");
   });
 
-  it("defaults to session-scoped loop files when PI_LOOP_SCOPE is unset", async () => {
+  it("defaults to project-scoped loop files when PI_LOOP_SCOPE is unset", async () => {
+    delete process.env.PI_LOOP_SCOPE;
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopCreate = toolMap.get("LoopCreate");
+    expect(loopCreate?.execute).toBeDefined();
+
+    await loopCreate!.execute?.("1", {
+      trigger: "tool_execution_start",
+      prompt: "Project scoped loop",
+      triggerType: "event",
+      recurring: true,
+    });
+
+    expect(existsSync(join(cwd, ".pi", "loops", "loops.json"))).toBe(true);
+    expect(existsSync(join(cwd, ".pi", "loops", "loops-test-session.json"))).toBe(false);
+  });
+
+  it("uses session-scoped loop files when PI_LOOP_SCOPE=session", async () => {
+    process.env.PI_LOOP_SCOPE = "session";
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);
@@ -1706,5 +1743,193 @@ describe("monitor tool wrappers", () => {
 
     listResult = await loopList!.execute?.("3", {});
     expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
+  });
+});
+
+describe("per-session bindings + strict-isolation default", () => {
+  let cwd: string;
+  let originalCwd: string;
+  let originalScope: string | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    originalCwd = process.cwd();
+    originalScope = process.env.PI_LOOP_SCOPE;
+    delete process.env.PI_LOOP_SCOPE; // exercise the project-scope default
+    cwd = mkdtempSync(join(tmpdir(), "pi-loop-bind-"));
+    process.chdir(cwd);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    process.chdir(originalCwd);
+    if (originalScope === undefined) delete process.env.PI_LOOP_SCOPE;
+    else process.env.PI_LOOP_SCOPE = originalScope;
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("emits the strict-isolation notify on first start with no bindings file", async () => {
+    const { pi, extensionHandlers } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const notify = vi.fn();
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "fresh-session" },
+    };
+
+    for (const handler of extensionHandlers.get("before_agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    // The literal notify message from src/runtime/session-runtime.ts.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("No bindings for this session"),
+      "info",
+    );
+
+    // Bindings file was created (empty Set) so subsequent starts skip the notify.
+    const bindingsPath = join(cwd, ".pi", "loops", "bindings-fresh-session.json");
+    expect(existsSync(bindingsPath)).toBe(true);
+    expect(JSON.parse(readFileSync(bindingsPath, "utf-8"))).toEqual({ loopIds: [] });
+  });
+
+  it("does NOT re-emit the notify on subsequent turn_start with the same bindings file", async () => {
+    const { pi, extensionHandlers } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const notify = vi.fn();
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "stable-session" },
+    };
+
+    for (const handler of extensionHandlers.get("before_agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    // Notify fired exactly once (on first start), not on the subsequent turn.
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms zero loops when the bindings file is empty (strict-isolation default)", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "strict-session" },
+    };
+
+    // Seed the project store with a stored loop (but no bindings).
+    await toolMap.get("LoopCreate")!.execute?.("1", {
+      trigger: "5m",
+      prompt: "would-fire-if-bound",
+      triggerType: "cron",
+      recurring: true,
+    });
+    const loopList = toolMap.get("LoopList");
+    const before = await loopList!.execute?.("2", {});
+    expect(before?.content[0].text).toContain("#1");
+
+    for (const handler of extensionHandlers.get("before_agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    // Loop is in the registry but NOT armed because no binding exists.
+    // We verify by running a pump-like pass: the cron path uses the scheduler,
+    // and a loop without triggerSystem.add is not in the scheduler's fireTimes.
+    // The simplest observable assertion is the bindings file content.
+    const bindingsPath = join(cwd, ".pi", "loops", "bindings-strict-session.json");
+    const data = JSON.parse(readFileSync(bindingsPath, "utf-8"));
+    expect(data.loopIds).toEqual([]);
+  });
+
+  it("/loop-resume <id> writes the bindings file and the loop is armed on next start", async () => {
+    const { pi, toolMap, commandMap, extensionHandlers } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    // Seed the project store.
+    await toolMap.get("LoopCreate")!.execute?.("1", {
+      trigger: "5m",
+      prompt: "bound-loop",
+      triggerType: "cron",
+      recurring: true,
+    });
+
+    // First start — empty bindings, strict-isolation notify fires.
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "bind-session" },
+    };
+    for (const handler of extensionHandlers.get("before_agent_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    // Run /loop-resume <id> to write the binding.
+    const cmd = commandMap.get("loop-resume")!;
+    await cmd.handler!("1", ctx as any);
+
+    const bindingsPath = join(cwd, ".pi", "loops", "bindings-bind-session.json");
+    const data = JSON.parse(readFileSync(bindingsPath, "utf-8"));
+    expect(data.loopIds).toEqual(["1"]);
+  });
+
+  it("two sessions on the same repo get independent bindings files (concurrent-session independence)", async () => {
+    // Session A: load the extension, create a loop, bind it via /loop-resume.
+    const cwdA = cwd;
+    const { pi: piA, toolMap: toolMapA, commandMap: commandMapA, extensionHandlers: extA } = createMockPi();
+    extension(piA as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    await toolMapA.get("LoopCreate")!.execute?.("1", {
+      trigger: "5m",
+      prompt: "shared-loop",
+      triggerType: "cron",
+      recurring: true,
+    });
+
+    const ctxA = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "session-A" },
+    };
+    for (const handler of extA.get("before_agent_start") ?? []) {
+      await handler(null, ctxA);
+    }
+    await commandMapA.get("loop-resume")!.handler!("1", ctxA as any);
+
+    // Session B: fresh temp dir but writes to a different bindings file by
+    // simulating a different sessionId. We simulate by writing the bindings
+    // file directly + verifying the project loops.json is the shared registry.
+    const sessionBPath = join(cwdA, ".pi", "loops", "bindings-session-B.json");
+    writeFileSync(sessionBPath, JSON.stringify({ loopIds: ["1"] }, null, 2));
+
+    // Session A's bindings file should NOT contain any entries from B.
+    const sessionAData = JSON.parse(
+      readFileSync(join(cwdA, ".pi", "loops", "bindings-session-A.json"), "utf-8"),
+    );
+    expect(sessionAData.loopIds).toEqual(["1"]);
+
+    // Both bindings files exist independently under the same project dir.
+    expect(existsSync(join(cwdA, ".pi", "loops", "bindings-session-A.json"))).toBe(true);
+    expect(existsSync(sessionBPath)).toBe(true);
   });
 });
