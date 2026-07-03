@@ -416,8 +416,8 @@ No backup, no error message to user.
 | G-03 | Medium | No `MonitorDelete` tool | `src/tools/monitor-tools.ts` |
 | G-04 | Medium | No `/monitors` command | `src/commands/` |
 | G-05 | Low | No `LoopResume` tool | `src/tools/loop-tools.ts` |
-| G-06 | High | `expireEventLoops` leaks triggers | `src/store.ts`, `src/trigger-system.ts` |
-| G-07 | High | `clearExpired` leaks triggers | `src/store.ts`, `src/scheduler.ts` |
+| G-06 | ~~High~~ **Closed in code** | `expireEventLoops` leaks triggers — `onLoopRemoved?.(id)` called in store.ts | `src/store.ts` |
+| G-07 | ~~High~~ **Closed in code** | `clearExpired` leaks triggers — `onLoopRemoved?.(id)` called in store.ts | `src/store.ts` |
 | G-08 | Medium | Hybrid cron not cancelled on event | `src/trigger-system.ts`, `src/scheduler.ts` |
 | G-09 | Low | onDone loop orphaned cleanup | `src/tools/monitor-tools.ts` |
 | G-10 | High | Tasks unavailable when pi-tasks present | `src/index.ts` |
@@ -427,7 +427,7 @@ No backup, no error message to user.
 | G-14 | Medium | File lock retry busy-wait | `src/reducer-backed-store.ts` |
 | G-15 | Low | Event filter format undocumented | `src/types.ts`, `src/trigger-system.ts` |
 | G-16 | Low | No `/tasks` interactive menu | `src/commands/tasks-command.ts` |
-| G-17 | Medium | `maxFires` enforcement inconsistent | `src/trigger-system.ts`, `src/scheduler.ts` |
+| G-17 | ~~Medium~~ **Closed in code** | `maxFires` checked before `onFire()` in trigger-system.ts | `src/trigger-system.ts` |
 | G-18 | Low | AUTO_TASK_WORKER_THRESHOLD not configurable | `src/runtime/task-backlog-runtime.ts` |
 | G-19 | Medium | Native task events conflict with pi-tasks | `src/runtime/task-events.ts` |
 | G-20 | Low | LoopList shows internal monitor:done loops | `src/tools/loop-tools.ts` |
@@ -436,23 +436,25 @@ No backup, no error message to user.
 | G-23 | High | Test suite uses Unix-only commands | `test/monitor-manager.test.ts` |
 | G-24 | Medium | Busy-wait lock retry | `src/reducer-backed-store.ts` |
 | G-25 | Medium | Silent corrupt-file reset | `src/reducer-backed-store.ts` |
-| G-26 | High | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
-| G-27 | High | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
-| G-28 | Medium | Governor stale loop list if store modified while picker open | `src/commands/loop-command.ts` |
-| G-29 | Medium | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
-| G-30 | Low | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
-| G-31 | Low | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
-| G-32 | Low | Governor lacks `< Refresh >` sentinel | `src/commands/loop-command.ts` |
+| G-26 | ~~High~~ **Closed #18** | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
+| G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
+| G-28 | ~~Medium~~ **Open — #24** | Governor stale loop list if store modified while picker open | `src/commands/loop-command.ts` |
+| G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
+| G-30 | ~~Low~~ **Open — #20** | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
+| G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
+| G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
 | G-33 | ~~Low~~ **Closed #26** | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` — full hybrid spec now shown in Governor + /loop view-loops |
-| G-34 | Low | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
-| G-35 | Low | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
-| G-36 | High | First session_switch creates orphaned undefined-path BindingsStore — second session's bindings silently overwritten with empty file | `src/runtime/session-runtime.ts`, `src/index.ts` |
-| G-37 | Medium | Governor applyPending silently skips deleted loops — user not notified | `src/commands/loop-command.ts` |
-| G-38 | Low | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
-| G-39 | Low | session_switch always creates two BindingsStore instances — orphaned undefined-path store | `src/runtime/session-runtime.ts` |
-| G-40 | Low | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
-| G-41 | Medium | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
-| G-42 | Low | Human-readable debounceMs format (e.g., 60s not 60000ms) in Governor + /loop rows | `src/commands/loop-command.ts` |
+| G-34 | ~~Low~~ **Closed #22** | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
+| G-35 | ~~Low~~ **Open — #21** | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
+| G-36 | ~~High~~ **Open — #29** | First session_switch creates orphaned undefined-path BindingsStore | `src/runtime/session-runtime.ts`, `src/index.ts` |
+| G-37 | ~~Medium~~ **Open — #30** | Governor applyPending silently skips deleted loops — user not notified | `src/commands/loop-command.ts` |
+| G-38 | ~~Low~~ **Open — #31** | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
+| G-39 | ~~Low~~ **Open — #32** | session_switch always creates two BindingsStore instances | `src/runtime/session-runtime.ts` |
+| G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
+| G-41 | ~~Medium~~ **Open — #34** | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
+| G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
+| G-43 | Medium | Governor Continue+OK with XOR-noop pending exits silently — dirty flag not captured before applyPending | `src/commands/loop-command.ts` |
+| G-44 | Low | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
 
 ---
 
