@@ -441,7 +441,7 @@ No backup, no error message to user.
 | G-26 | ~~High~~ **Closed #18** | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
 | G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
 | G-28 | ~~Medium~~ **Closed #24/#30** | Governor stale loop list — applyPending now warns on orphaned loops | `src/commands/loop-command.ts` |
-| G-29 | ~~Medium~~ **Open — #28** | Governor Continue diff lacks prompt context — should show loop prompt alongside ID | `src/commands/loop-command.ts` |
+| G-29 | ~~Medium~~ **Closed #28** | Governor Continue diff shows loop prompt alongside ID for each pending change | `src/commands/loop-command.ts` |
 | G-30 | ~~Low~~ **Closed #20** | Governor does not warn when arming a paused loop — visual ~ marker + warning on arm | `src/commands/loop-command.ts` |
 | G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
 | G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
