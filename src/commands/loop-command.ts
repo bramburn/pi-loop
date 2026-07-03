@@ -360,12 +360,21 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       const match = selected.match(/#(\d+)/);
       if (!match) continue;
       const id = match[1];
+      const entry = getStore().get(id);
       const currentlyBound = bindings.has(id);
       const prev = pending.get(id);
+
       // No pending yet → decide toggle based on current bound state.
       // Pending exists → flip it (so user can correct a misclick).
       if (prev === undefined) {
         pending.set(id, currentlyBound ? "disarm" : "arm");
+        // Warn when arming a paused loop — it won't fire until resumed.
+        if (pending.get(id) === "arm" && entry?.status === "paused") {
+          ui.notify(
+            `Loop #${id} is paused — it won't fire until resumed. Run /loop to view loops and resume it.`,
+            "warning",
+          );
+        }
       } else if (prev === "arm") {
         pending.set(id, "disarm");
       } else {
@@ -390,7 +399,10 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
       const finalBound = computeFinalBound(l.id, bindings, pending);
       const box = finalBound ? "[x]" : "[ ]";
-      return `${box} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
+      // Paused loops get a `~` suffix on the checkbox so the user can see
+      // at a glance that a bound loop won't fire until resumed.
+      const pausedMark = l.status === "paused" ? "~" : "";
+      return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
     });
   }
 

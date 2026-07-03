@@ -183,6 +183,67 @@ describe("/loop-resume command — governor path", () => {
     expect(options[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
   });
 
+  it("governor row marks paused loops with a ~ suffix", async () => {
+    const paused = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-loop", {
+      recurring: true,
+    });
+    h.store.pause(paused.id);
+    h.bindingsStore.add(paused.id); // bound + paused
+
+    h.ui.select.mockResolvedValueOnce("< Cancel");
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0];
+    // ~ suffix appears after [x] for a bound, paused loop
+    expect(options[0]).toMatch(/^\[x\]~ #1 \[paused\]/);
+  });
+
+  it("arming a paused loop emits a warning notification", async () => {
+    const paused = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-loop", {
+      recurring: true,
+    });
+    h.store.pause(paused.id);
+    // Not bound — toggling it on means arming
+
+    // 1) picker: toggle loop → pending arm, warning emitted
+    // 2) picker: < OK → apply
+    h.ui.select
+      .mockResolvedValueOnce("[~] #1 [paused] paused-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Loop #1 is paused"),
+      "warning",
+    );
+    // Loop is bound despite being paused
+    expect(h.bindingsStore.has(paused.id)).toBe(true);
+  });
+
+  it("arming an active (non-paused) loop emits no warning", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "active-loop", {
+      recurring: true,
+    });
+    // Not bound — toggling it on means arming
+
+    // 1) picker: toggle loop → pending arm, NO warning (loop is active)
+    // 2) picker: < OK
+    h.ui.select
+      .mockResolvedValueOnce("[ ] #1 [active] active-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("is paused"),
+      "warning",
+    );
+  });
+
   it("toggles a row, then OK applies and persists bindings", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "toggled", { recurring: true });
 
