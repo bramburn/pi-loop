@@ -302,7 +302,7 @@ describe("/loop-resume command — governor path", () => {
     expect(h.ui.confirm).toHaveBeenCalledTimes(1);
     expect(h.ui.confirm).toHaveBeenCalledWith(
       "Apply changes?",
-      expect.stringContaining("Arm: #1"),
+      expect.stringContaining("Arm:\n  #1 to-arm"),
     );
     expect(h.bindingsStore.has("1")).toBe(true);
     expect(h.ui.select).toHaveBeenCalledTimes(2);
@@ -482,7 +482,7 @@ describe("/loop-resume command — governor path", () => {
     );
     expect(h.ui.confirm).toHaveBeenCalledWith(
       "Apply changes?",
-      expect.stringContaining("Arm: #2"),
+      expect.stringContaining("Arm:\n  #2 beta"),
     );
   });
 
@@ -500,7 +500,7 @@ describe("/loop-resume command — governor path", () => {
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "Arm: #1");
+    expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "Arm:\n  #1 solo");
   });
 
   it("Continue diff excludes loops being disarmed from Armed (unchanged) list", async () => {
@@ -525,7 +525,7 @@ describe("/loop-resume command — governor path", () => {
     );
     expect(h.ui.confirm).toHaveBeenCalledWith(
       "Apply changes?",
-      expect.stringContaining("Disarm: #1"),
+      expect.stringContaining("Disarm:\n  #1 alpha"),
     );
     // Loop #1 should NOT appear in the unchanged list
     // Confirm was called once with both lines — verify the combined string

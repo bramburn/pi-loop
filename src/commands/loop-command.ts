@@ -421,17 +421,20 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (pending.size === 0) return "No changes.";
 
     // Build pending arm/disarm lists and collect paused-loop warnings.
-    const arm: string[] = [];
-    const disarm: string[] = [];
+    // Each pending change shows the loop prompt so the user knows exactly what
+    // they are arming or disarming — not just the loop ID.
     const loopMap = new Map(loops.map((l) => [l.id, l]));
+    const armLines: string[] = [];
+    const disarmLines: string[] = [];
     const pausedWarnings: string[] = [];
     for (const [id, toggle] of pending) {
+      const entry = loopMap.get(id);
+      const label = entry ? `  #${id} ${entry.prompt.slice(0, 40)}` : `  #${id}`;
       if (toggle === "arm") {
-        arm.push(`#${id}`);
-        const entry = loopMap.get(id);
+        armLines.push(label);
         if (entry?.status === "paused") pausedWarnings.push(`#${id}`);
       } else {
-        disarm.push(`#${id}`);
+        disarmLines.push(label);
       }
     }
 
@@ -448,8 +451,8 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (willRemainArmed.length > 0) {
       lines.push(`Armed: ${willRemainArmed.join(", ")}  (unchanged)`);
     }
-    if (arm.length > 0) lines.push(`Arm: ${arm.join(", ")}`);
-    if (disarm.length > 0) lines.push(`Disarm: ${disarm.join(", ")}`);
+    for (const l of armLines) lines.push(`Arm:\n${l}`);
+    for (const l of disarmLines) lines.push(`Disarm:\n${l}`);
     // Warn about paused loops pending arm — they won't fire until resumed.
     if (pausedWarnings.length > 0) {
       const verb = pausedWarnings.length > 1 ? "are" : "is";
