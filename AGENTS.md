@@ -44,6 +44,30 @@ src/
 ## File Locking Pattern
 Copy TaskStore from pi-tasks: `O_EXCL` lockfile, stale PID detection, `LOCK_RETRY_MS`/`LOCK_MAX_RETRIES`
 
+## Loop Persistence Scope
+`PI_LOOP_SCOPE` controls where loops and native fallback tasks are stored. The default is **`project`** so loops persist across chat sessions and survive process restarts, mirroring pi-goal-x's `.pi/goals/` pattern.
+
+| Scope | Location (relative to cwd) | Survives session switch? | Survives process restart? |
+|-------|----------------------------|--------------------------|---------------------------|
+| `project` (default) | `.pi/loops/loops.json`, `.pi/tasks/tasks.json` | yes | yes |
+| `session` | `.pi/loops/loops-<sessionId>.json`, `.pi/tasks/tasks-<sessionId>.json` | no | no |
+| `memory` | in-process only | no | no |
+
+Override with `PI_LOOP_SCOPE=session` for per-session isolation, `PI_LOOP_SCOPE=memory` to disable on-disk persistence entirely, or `PI_LOOP=/abs/path` (or `PI_LOOP=./relative.json`) to pin a custom location.
+
+After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` (or `LoopDelete({id, action: "resume"})`) to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
+
+## Per-Session Loop Bindings
+
+Multiple pi terminals in the same repo each pick a disjoint subset of stored loops to arm, so parallel agents can split work without one terminal firing another terminal's loops. The mechanism is a per-session bindings file at `<cwd>/.pi/loops/bindings-<sessionId>.json` containing `{ "loopIds": ["1","3","7"] }`. Each session owns its own file (no contention with other terminals).
+
+- **Fresh-session default is strict isolation**: if the bindings file does not exist on first start, the session arms **zero** loops and emits a one-time notify: `'No bindings for this session — run /loop-resume to choose which loops this terminal arms.'`. This is a deliberate behavior change — the extension no longer auto-arms every active loop in the project store on session start.
+- **`/loop-resume <id>` (one-shot)**: re-arms the loop and writes the id into the bindings file in a single call.
+- **`/loop-resume` (no args)** opens the **governor** picker: every stored loop is shown as `[x] #N [status] prompt (trigger)` where the checkbox reflects THIS session's binding state. Selecting a row toggles its in-memory binding; `< OK` commits and exits; `< Continue` opens a `ui.confirm` diff preview (`Arm: #5, #9 / Disarm: #7`); `< Cancel` discards pending changes and exits.
+- **Concurrent-session invariant**: two terminals in the same repo write only their own bindings files; the shared `.pi/loops/loops.json` registry is read by all sessions and written through the existing `LoopStore.withLock`. Trigger subscriptions are process-local — terminal A's `triggerSystem.add(#5)` does NOT cause terminal B to fire `#5`.
+
+Implementation: `src/runtime/bindings-store.ts` (BindingsStore class), `src/runtime/scope.ts` (`resolveBindingsPath`), `src/runtime/session-runtime.ts` (`showPersistedLoops` filters arm-list by bindings), `src/commands/loop-command.ts` (governor + bindings-aware one-shot).
+
 ## Trigger Types
 Three trigger types, all stored as `LoopEntry.trigger`:
 - `{ type: "cron", schedule: "*/5 * * * *" }` — timer-based

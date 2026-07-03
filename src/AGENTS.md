@@ -4,7 +4,7 @@ This directory contains the entry point and the types that all other modules dep
 
 ## Files
 
-- `index.ts` — Extension entry point registered with pi. Wires tools, commands, runtime hooks, monitor manager, widget, and the task-loops bridge. **Edit with care** — changes ripple to every test.
+- `index.ts` — Extension entry point registered with pi. Wires tools, commands, runtime hooks, BindingsStore init, monitor manager, widget, and the task-loops bridge. **Edit with care** — changes ripple to every test.
 - `types.ts` — `LoopEntry`, `MonitorEntry`, `Trigger` variants (`CronTrigger` / `EventTrigger` / `HybridTrigger`), `TaskEntry`. Pure types, no runtime logic. Documented JSDoc on `EventTrigger.filter` formats.
 - `store.ts` — `LoopStore`: file-backed `Map<id, LoopEntry>` with reducer-driven mutation and lock-protected `withLock` boundaries.
 - `task-store.ts` — `TaskStore`: same shape as LoopStore, for native task fallback.

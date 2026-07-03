@@ -20,12 +20,13 @@ import { registerMonitorsCommand } from "./commands/monitors-command.js";
 import { registerTasksCommand } from "./commands/tasks-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { MonitorManager } from "./monitor-manager.js";
+import { BindingsStore } from "./runtime/bindings-store.js";
 import { createMonitorOnDoneRuntime } from "./runtime/monitor-ondone-runtime.js";
 import {
   createNotificationRuntime,
   type LoopFireEvent,
 } from "./runtime/notification-runtime.js";
-import { resolveLoopStorePath, resolveTaskStorePath } from "./runtime/scope.js";
+import { resolveBindingsPath, resolveLoopStorePath, resolveTaskStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
 import { createTaskBacklogRuntime } from "./runtime/task-backlog-runtime.js";
 import { createTaskRuntimeBridge } from "./runtime/task-rpc.js";
@@ -51,14 +52,26 @@ function isStaleExtensionContextError(error: unknown): boolean {
 export default function (pi: ExtensionAPI) {
   const piLoopEnv = process.env.PI_LOOP;
   const piLoopScope = process.env.PI_LOOP_SCOPE as "memory" | "session" | "project" | undefined;
-  let loopScope: "memory" | "session" | "project" = piLoopScope ?? "session";
+  // Default to "project" so loops persist across chat sessions at
+  // <cwd>/.pi/loops/loops.json (mirroring pi-goal-x's .pi/goals/ pattern).
+  // Override with PI_LOOP_SCOPE=session for the per-session behaviour, or
+  // PI_LOOP_SCOPE=memory to disable on-disk persistence entirely.
+  let loopScope: "memory" | "session" | "project" = piLoopScope ?? "project";
 
   const getScopeOptions = () => ({ piLoopEnv, loopScope });
+
+  // Hoisted so the BindingsStore below can reference it on init.
+  let _latestCtx: ExtensionContext | undefined;
+  let _sessionId: string | undefined;
 
   let store = new LoopStore(resolveLoopStorePath(getScopeOptions()), (id) => triggerSystem.remove(id));
   const monitorManager = new MonitorManager(pi);
   let scheduler: CronScheduler;
   let triggerSystem: TriggerSystem;
+  // Per-session loop bindings — see docs/loop-governor-design.md.
+  // Initial path is undefined because the sessionId is not yet known at
+  // extension load time; the session-runtime hook swaps it on session_switch.
+  let bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), _sessionId), loopScope, _sessionId);
   const widget = new LoopWidget(store, monitorManager);
   // Repaint the status bar when a monitor finishes/prunes on its own (no tool
   // call), so stale monitors don't linger in the count between turns.
@@ -158,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 
   const taskBacklogRuntime = createTaskBacklogRuntime({
     getLoops: () => store.list(),
-    createLoop: (trigger, prompt, options) => store.create(trigger, prompt, options),
+    createLoop: (trigger, prompt, options) => store.create(trigger, prompt, { ...options, createdBy: _sessionId }),
     deleteLoop: (id) => {
       store.delete(id);
     },
@@ -213,9 +226,6 @@ export default function (pi: ExtensionAPI) {
 
   // ── Session lifecycle ──
 
-  let _latestCtx: ExtensionContext | undefined;
-  let _sessionId: string | undefined;
-
   registerSessionRuntimeHooks({
     pi,
     getLoopScope: () => loopScope,
@@ -226,6 +236,9 @@ export default function (pi: ExtensionAPI) {
       widget.setStore(store);
       scheduler = new CronScheduler(store, onLoopFire);
       triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
+      // Swap the BindingsStore to point at the new session's file so
+      // /loop-resume and the governor operate on the right bindings.
+      bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), sessionId), loopScope);
     },
     clearAllLoops: () => {
       store.clearAll();
@@ -233,11 +246,19 @@ export default function (pi: ExtensionAPI) {
     getStore: () => store,
     getScheduler: () => scheduler,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
+    getLatestCtx: () => _latestCtx,
     setLatestCtx: (ctx) => {
       _latestCtx = ctx;
     },
     setSessionId: (sessionId) => {
       _sessionId = sessionId;
+      // Lazy-update the BindingsStore path now that we know the sessionId.
+      // Only swap if the current store's path doesn't already match.
+      const expectedPath = resolveBindingsPath(getScopeOptions(), sessionId);
+      if (bindingsStore.path !== expectedPath) {
+        bindingsStore = new BindingsStore(expectedPath, loopScope, sessionId);
+      }
     },
     widget,
     notificationRuntime,
@@ -268,6 +289,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
     getScheduler: () => scheduler,
     getMonitorManager: () => monitorManager,
     updateWidget: () => {
@@ -285,6 +307,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getMonitorManager: () => monitorManager,
+    getBindingsStore: () => bindingsStore,
     updateWidget: () => {
       widget.update();
     },
@@ -295,6 +318,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
     updateWidget: () => {
       widget.update();
     },

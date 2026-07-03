@@ -42,10 +42,11 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
       return;
     }
 
-    const subject = await ui.input("Task subject");
+    const subject = await ui.input("Task subject (max 80 chars)");
     if (!subject) return;
-    const description = await ui.input("Task description") || subject;
-    const entry = taskStore.create(subject, description);
+    const trimmed = subject.slice(0, 80);
+    const description = await ui.input("Task description") || trimmed;
+    const entry = taskStore.create(trimmed, description);
     const backlog = await emitCreated(entry);
     ui.notify(`Task #${entry.id} created`, "info");
     if (backlog.created && backlog.entry) {

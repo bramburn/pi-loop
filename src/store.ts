@@ -31,7 +31,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     this.onLoopRemoved = onLoopRemoved;
   }
 
-  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number }): LoopEntry {
+  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; createdBy?: string }): LoopEntry {
     return this.withLock(() => {
       if (this.entries.size >= MAX_LOOPS) {
         throw new Error(`Maximum of ${MAX_LOOPS} loops reached. Delete some before creating new ones.`);
@@ -50,6 +50,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           taskBacklog: opts.taskBacklog,
           readOnly: opts.readOnly,
           maxFires: opts.maxFires,
+          createdBy: opts.createdBy,
         },
       });
       return this.entries.get(String(this.nextId - 1))!;

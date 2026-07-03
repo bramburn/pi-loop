@@ -16,12 +16,12 @@ sequenceDiagram
     participant W as Widget
 
     A->>S: LoopList()
-    S->>S: Get all LoopEntries
+    S->>S: Get all LoopEntries<br/>(all loops in the project registry)
     loop For each loop
         S->>C: nextFire(loopId)
         C-->>S: nextFireTime
     end
-    S-->>A: Formatted list
+    S-->>A: Formatted list<br/>(note: LoopList shows all loops,<br/>not just this session's bound ones)
 
     Note over A: If interactive via /loop
     A->>W: /loop → "View loops"
@@ -30,6 +30,12 @@ sequenceDiagram
     W->>A: Show interactive menu
     A->>A: Select loop
     A->>A: Choose action
+
+    Note over A: Governor — manage which loops THIS terminal arms
+    A->>A: /loop-resume (no args)
+    A->>A: Governor shows all loops with binding checkboxes
+    A->>A: [x] = bound to this session<br/>[ ] = not bound
+    A->>A: Toggle to arm/disarm loops for THIS terminal
 ```
 
 ## Entry Points
@@ -70,6 +76,8 @@ sequenceDiagram
 * #3 [active] Process task backlog (hybrid: 0 * * * * + tasks:created) [backlog-worker]
 * #4 [active] Watch builds (cron: */10 * * * *) [auto-task] next: 8m
 ```
+
+**Note:** `LoopList` shows **all** loops in the project registry — it does not filter by which loops are bound to the current session. To see which loops this terminal has armed, use `/loop-resume` (the Governor picker shows `[x]` for bound loops).
 
 ## Data Structure
 
@@ -145,3 +153,6 @@ flowchart TD
 
 - [Loop Create — Cron Trigger](./loop-create-cron.md)
 - [Loop Delete/Pause](./loop-delete-pause.md)
+- [Loop Governor](./loop-governor.md) — manage which loops THIS terminal arms
+- [Loop Resume](./loop-resume.md) — `/loop-resume <id>` one-shot re-arm + bind
+- [Per-Session Bindings](./per-session-bindings.md) — the isolation mechanism

@@ -34,6 +34,7 @@ export type LoopReducerEvent =
       taskBacklog?: boolean;
       readOnly?: boolean;
       maxFires?: number;
+      createdBy?: string;
     };
   }
   | {
@@ -106,6 +107,7 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
       readOnly: event.payload.readOnly,
       maxFires: event.payload.maxFires,
       fireCount: 0,
+      createdBy: event.payload.createdBy,
     };
     next.loopsById[id] = loop;
     return {

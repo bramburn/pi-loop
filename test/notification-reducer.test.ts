@@ -50,21 +50,25 @@ describe("notification reducer", () => {
     expect(effects).toEqual([{ type: "REQUEST_NOTIFICATION_FLUSH", payload: {} }]);
   });
 
-  it("replaces an existing recurring notification with the latest version", () => {
-    const oldNotification = makeNotification({ message: "old", timestamp: 100 });
-    const newNotification = makeNotification({ message: "new", timestamp: 200 });
+  it("each recurring fire has a distinct key — multiple fires coexist in queue (G-46)", () => {
+    // With timestamp-in-key fix, each fire of a recurring loop gets a unique key
+    // so they all coexist in the queue rather than overwriting each other.
+    const fire1 = makeNotification({ message: "fire 1", timestamp: 100, key: "loop:1:100" });
+    const fire2 = makeNotification({ message: "fire 2", timestamp: 200, key: "loop:1:200" });
 
-    const { state, effects } = apply(makeState([oldNotification]), {
+    const { state, effects } = apply(makeState([fire1]), {
       type: "NOTIFICATION_QUEUED",
       at: 200,
       source: "system",
       entityType: "notification",
-      entityId: newNotification.key,
-      payload: { notification: newNotification },
+      entityId: fire2.key,
+      payload: { notification: fire2 },
     });
 
-    expect(state.notificationsByKey[newNotification.key]).toEqual(newNotification);
-    expect(Object.keys(state.notificationsByKey)).toHaveLength(1);
+    // Both fires coexist — distinct keys prevent overwrite
+    expect(Object.keys(state.notificationsByKey)).toHaveLength(2);
+    expect(state.notificationsByKey[fire1.key]).toEqual(fire1);
+    expect(state.notificationsByKey[fire2.key]).toEqual(fire2);
     expect(effects).toEqual([{ type: "REQUEST_NOTIFICATION_FLUSH", payload: {} }]);
   });
 

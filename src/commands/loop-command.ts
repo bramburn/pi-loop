@@ -4,6 +4,7 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { parseInterval } from "../loop-parse.js";
+import { BindingsStore } from "../runtime/bindings-store.js";
 import type { LoopEntry, Trigger } from "../types.js";
 
 interface LoopStoreLike {
@@ -24,11 +25,12 @@ export interface LoopCommandOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
+  getBindingsStore: () => BindingsStore;
   updateWidget: () => void;
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, updateWidget } = options;
+  const { pi, getStore, getTriggerSystem, getBindingsStore, updateWidget } = options;
 
   async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
@@ -40,10 +42,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     try {
       const parsed = parseInterval(interval);
       const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-      const entry = getStore().create(trigger, p, { recurring: true });
+      const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
       getTriggerSystem().add(entry);
+      getBindingsStore().add(entry.id);
       updateWidget();
-      ui.notify(`Loop #${entry.id} created: every ${parsed.description}`, "info");
+      ui.notify(`Loop #${entry.id} created: every ${parsed.description} — bound to this session`, "info");
     } catch (err: unknown) {
       ui.notify((err as Error).message, "error");
     }
@@ -57,10 +60,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (!source) return;
 
     const trigger: Trigger = { type: "event", source };
-    const entry = getStore().create(trigger, p, { recurring: true });
+    const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
     getTriggerSystem().add(entry);
+    getBindingsStore().add(entry.id);
     updateWidget();
-    ui.notify(`Event loop #${entry.id} created: fires on "${source}"`, "info");
+    ui.notify(`Event loop #${entry.id} created: fires on "${source}" — bound to this session`, "info");
   }
 
   async function viewLoops(ui: ExtensionUIContext) {
@@ -76,7 +80,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ? `cron: ${l.trigger.schedule}`
         : l.trigger.type === "event"
           ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron}`;
+          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
       return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
     });
     choices.push("< Back");
@@ -126,6 +130,60 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
   }
 
+  // ── viewBindings: read-only diagnostic view of this session's bindings ──
+
+  /** Formats debounceMs as a human-readable duration: 60000 → "60s", 900000 → "15m", 3600000 → "1h". */
+  function formatDebounceMs(ms: number): string {
+    if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)}h`;
+    if (ms > 60_000) return `${Math.round(ms / 60_000)}m`;
+    return `${Math.round(ms / 1_000)}s`;
+  }
+
+  function triggerDescForLoop(l: LoopEntry): string {
+    return l.trigger.type === "cron"
+      ? `cron: ${l.trigger.schedule}`
+      : l.trigger.type === "event"
+        ? `event: ${l.trigger.source}`
+        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
+  }
+
+  async function viewBindings(ui: ExtensionUIContext) {
+    const bindings = getBindingsStore();
+    bindings.reload(); // force a fresh read from disk
+    const allLoops = getStore().list();
+    const bound = allLoops.filter((l) => bindings.has(l.id));
+    const unbound = allLoops.filter((l) => !bindings.has(l.id));
+
+    if (allLoops.length === 0) {
+      await ui.select("No loops in the project store", ["< Back"]);
+      return;
+    }
+
+    const choices: string[] = [];
+
+    if (bound.length > 0) {
+      choices.push("— Armed in this session —");
+      for (const l of bound) {
+        const paused = l.status === "paused" ? " [PAUSED — won't fire]" : "";
+        choices.push(`* #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})${paused}`);
+      }
+    }
+
+    if (unbound.length > 0) {
+      choices.push("— Not bound —");
+      for (const l of unbound) {
+        choices.push(`- #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})`);
+      }
+    }
+
+    choices.push("< Back");
+
+    const header = bindings.path
+      ? `Bindings: ${bindings.path.split("/").pop()}`
+      : "Bindings (memory scope — no file)";
+    await ui.select(header, choices);
+  }
+
   pi.registerCommand("loop", {
     description: "Create a repeating scheduled task: /loop [interval] [prompt]. E.g., /loop 5m check the deploy, /loop 30s am I still here",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -160,10 +218,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         try {
           const parsed = parseInterval(interval);
           const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-          const entry = getStore().create(trigger, prompt, { recurring: true });
+          const entry = getStore().create(trigger, prompt, { recurring: true, createdBy: getBindingsStore().sessionId });
           getTriggerSystem().add(entry);
+          getBindingsStore().add(entry.id);
           updateWidget();
-          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)}`, "info");
+          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)} — bound to this session`, "info");
         } catch (err: unknown) {
           ui.notify((err as Error).message, "error");
         }
@@ -178,6 +237,372 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       if (!choice) return;
       if (choice.startsWith("Event")) return eventLoop(ui, trimmed);
       return scheduleLoop(ui, trimmed);
+    },
+  });
+
+  pi.registerCommand("loop-resume", {
+    description: "Re-arm a stored loop by ID, or open the governor to pick which loops this session arms. Usage: /loop-resume <id> | /loop-resume (no args)",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const trimmed = args.trim();
+      const ui = ctx.ui;
+      const bindings = getBindingsStore();
+
+      if (!trimmed) {
+        await openGovernor(ui, bindings);
+        return;
+      }
+
+      const id = trimmed.split(/\s+/)[0];
+      if (!/^\d+$/.test(id)) {
+        ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-resume <id> or /loop-resume (no args) for the governor.`, "error");
+        return;
+      }
+      await rearmLoopOneShot(ui, bindings, id);
+    },
+  });
+
+  // ── One-shot: arm + bind a single loop in one call ──
+
+  async function rearmLoopOneShot(ui: ExtensionUIContext, bindings: BindingsStore, id: string): Promise<void> {
+    const before = getStore().get(id);
+    if (!before) {
+      ui.notify(`Loop #${id} not found in the store. Use /loop to create one first.`, "error");
+      return;
+    }
+    const entry = getStore().resume(id) ?? before;
+    getTriggerSystem().add(entry);
+    bindings.add(id);
+    updateWidget();
+    ui.notify(`Loop #${entry.id} re-armed and bound to this session`, "info");
+  }
+
+  // ── Governor: pick which loops this session arms ──
+
+  type Toggle = "arm" | "disarm";
+  // Picker sentinels are prefixed with `< ` so they sort naturally to the
+  // bottom of the row list (no numeric prefix to confuse with loop ids).
+  const SENTINEL_OK = "< OK";
+  const SENTINEL_CONTINUE = "< Continue";
+  const SENTINEL_DISARM_ALL = "< Disarm all";
+  const SENTINEL_REFRESH = "< Refresh>";
+  const SENTINEL_CANCEL = "< Cancel";
+
+  async function openGovernor(ui: ExtensionUIContext, bindings: BindingsStore): Promise<void> {
+    let loops = getStore().list();
+    if (loops.length === 0) {
+      ui.notify("No stored loops to bind. Use /loop to create one first.", "info");
+      return;
+    }
+
+    // Partition loops into "My loops" (created by this session) and "Other terminals"
+    // (created by other sessions or before this field was introduced).
+    const mySessionId = bindings.sessionId;
+    const [mine, others] = partitionLoopsBySession(loops, mySessionId);
+    if (mine.length === 0 && others.length === 0) return; // just in case
+
+    // pending toggles: ids the user flipped while in the picker. The final
+    // applied state for an id is (bindings.has(id) XOR pending.has(id)).
+    const pending = new Map<string, Toggle>();
+    let dirty = false;
+
+    // G-44: scan all other session bindings files to annotate each row with
+    // a hint showing how many other terminals have the loop bound.
+    const otherSessionCounts = bindings.getOtherSessionBindingCounts();
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = buildGovernorRows(mine, others, bindings, pending, otherSessionCounts);
+      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Refresh / < Cancel>", [
+        ...rows,
+        SENTINEL_OK,
+        SENTINEL_CONTINUE,
+        SENTINEL_DISARM_ALL,
+        SENTINEL_REFRESH,
+        SENTINEL_CANCEL,
+      ]);
+
+      if (!selected || selected === SENTINEL_CANCEL) {
+        if (dirty) {
+          ui.notify("Governor changes discarded.", "info");
+        }
+        return;
+      }
+
+      if (selected === SENTINEL_OK) {
+        applyPending(ui, bindings, pending);
+        if (pending.size > 0) dirty = true;
+        return;
+      }
+
+      if (selected === SENTINEL_CONTINUE) {
+        // No toggles at all — stay in the picker rather than exiting
+        if (!dirty) {
+          ui.notify("No pending changes — select loops to toggle or click Cancel.", "info");
+          continue;
+        }
+        const diff = buildDiffSummary(loops, bindings, pending);
+        const ok = await ui.confirm("Apply changes?", diff);
+        if (ok) {
+          // Capture dirty state BEFORE applyPending clears pending. This
+          // ensures we notify even when the user toggled loops but the net
+          // result was zero binding changes (e.g., arm then disarm the same
+          // loop — a "XOR no-op" that would otherwise exit silently).
+          const hadChanges = dirty;
+          applyPending(ui, bindings, pending);
+          if (!hadChanges) {
+            ui.notify("No changes to apply.", "info");
+          }
+          return;
+        }
+        // Cancel from the confirm returns to the picker; pending stays.
+        continue;
+      }
+
+      // Refresh: re-read store + bindings, clear pending — the user sees
+      // the current state and any stale toggles from external changes are discarded.
+      if (selected === SENTINEL_REFRESH) {
+        bindings.load();
+        const allLoops = getStore().list();
+        const [newMine, newOthers] = partitionLoopsBySession(allLoops, mySessionId);
+        mine.length = 0;
+        mine.push(...newMine);
+        others.length = 0;
+        others.push(...newOthers);
+        // Re-scan other-session bindings in case another terminal armed loops
+        // while the Governor was open.
+        otherSessionCounts.clear();
+        for (const [id, count] of bindings.getOtherSessionBindingCounts()) {
+          otherSessionCounts.set(id, count);
+        }
+        pending.clear();
+        dirty = false;
+        ui.notify("Governor refreshed — loop list and bindings re-read from disk.", "info");
+        continue;
+      }
+
+      // Disarm all: mark every currently-bound loop for disarm, then refresh.
+      if (selected === SENTINEL_DISARM_ALL) {
+        for (const l of loops) {
+          if (bindings.has(l.id)) {
+            pending.set(l.id, "disarm");
+          } else {
+            // If user already toggled it to arm, undo that toggle so the
+            // disarm-all truly means "all currently bound → disarmed".
+            pending.delete(l.id);
+          }
+        }
+        dirty = true;
+        continue;
+      }
+
+      // Otherwise it must be a loop row — toggle and refresh.
+      const match = selected.match(/#(\d+)/);
+      if (!match) continue;
+      const id = match[1];
+      const entry = getStore().get(id);
+      const currentlyBound = bindings.has(id);
+      const prev = pending.get(id);
+
+      // No pending yet → decide toggle based on current bound state.
+      // Pending exists → flip it (so user can correct a misclick).
+      if (prev === undefined) {
+        pending.set(id, currentlyBound ? "disarm" : "arm");
+        // Warn when arming a paused loop — it won't fire until resumed.
+        if (pending.get(id) === "arm" && entry?.status === "paused") {
+          ui.notify(
+            `Loop #${id} is paused — it won't fire until resumed. Run /loop to view loops and resume it.`,
+            "warning",
+          );
+        }
+      } else if (prev === "arm") {
+        pending.set(id, "disarm");
+      } else {
+        // prev === "disarm" — undo the disarm and leave loop in its original
+        // bound state (no pending entry needed).
+        pending.delete(id);
+      }
+      dirty = true;
+    }
+  }
+
+  /**
+   * Partitions loops into "My loops" (created by this session) and
+   * "Other terminals" (created by other sessions or before createdBy was added).
+   * Preserves original order within each partition.
+   */
+  function partitionLoopsBySession(loops: LoopEntry[], sessionId: string | undefined): [LoopEntry[], LoopEntry[]] {
+    const mine: LoopEntry[] = [];
+    const others: LoopEntry[] = [];
+    for (const loop of loops) {
+      if (loop.createdBy === sessionId) {
+        mine.push(loop);
+      } else {
+        others.push(loop);
+      }
+    }
+    return [mine, others];
+  }
+
+  function buildGovernorRows(
+    mine: LoopEntry[],
+    others: LoopEntry[],
+    bindings: BindingsStore,
+    pending: Map<string, Toggle>,
+    otherSessionCounts: Map<string, number>,
+  ): string[] {
+    const rows: string[] = [];
+
+    if (mine.length > 0) {
+      rows.push("— My loops —");
+      for (const l of mine) {
+        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
+      }
+    }
+
+    if (others.length > 0) {
+      rows.push("— Other terminals —");
+      for (const l of others) {
+        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
+      }
+    }
+
+    return rows;
+  }
+
+  function formatLoopRow(
+    l: LoopEntry,
+    bindings: BindingsStore,
+    pending: Map<string, Toggle>,
+    otherSessionCounts: Map<string, number>,
+  ): string {
+    const triggerDesc = l.trigger.type === "cron"
+      ? `cron: ${l.trigger.schedule}`
+      : l.trigger.type === "event"
+        ? `event: ${l.trigger.source}`
+        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
+    const finalBound = computeFinalBound(l.id, bindings, pending);
+    const box = finalBound ? "[x]" : "[ ]";
+    // Paused loops get a `~` suffix on the checkbox so the user can see
+    // at a glance that a bound loop won't fire until resumed.
+    const pausedMark = l.status === "paused" ? "~" : "";
+    // G-44: annotate with per-session binding count so the user can see
+    // which loops are armed by other terminals in project scope.
+    const otherCount = otherSessionCounts.get(l.id) ?? 0;
+    const otherMark = otherCount > 0 ? ` · bound in ${otherCount} other session${otherCount === 1 ? "" : "s"}` : "";
+    return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})${otherMark}`;
+  }
+
+  function computeFinalBound(id: string, bindings: BindingsStore, pending: Map<string, Toggle>): boolean {
+    const current = bindings.has(id);
+    const toggle = pending.get(id);
+    if (toggle === undefined) return current;
+    return toggle === "arm";
+  }
+
+  function buildDiffSummary(
+    loops: LoopEntry[],
+    bindings: BindingsStore,
+    pending: Map<string, Toggle>,
+  ): string {
+    if (pending.size === 0) return "No changes.";
+
+    // Build pending arm/disarm lists and collect paused-loop warnings.
+    // Each pending change shows the loop prompt so the user knows exactly what
+    // they are arming or disarming — not just the loop ID.
+    const loopMap = new Map(loops.map((l) => [l.id, l]));
+    const armLines: string[] = [];
+    const disarmLines: string[] = [];
+    const pausedWarnings: string[] = [];
+    for (const [id, toggle] of pending) {
+      const entry = loopMap.get(id);
+      const label = entry ? `  #${id} ${entry.prompt.slice(0, 40)}` : `  #${id}`;
+      if (toggle === "arm") {
+        armLines.push(label);
+        if (entry?.status === "paused") pausedWarnings.push(`#${id}`);
+      } else {
+        disarmLines.push(label);
+      }
+    }
+
+    // Show currently armed loops that will remain armed after pending changes,
+    // so users can see the full picture when they have pre-existing bindings.
+    const willRemainArmed = loops
+      .filter((l) => {
+        if (!bindings.has(l.id)) return false;
+        return pending.get(l.id) !== "disarm";
+      })
+      .map((l) => `#${l.id}`);
+
+    const lines: string[] = [];
+    if (willRemainArmed.length > 0) {
+      lines.push(`Armed: ${willRemainArmed.join(", ")}  (unchanged)`);
+    }
+    for (const l of armLines) lines.push(`Arm:\n${l}`);
+    for (const l of disarmLines) lines.push(`Disarm:\n${l}`);
+    // Warn about paused loops pending arm — they won't fire until resumed.
+    if (pausedWarnings.length > 0) {
+      const verb = pausedWarnings.length > 1 ? "are" : "is";
+      lines.push(`Warning: ${pausedWarnings.join(", ")} ${verb} PAUSED — won't fire until resumed.`);
+    }
+    return lines.join("\n");
+  }
+
+  function applyPending(
+    ui: ExtensionUIContext,
+    bindings: BindingsStore,
+    pending: Map<string, Toggle>,
+  ): void {
+    if (pending.size === 0) {
+      ui.notify("No changes to apply.", "info");
+      return;
+    }
+    const armed: string[] = [];
+    const disarmed: string[] = [];
+    const orphaned: string[] = [];
+
+    for (const [id, toggle] of pending) {
+      const entry = getStore().get(id);
+      if (!entry) {
+        orphaned.push(`#${id}`);
+        // Clean up orphaned binding even though the loop no longer exists —
+        // prevents stale entries from accumulating in the bindings file.
+        bindings.remove(id);
+        continue;
+      }
+      if (toggle === "arm") {
+        bindings.add(id);
+        getTriggerSystem().add(entry);
+        armed.push(`#${id}`);
+      } else {
+        bindings.remove(id);
+        getTriggerSystem().remove(id);
+        disarmed.push(`#${id}`);
+      }
+    }
+
+    pending.clear();
+    updateWidget();
+
+    if (orphaned.length > 0) {
+      ui.notify(
+        `Skipped — loops no longer exist: ${orphaned.join(", ")}. Re-open /loop-resume to see the current loop list.`,
+        "warning",
+      );
+    }
+
+    const summary = [
+      armed.length > 0 ? `Armed: ${armed.join(", ")}` : null,
+      disarmed.length > 0 ? `Disarmed: ${disarmed.join(", ")}` : null,
+    ].filter(Boolean).join(" · ");
+    ui.notify(summary || "Governor applied.", "info");
+  }
+
+  // ── /loop-bindings: read-only diagnostic view of this session's bindings ──
+
+  pi.registerCommand("loop-bindings", {
+    description: "View which loops are bound (armed) in this session. Read-only — use /loop-resume to change bindings.",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      await viewBindings(ctx.ui);
     },
   });
 }

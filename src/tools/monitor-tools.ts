@@ -16,13 +16,19 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
+    createdBy?: string;
   }): LoopEntry;
+}
+
+interface BindingsStoreLike {
+  readonly sessionId: string | undefined;
 }
 
 export interface MonitorToolsOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getMonitorManager: () => MonitorManagerLike;
+  getBindingsStore: () => BindingsStoreLike;
   updateWidget: () => void;
   handleMonitorDoneLoop: (doneLoop: LoopEntry, monitorId: string) => void;
 }
@@ -38,7 +44,7 @@ function formatRemaining(ms: number): string {
 }
 
 export function registerMonitorTools(options: MonitorToolsOptions): void {
-  const { pi, getStore, getMonitorManager, updateWidget, handleMonitorDoneLoop } = options;
+  const { pi, getStore, getMonitorManager, getBindingsStore, updateWidget, handleMonitorDoneLoop } = options;
 
   pi.registerTool({
     name: "MonitorCreate",
@@ -93,7 +99,7 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
         // triggerSystem.add() this loop, or the monitor:done event would fire it
         // a second time.
         const doneTrigger: Trigger = { type: "event", source: "monitor:done", filter: JSON.stringify({ monitorId: entry.id }) };
-        const doneLoop = getStore().create(doneTrigger, params.onDone, { recurring: false });
+        const doneLoop = getStore().create(doneTrigger, params.onDone, { recurring: false, createdBy: getBindingsStore().sessionId });
         handleMonitorDoneLoop(doneLoop, entry.id);
         onDoneMsg = `\nCompletion wake loop #${doneLoop.id}: fires when the monitor completes — no polling needed`;
       }

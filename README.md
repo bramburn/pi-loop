@@ -43,6 +43,23 @@ TaskDelete id="1"
 /loop 5m check the deploy     # 5-minute cron loop
 ```
 
+`/loop-resume <id>` — re-arm a stored loop AND bind it to the current session in a single call. After this, the loop fires only in this terminal — other pi sessions in the same repo will not see it. Use this after a session/process restart when a project-scoped event/hybrid loop's trigger subscription was lost.
+
+```text
+/loop-resume 5        # re-arm loop #5 by id
+/loop-resume          # open the governor picker (see below)
+```
+
+`/loop-resume` (no args) — open the **governor** picker. Every stored loop is shown as a checkbox row `[x] #N [status] prompt (trigger)` where `[x]` reflects this session's current binding. Toggle rows to change which loops this terminal arms; the three sentinels at the bottom commit or discard:
+
+```text
+< OK            commit pending toggles, write bindings file, apply trigger arm/disarm
+< Continue      open a ui.confirm preview ("Arm: #5, #9 / Disarm: #7"); OK applies, Cancel returns
+< Cancel        discard pending toggles, exit
+```
+
+Use the governor when running two or three pi terminals in the same repo and you want each terminal to fire only a disjoint subset of stored loops. Each terminal writes its own `.pi/loops/bindings-<sessionId>.json` file so parallel sessions do not interfere.
+
 `/tasks` — interactive native task viewer/manager, only registered when `pi-tasks` is absent.
 
 ```text
@@ -105,18 +122,32 @@ Only task counts and the single active/next task are shown there so attention st
 | Variable | Effect | Default |
 |---|---|---|
 | `PI_LOOP` | Store path override. `off` to disable, absolute or project-relative path | unset → derived from `PI_LOOP_SCOPE` |
-| `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared) | `session` |
+| `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared, persists across sessions) | `project` |
 | `PI_LOOP_DEBUG` | Debug logging to stderr | unset |
 
-In `session` scope (default), loop and task files are saved per session ID (e.g. `.pi/loops/loops-<sessionId>.json` and `.pi/tasks/tasks-<sessionId>.json`) so concurrent sessions and worktree agents do not share state. In `memory` scope nothing persists to disk.
+In `project` scope (default), loop and task files are saved to `.pi/loops/loops.json` and `.pi/tasks/tasks.json` so they survive across chat sessions and process restarts in the same repository — mirroring pi-goal-x's `.pi/goals/` pattern. In `memory` scope nothing persists to disk.
 
 ### Recommended scope policy
 
-Keep `PI_LOOP_SCOPE=session` as the default.
+`PI_LOOP_SCOPE=project` is the default and best balance for normal use.
 
-- `session` is the best balance for normal use: it preserves loops/tasks across a session restart while isolating concurrent sessions and worktrees.
+- `project` is the default: loops and tasks persist across sessions and process restarts in the same repo, so a 5m cron loop survives closing and reopening pi.
+- `session` is best when you want each pi session isolated (e.g. concurrent worktrees, throwaway explorations). Loops disappear when the session ID changes.
 - `memory` is best for disposable scratch work, tests, or situations where you explicitly do not want any persisted loop/task state.
-- `project` should be opt-in for intentionally shared automation, because it allows multiple sessions in the same repo to see the same persisted state.
+
+### Re-arming loops after a restart
+
+Cron loops re-arm themselves automatically **only if they are bound to this session** (see Per-Session Bindings below). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` (programmatic equivalent: `LoopDelete({id, action: "resume"})`) to re-bind them.
+
+### Per-session bindings (multi-terminal parallelism)
+
+If you run two or three pi terminals in the same repo and want each one to fire a different subset of loops, use the bindings mechanism:
+
+- Each terminal has its own `.pi/loops/bindings-<sessionId>.json` file listing the loop IDs it has chosen to arm.
+- A fresh session (no bindings file yet) starts with **zero** loops armed (strict isolation). Run `/loop-resume <id>` or open the governor to bind loops for this terminal.
+- Terminal A binding loop #5 does **not** cause Terminal B to fire #5, because each session reads only its own bindings file and its trigger subscriptions are process-local.
+
+This is a deliberate behavior change from previous versions, where every session armed every active loop on start.
 
 
 

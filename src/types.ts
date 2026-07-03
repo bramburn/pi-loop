@@ -48,6 +48,12 @@ export interface LoopEntry {
   readOnly?: boolean;
   maxFires?: number;
   fireCount?: number;
+  /**
+   * The sessionId of the terminal that created this loop. Used by the
+   * Governor to partition loops into "My loops" and "Other terminals".
+   * Undefined for loops created before this field was introduced.
+   */
+  createdBy?: string;
 }
 
 export interface LoopStoreData {

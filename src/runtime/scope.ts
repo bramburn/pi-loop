@@ -35,3 +35,21 @@ export function resolveTaskStorePath(options: ScopeOptions, sessionId?: string):
   if (loopScope === "session") return undefined;
   return join(cwd, ".pi", "tasks", "tasks.json");
 }
+
+/**
+ * Resolves the per-session loop-bindings file. In project scope (default)
+ * this lives at `<cwd>/.pi/loops/bindings-<sessionId>.json`. In session scope
+ * the file lives at the same path (no conflict — each sessionId is unique).
+ * In memory scope returns undefined and the BindingsStore stays in-process.
+ *
+ * Concurrent sessions on the same repo each get their own file because the
+ * sessionId is embedded in the filename — no shared-state contention.
+ */
+export function resolveBindingsPath(options: ScopeOptions, sessionId?: string): string | undefined {
+  const cwd = options.cwd ?? process.cwd();
+  const { loopScope } = options;
+
+  if (loopScope === "memory") return undefined;
+  if (!sessionId) return undefined;
+  return join(cwd, ".pi", "loops", `bindings-${sessionId}.json`);
+}

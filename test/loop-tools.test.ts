@@ -9,10 +9,12 @@ function setup() {
   const triggerSystem = { add: vi.fn(), remove: vi.fn() };
   const scheduler = { nextFire: vi.fn(() => undefined) };
   const monitorManager = { get: vi.fn(() => undefined) };
+  const bindingsStore = { add: vi.fn(), has: vi.fn(() => false) };
   registerLoopTools({
     pi,
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
+    getBindingsStore: () => bindingsStore as any,
     getScheduler: () => scheduler as any,
     getMonitorManager: () => monitorManager as any,
     updateWidget: vi.fn(),
@@ -21,7 +23,7 @@ function setup() {
   });
   const text = async (name: string, args: any) =>
     (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
-  return { store, triggerSystem, text };
+  return { store, triggerSystem, bindingsStore, text };
 }
 
 describe("LoopCreate", () => {
@@ -35,7 +37,9 @@ describe("LoopCreate", () => {
     expect(out).toContain("Loop #1 created");
     expect(out).toContain("schedule:");
     expect(out).toContain("Recurring: true");
+    expect(out).toContain("Bound to this session");
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
     expect(h.store.get("1")?.trigger.type).toBe("cron");
   });
 
@@ -126,16 +130,17 @@ describe("LoopDelete", () => {
     await h.text("LoopDelete", { id: "1", action: "pause" });
     (h.triggerSystem.add as any).mockClear();
     const out = await h.text("LoopDelete", { id: "1", action: "resume" });
-    expect(out).toBe("Loop #1 resumed");
+    expect(out).toBe("Loop #1 resumed (status: active)");
     expect(h.store.get("1")?.status).toBe("active");
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
   });
 
-  it("resuming an already-active loop is a no-op (does not re-add trigger)", async () => {
+  it("re-arms an already-active loop so /loop-resume <id> can rebind event subscriptions", async () => {
     (h.triggerSystem.add as any).mockClear();
     const out = await h.text("LoopDelete", { id: "1", action: "resume" });
-    expect(out).toBe("Loop #1 resumed");
-    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(out).toBe("Loop #1 re-armed (status: active)");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
   });
 });
 

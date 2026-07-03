@@ -12,6 +12,7 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
+    createdBy?: string;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
@@ -25,6 +26,12 @@ interface LoopStoreLike {
 interface TriggerSystemLike {
   add(entry: LoopEntry): void;
   remove(id: string): void;
+}
+
+interface BindingsStoreLike {
+  add(id: string): void;
+  has(id: string): boolean;
+  readonly sessionId: string | undefined;
 }
 
 interface SchedulerLike {
@@ -44,6 +51,7 @@ export interface LoopToolsOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
+  getBindingsStore: () => BindingsStoreLike;
   getScheduler: () => SchedulerLike;
   getMonitorManager: () => MonitorManagerLike;
   updateWidget: () => void;
@@ -102,6 +110,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     pi,
     getStore,
     getTriggerSystem,
+    getBindingsStore,
     getScheduler,
     getMonitorManager,
     updateWidget,
@@ -132,8 +141,12 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 ## Trigger Types
 
 - **cron**: time-based. "30s" (rounded to 1m), "5m", "2h", "1d", or full cron like "0 9 * * 1-5"
-- **event**: fires on pi events like "tool_execution_start", "before_agent_start"
-- **hybrid**: both cron + event with debounce
+- **event**: fires on pi events like "tool_execution_start", "before_agent_start".
+- **hybrid**: both cron + event with debounce. Event filters support:
+  - regex:pattern - regex test against JSON-stringified event data (e.g., "regex:.*deploy.*")
+  - {"key":"value"} - exact key-value match (e.g., {"toolName":"LoopCreate"})
+
+  Example hybrid with filter: {"type":"hybrid","cron":"5m","event":{"source":"tool_execution_end","filter":"regex:.*build.*"},"debounceMs":30000}
 
 ## Parameters
 
@@ -208,9 +221,11 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         taskBacklog,
         readOnly,
         maxFires,
+        createdBy: getBindingsStore().sessionId,
       });
 
       getTriggerSystem().add(entry);
+      getBindingsStore().add(entry.id);
 
       if (trigger.type === "event" && trigger.source === "monitor:done" && trigger.filter) {
         try {
@@ -245,6 +260,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
         (bootstrapped ? "Backlog: initial wake queued for existing pending tasks\n" : "") +
         (isTaskSystemReady() ? "" : "Task system: not ready yet — autoTask may not fire until native fallback or pi-tasks becomes available\n") +
+        "Bound to this session. Will auto-rearm on session restart.\n" +
         `ID: ${entry.id} (use LoopDelete to cancel)`
       ));
     },
@@ -319,13 +335,16 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
         const before = getStore().get(id);
         const entry = getStore().resume(id);
         if (!entry) return Promise.resolve(textResult(`Loop #${id} not found`));
-        // Only re-arm the trigger if the loop was actually paused. An
-        // already-active resume is a no-op (idempotent).
-        if (before && before.status === "paused" && entry.status === "active") {
-          getTriggerSystem().add(entry);
-        }
+        // Always re-arm the trigger on resume — this is what makes
+        // `/loop-resume <id>` (and LoopDelete { action: "resume" }) the
+        // canonical way to re-attach event/hybrid subscriptions after a
+        // session restart in project scope. The cron scheduler already
+        // re-arms itself on start(), so for cron loops this is a no-op.
+        getTriggerSystem().add(entry);
+        const transitioned = before?.status === "paused" && entry.status === "active";
         updateWidget();
-        return Promise.resolve(textResult(`Loop #${id} resumed`));
+        const tag = transitioned ? "resumed" : "re-armed";
+        return Promise.resolve(textResult(`Loop #${id} ${tag} (status: ${entry.status})`));
       }
 
       getTriggerSystem().remove(id);

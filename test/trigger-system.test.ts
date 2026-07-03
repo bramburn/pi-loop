@@ -272,4 +272,41 @@ describe("TriggerSystem", () => {
     );
     expect(fireCalls).toHaveLength(1);
   });
+
+  it("add() twice for same event trigger registers only one listener (G-45)", () => {
+    const eventTrigger: Trigger = { type: "event", source: "dup_event" };
+    const entry = store.create(eventTrigger, "dup event test", { recurring: true });
+    system.add(entry);
+    system.add(entry); // duplicate add
+
+    const onCalls = (pi.events.on as any).mock.calls.filter(
+      (c: string[]) => c[0] === "dup_event"
+    );
+    // Exactly one listener registered — not two
+    expect(onCalls).toHaveLength(1);
+
+    pi.events.emit("dup_event", {});
+    const fireCalls = (pi.events.emit as any).mock.calls.filter(
+      (c: string[]) => c[0] === "loop:fire"
+    );
+    // Loop fires exactly once, not twice
+    expect(fireCalls).toHaveLength(1);
+  });
+
+  it("add() twice for same hybrid trigger registers only one event listener (G-45)", () => {
+    const hybridTrigger: Trigger = {
+      type: "hybrid",
+      cron: "*/5 * * * *",
+      event: { source: "dup_hybrid" },
+      debounceMs: 0,
+    };
+    const entry = store.create(hybridTrigger, "dup hybrid test", { recurring: true });
+    system.add(entry);
+    system.add(entry); // duplicate add
+
+    const onCalls = (pi.events.on as any).mock.calls.filter(
+      (c: string[]) => c[0] === "dup_hybrid"
+    );
+    expect(onCalls).toHaveLength(1);
+  });
 });

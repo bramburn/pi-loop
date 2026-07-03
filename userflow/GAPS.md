@@ -407,53 +407,97 @@ No backup, no error message to user.
 
 ---
 
+8. **G-36 (High, Bindings)**: First-ever `session_switch` creates an orphaned BindingsStore at `undefined` path via `setSessionId(undefined)`, then immediately swaps to the correct one. On subsequent `before_agent_start` calls, the orphaned undefined-path store is still in memory. More critically: if another terminal creates the bindings file between session_switch and the Governor opening, the current terminal's BindingsStore has stale in-memory data and never reloads. Fix: remove `setSessionId(undefined)` from session_switch; it serves no purpose since `_sessionId` starts as `undefined` at extension load.
+
 ## Gap Summary Table
 
 | ID | Severity | Gap | Files Affected |
 |----|----------|-----|----------------|
-| G-01 | High | No `LoopUpdate` tool | `src/tools/loop-tools.ts` |
-| G-02 | Medium | No `TaskPrune` tool | `src/tools/native-task-tools.ts` |
-| G-03 | Medium | No `MonitorDelete` tool | `src/tools/monitor-tools.ts` |
-| G-04 | Medium | No `/monitors` command | `src/commands/` |
-| G-05 | Low | No `LoopResume` tool | `src/tools/loop-tools.ts` |
-| G-06 | High | `expireEventLoops` leaks triggers | `src/store.ts`, `src/trigger-system.ts` |
-| G-07 | High | `clearExpired` leaks triggers | `src/store.ts`, `src/scheduler.ts` |
-| G-08 | Medium | Hybrid cron not cancelled on event | `src/trigger-system.ts`, `src/scheduler.ts` |
-| G-09 | Low | onDone loop orphaned cleanup | `src/tools/monitor-tools.ts` |
-| G-10 | High | Tasks unavailable when pi-tasks present | `src/index.ts` |
-| G-11 | Low | `maxFires` ignored for non-recurring | `src/scheduler.ts` |
-| G-12 | Low | No `subject` length validation | `src/commands/tasks-command.ts` |
+| G-01 | ~~High~~ **Open — #42** | No `LoopUpdate` tool | `src/tools/loop-tools.ts` |
+| G-02 | ~~Medium~~ **Open — #45** | No `TaskPrune` tool | `src/tools/native-task-tools.ts` |
+| G-03 | ~~Medium~~ **Open — #44** | No `MonitorDelete` tool | `src/tools/monitor-tools.ts` |
+| G-04 | ~~Medium~~ **Open — #42** | No `/monitors` command | `src/commands/` |
+| G-05 | ~~Low~~ **Open — #42** | No `LoopResume` tool | `src/tools/loop-tools.ts` |
+| G-06 | ~~High~~ **Closed in code** | `expireEventLoops` leaks triggers — `onLoopRemoved?.(id)` called in store.ts | `src/store.ts` |
+| G-07 | ~~High~~ **Closed in code** | `clearExpired` leaks triggers — `onLoopRemoved?.(id)` called in store.ts | `src/store.ts` |
+| G-08 | ~~Medium~~ **Open — #46** | Hybrid cron timer not cancelled on event — debounce implicit, not explicit | `src/trigger-system.ts`, `src/scheduler.ts` |
+| G-09 | ~~Low~~ **Open — #46** | onDone loop orphaned cleanup — monitor completes before tool returns | `src/tools/monitor-tools.ts` |
+| G-10 | ~~High~~ **Open — #45** | Tasks unavailable when pi-tasks present | `src/index.ts` |
+| G-11 | ~~Low~~ **Open — #46** | `maxFires` enforcement for non-recurring loops in scheduler pump() needs verification | `src/scheduler.ts` |
+| G-12 | ~~Low~~ **Closed #47** | TaskCreate subject length validated at 80 chars in interactive mode | `src/commands/tasks-command.ts` |
 | G-13 | Low | Widget monitor count not interactive | `src/ui/widget.ts` |
-| G-14 | Medium | File lock retry busy-wait | `src/reducer-backed-store.ts` |
-| G-15 | Low | Event filter format undocumented | `src/types.ts`, `src/trigger-system.ts` |
-| G-16 | Low | No `/tasks` interactive menu | `src/commands/tasks-command.ts` |
-| G-17 | Medium | `maxFires` enforcement inconsistent | `src/trigger-system.ts`, `src/scheduler.ts` |
-| G-18 | Low | AUTO_TASK_WORKER_THRESHOLD not configurable | `src/runtime/task-backlog-runtime.ts` |
-| G-19 | Medium | Native task events conflict with pi-tasks | `src/runtime/task-events.ts` |
+| G-14 | ~~Medium~~ **Open — #46** | File lock retry busy-wait — should use setTimeout callback pattern | `src/reducer-backed-store.ts` |
+| G-15 | ~~Low~~ **Closed #47** | Event filter formats documented in LoopCreate description | `src/types.ts`, `src/trigger-system.ts` |
+| G-16 | ~~Low~~ **Closed #47** | `/tasks` interactive menu already implemented | `src/commands/tasks-command.ts` |
+| G-17 | ~~Medium~~ **Closed in code** | `maxFires` checked before `onFire()` in trigger-system.ts | `src/trigger-system.ts` |
+| G-18 | ~~Low~~ **Open — #45** | AUTO_TASK_WORKER_THRESHOLD not configurable — hardcoded to 5 | `src/runtime/task-backlog-runtime.ts` |
+| G-19 | ~~Medium~~ **Open — #45** | Native task events conflict with pi-tasks — not gated by isTasksAvailable() | `src/runtime/task-events.ts` |
 | G-20 | Low | LoopList shows internal monitor:done loops | `src/tools/loop-tools.ts` |
-| G-21 | Critical | `sh -c` hardcoded — MonitorCreate fails on Windows | `src/monitor-manager.ts` |
-| G-22 | High | SIGTERM doesn't work on Windows | `src/monitor-manager.ts` |
-| G-23 | High | Test suite uses Unix-only commands | `test/monitor-manager.test.ts` |
-| G-24 | Medium | Busy-wait lock retry | `src/reducer-backed-store.ts` |
-| G-25 | Medium | Silent corrupt-file reset | `src/reducer-backed-store.ts` |
+| G-21 | ~~Critical~~ **Open — #44** | `sh -c` hardcoded — MonitorCreate fails on Windows | `src/monitor-manager.ts` |
+| G-22 | ~~High~~ **Open — #44** | SIGTERM doesn't work on Windows — needs taskkill/TerminateProcess | `src/monitor-manager.ts` |
+| G-23 | ~~High~~ **Closed #8** | Test suite uses Unix-only commands | `test/monitor-manager.test.ts` |
+| G-24 | ~~Medium~~ **Open — #46** | Busy-wait lock retry (G-14 duplicate, tracked in #46) | `src/reducer-backed-store.ts` |
+| G-25 | ~~Medium~~ **Open — #46** | Silent corrupt-file reset — no backup, no user error message | `src/reducer-backed-store.ts` |
+| G-26 | ~~High~~ **Closed #18** | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
+| G-27 | ~~High~~ **Closed #23** | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
+| G-28 | ~~Medium~~ **Closed #24/#30** | Governor stale loop list — applyPending now warns on orphaned loops | `src/commands/loop-command.ts` |
+| G-29 | ~~Medium~~ **Closed #28** | Governor Continue diff shows loop prompt alongside ID for each pending change | `src/commands/loop-command.ts` |
+| G-30 | ~~Low~~ **Closed #20** | Governor does not warn when arming a paused loop — visual ~ marker + warning on arm | `src/commands/loop-command.ts` |
+| G-31 | ~~Low~~ **Open — #27** | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
+| G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
+| G-33 | ~~Low~~ **Closed #26** | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` — full hybrid spec now shown in Governor + /loop view-loops |
+| G-34 | ~~Low~~ **Closed #22** | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
+| G-35 | ~~Low~~ **Closed #21** | Governor picker has "Disarm all" sentinel | `src/commands/loop-command.ts` |
+| G-36 | ~~High~~ **Open — #29** | First session_switch creates orphaned undefined-path BindingsStore | `src/runtime/session-runtime.ts`, `src/index.ts` |
+| G-37 | ~~Medium~~ **Closed #30/#24/#36** | Governor applyPending silently skips deleted loops — warning now emitted + orphaned bindings removed | `src/commands/loop-command.ts` |
+| G-38 | ~~Low~~ **Closed #31** | Governor Continue preview warns about paused loops in pending arm list | `src/commands/loop-command.ts` |
+| G-39 | ~~Low~~ **Open — #32** | session_switch always creates two BindingsStore instances | `src/runtime/session-runtime.ts` |
+| G-40 | ~~Low~~ **Closed #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
+| G-41 | ~~Medium~~ **Closed #34** | LoopCreate auto-binds the creating terminal's session | `src/commands/loop-command.ts` |
+| G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
+| G-43 | ~~Medium~~ **Closed #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag captured before applyPending | `src/commands/loop-command.ts` |
+| G-44 | ~~Low~~ **Open — #45** | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
+| G-45 | High **Closed #38** | TriggerSystem.add / CronScheduler.add dedup guards prevent duplicate fires | `src/trigger-system.ts`, `src/scheduler.ts` |
+| G-46 | Medium **Open — #39** | Recurring loop notification key is loop:<id> — intermediate fires overwritten in queue | `src/runtime/notification-runtime.ts` |
+| G-47 | Low **Open — #40** | widget.dispose() never called on session_shutdown — stale status bar after session ends | `src/runtime/session-runtime.ts` |
+| G-48 | Medium **Open — #42** | Governor workflow missing LoopUpdate/LoopResume tools + /monitors + /tasks interactive menus | `src/tools/`, `src/commands/` |
+| G-49 | Medium **Open — #46** | Operational gaps: hybrid debounce design, onDone orphans, maxFires, lock retry, corrupt file | `src/` |
+| G-50 | Low **Closed — #19** | Governor Continue diff shows committed Armed (unchanged) alongside pending changes — prevents false alarm for users with pre-existing bindings | `src/commands/loop-command.ts` |
 
 ---
 
 ## High-Priority Fixes
 
-1. **G-06 + G-07**: Add `triggerSystem.remove(id)` calls to `expireEventLoops()` and `clearExpired()` — or create a unified `expireLoop(id)` method in LoopStore that coordinates store + trigger cleanup.
+### Critical (2026-07-03 review)
 
-2. **G-01**: Implement `LoopUpdate` tool — update prompt, trigger, maxFires.
+1. **G-21 + G-22 (#44, Critical/High)**: MonitorCreate/MonitorStop fail on Windows:
+   - Replace `spawn("sh", ["-c", ...])` with `process.platform === "win32" ? "cmd" : "sh"` + args, or use `cross-spawn`/`execa`.
+   - Replace `proc.kill("SIGTERM")` with `taskkill /PID <pid>` or `TerminateProcess()` on Windows.
 
-3. **G-10**: Consider making native tasks available alongside pi-tasks rather than as a fallback replacement.
+2. **G-45 (#38, Critical)**: `TriggerSystem.add()` and `CronScheduler.add()` have no duplicate-guard. Calling `add()` twice registers duplicate `pi.events.on()` listeners and duplicate `setTimeout` timers. Fix: check `eventSubscriptions.get(source)?.has(entry.id)` and `fireTimes.has(entry.id)` before registering.
 
-4. **G-17**: Review `maxFires` enforcement across both `TriggerSystem.fireLoop()` and `CronScheduler.pump()` — ensure consistent behavior for all trigger types.
+3. **G-46 (#39, Medium)**: Recurring loop notification key is `loop:<id>` — every fire overwrites the previous in `notificationsByKey`. Fix: use `loop:<id>:<timestamp>` as the key for all notifications.
 
-5. **G-21 (Critical)**: Replace `sh -c` with cross-platform shell detection:
-   ```typescript
-   const shell = process.platform === "win32" ? "cmd" : "/bin/sh";
-   const shellArgs = process.platform === "win32" ? ["/c", command] : ["-c", command];
-   ```
-   Or use `execa` / `cross-spawn` for automatic handling.
+### High-Priority (Governor + Bindings)
 
-6. **G-22 (High)**: On Windows, replace SIGTERM with `taskkill` or `TerminateProcess()` for graceful shutdown.
+4. **G-26 + G-27 + G-28 (closed #18/#23/#24/#30)**: Governor bugs — Continue with no pending exits picker, session_switch arms wrong bindings, applyPending silently skips deleted loops. All three now fixed.
+
+5. **G-36 (#29, High)**: First-ever `session_switch` creates orphaned undefined-path BindingsStore. Fix: remove `setSessionId(undefined)` from session_switch — `_sessionId` starts as `undefined` at extension load.
+
+6. **G-48 (#42, Medium)**: Implement `LoopUpdate`, `LoopResume`, `/monitors`, and `/tasks` interactive menus.
+
+7. **G-49 (#46, Medium)**: Operational gaps — hybrid cron debounce design (G-08), onDone orphan cleanup (G-09), maxFires non-recurring enforcement (G-11), file lock busy-wait (G-14/G-24), silent corrupt-file reset (G-25).
+
+8. **G-45 (#45, Medium)**: Task system gaps — native tasks coexist with pi-tasks (G-10), configurable threshold (G-18), gated event emission (G-19), Governor terminal annotation (G-44).
+
+### Deferred
+
+9. **G-06 + G-07**: Add `triggerSystem.remove(id)` calls — closed in code via `onLoopRemoved` callback chain.
+
+10. **G-10**: Consider making native tasks coexist alongside pi-tasks (needs design proposal).
+
+11. **G-17**: `maxFires` enforcement review — closed in code (checked before `onFire()` in trigger-system.ts).
+
+12. **G-23**: Test suite Unix-only commands — closed #8 (cross-platform test compatibility).
+
+13. **G-13**: Widget monitor count not interactive — deferred (TUI framework doesn't support clickable status-bar items).
