@@ -180,4 +180,57 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       return scheduleLoop(ui, trimmed);
     },
   });
+
+  pi.registerCommand("loop-resume", {
+    description: "Re-arm a stored loop by ID (e.g., after a session restart). Usage: /loop-resume <id>",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const trimmed = args.trim();
+      const ui = ctx.ui;
+
+      if (!trimmed) {
+        const loops = getStore().list();
+        if (loops.length === 0) {
+          ui.notify("No stored loops to re-arm. Use /loop to create one first.", "info");
+          return;
+        }
+        const choices = loops.map((l) => {
+          const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
+          const triggerDesc = l.trigger.type === "cron"
+            ? `cron: ${l.trigger.schedule}`
+            : l.trigger.type === "event"
+              ? `event: ${l.trigger.source}`
+              : `hybrid: ${l.trigger.cron}`;
+          return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
+        });
+        choices.push("< Back");
+        const selected = await ui.select("Re-arm which loop?", choices);
+        if (!selected || selected === "< Back") return;
+        const match = selected.match(/#(\d+)/);
+        if (!match) return;
+        await rearmLoop(ui, match[1]);
+        return;
+      }
+
+      const id = trimmed.split(/\s+/)[0];
+      if (!/^\d+$/.test(id)) {
+        ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-resume <id>.`, "error");
+        return;
+      }
+      await rearmLoop(ui, id);
+    },
+  });
+
+  async function rearmLoop(ui: ExtensionUIContext, id: string): Promise<void> {
+    const before = getStore().get(id);
+    if (!before) {
+      ui.notify(`Loop #${id} not found in the store. Use /loop to create it first.`, "error");
+      return;
+    }
+    const entry = getStore().resume(id) ?? before;
+    getTriggerSystem().add(entry);
+    updateWidget();
+    const transitioned = before.status !== entry.status;
+    const tag = transitioned ? "resumed" : "re-armed";
+    ui.notify(`Loop #${entry.id} ${tag} (status: ${entry.status})`, "info");
+  }
 }

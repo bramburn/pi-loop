@@ -319,13 +319,16 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
         const before = getStore().get(id);
         const entry = getStore().resume(id);
         if (!entry) return Promise.resolve(textResult(`Loop #${id} not found`));
-        // Only re-arm the trigger if the loop was actually paused. An
-        // already-active resume is a no-op (idempotent).
-        if (before && before.status === "paused" && entry.status === "active") {
-          getTriggerSystem().add(entry);
-        }
+        // Always re-arm the trigger on resume — this is what makes
+        // `/loop-resume <id>` (and LoopDelete { action: "resume" }) the
+        // canonical way to re-attach event/hybrid subscriptions after a
+        // session restart in project scope. The cron scheduler already
+        // re-arms itself on start(), so for cron loops this is a no-op.
+        getTriggerSystem().add(entry);
+        const transitioned = before?.status === "paused" && entry.status === "active";
         updateWidget();
-        return Promise.resolve(textResult(`Loop #${id} resumed`));
+        const tag = transitioned ? "resumed" : "re-armed";
+        return Promise.resolve(textResult(`Loop #${id} ${tag} (status: ${entry.status})`));
       }
 
       getTriggerSystem().remove(id);

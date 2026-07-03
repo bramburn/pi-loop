@@ -4,7 +4,7 @@ Slash commands are the agent-facing menu surface, registered via `pi.registerCom
 
 ## Files
 
-- `loop-command.ts` — `/loop [interval] [prompt]` and the interactive top-level menu.
+- `loop-command.ts` — `/loop [interval] [prompt]` and the interactive top-level menu. Also registers `/loop-resume <id>` to re-arm a stored loop (used after a session/process restart in project scope when an event/hybrid trigger subscription was lost).
 - `tasks-command.ts` — `/tasks [subject]` and the native task viewer.
 - `monitors-command.ts` — `/monitors` for managing background processes.
 

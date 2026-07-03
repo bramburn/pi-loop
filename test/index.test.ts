@@ -14,12 +14,17 @@ describe("native task fallback", () => {
     originalCwd = process.cwd();
     cwd = mkdtempSync(join(tmpdir(), "pi-loop-index-"));
     process.chdir(cwd);
+    // Pin to session scope so these tests keep exercising the
+    // per-session storage layout (they were written before project scope
+    // became the default).
+    process.env.PI_LOOP_SCOPE = "session";
   });
 
   afterEach(() => {
     process.chdir(originalCwd);
     rmSync(cwd, { recursive: true, force: true });
     vi.useRealTimers();
+    delete process.env.PI_LOOP_SCOPE;
   });
 
   it("registers native task tools when pi-tasks is unavailable", async () => {
@@ -1638,7 +1643,39 @@ describe("monitor tool wrappers", () => {
     expect(listResult.content[0].text).toContain("[stopped]");
   });
 
-  it("defaults to session-scoped loop files when PI_LOOP_SCOPE is unset", async () => {
+  it("defaults to project-scoped loop files when PI_LOOP_SCOPE is unset", async () => {
+    delete process.env.PI_LOOP_SCOPE;
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const loopCreate = toolMap.get("LoopCreate");
+    expect(loopCreate?.execute).toBeDefined();
+
+    await loopCreate!.execute?.("1", {
+      trigger: "tool_execution_start",
+      prompt: "Project scoped loop",
+      triggerType: "event",
+      recurring: true,
+    });
+
+    expect(existsSync(join(cwd, ".pi", "loops", "loops.json"))).toBe(true);
+    expect(existsSync(join(cwd, ".pi", "loops", "loops-test-session.json"))).toBe(false);
+  });
+
+  it("uses session-scoped loop files when PI_LOOP_SCOPE=session", async () => {
+    process.env.PI_LOOP_SCOPE = "session";
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);

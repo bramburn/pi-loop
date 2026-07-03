@@ -51,7 +51,11 @@ function isStaleExtensionContextError(error: unknown): boolean {
 export default function (pi: ExtensionAPI) {
   const piLoopEnv = process.env.PI_LOOP;
   const piLoopScope = process.env.PI_LOOP_SCOPE as "memory" | "session" | "project" | undefined;
-  let loopScope: "memory" | "session" | "project" = piLoopScope ?? "session";
+  // Default to "project" so loops persist across chat sessions at
+  // <cwd>/.pi/loops/loops.json (mirroring pi-goal-x's .pi/goals/ pattern).
+  // Override with PI_LOOP_SCOPE=session for the per-session behaviour, or
+  // PI_LOOP_SCOPE=memory to disable on-disk persistence entirely.
+  let loopScope: "memory" | "session" | "project" = piLoopScope ?? "project";
 
   const getScopeOptions = () => ({ piLoopEnv, loopScope });
 

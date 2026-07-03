@@ -44,6 +44,19 @@ src/
 ## File Locking Pattern
 Copy TaskStore from pi-tasks: `O_EXCL` lockfile, stale PID detection, `LOCK_RETRY_MS`/`LOCK_MAX_RETRIES`
 
+## Loop Persistence Scope
+`PI_LOOP_SCOPE` controls where loops and native fallback tasks are stored. The default is **`project`** so loops persist across chat sessions and survive process restarts, mirroring pi-goal-x's `.pi/goals/` pattern.
+
+| Scope | Location (relative to cwd) | Survives session switch? | Survives process restart? |
+|-------|----------------------------|--------------------------|---------------------------|
+| `project` (default) | `.pi/loops/loops.json`, `.pi/tasks/tasks.json` | yes | yes |
+| `session` | `.pi/loops/loops-<sessionId>.json`, `.pi/tasks/tasks-<sessionId>.json` | no | no |
+| `memory` | in-process only | no | no |
+
+Override with `PI_LOOP_SCOPE=session` for per-session isolation, `PI_LOOP_SCOPE=memory` to disable on-disk persistence entirely, or `PI_LOOP=/abs/path` (or `PI_LOOP=./relative.json`) to pin a custom location.
+
+After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` (or `LoopDelete({id, action: "resume"})`) to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
+
 ## Trigger Types
 Three trigger types, all stored as `LoopEntry.trigger`:
 - `{ type: "cron", schedule: "*/5 * * * *" }` — timer-based

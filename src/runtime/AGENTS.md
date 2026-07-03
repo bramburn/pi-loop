@@ -10,7 +10,7 @@ Runtimes coordinate behaviour that crosses tool/command boundaries: session life
 - `task-rpc.ts` — Bridges native task tools to `@tintinweb/pi-tasks` over the event bus when pi-tasks is loaded.
 - `task-events.ts` — Defines `emitNativeTaskEvent` for the `tasks:*` family of events.
 - `monitor-ondone-runtime.ts` — Wires `MonitorManager.onComplete` callbacks to `LoopStore.delete` so the one-shot `monitor:done` wake loop is cleaned up after delivery.
-- `scope.ts` — `resolveLoopStorePath` and `resolveTaskStorePath` based on `PI_LOOP_SCOPE` and `PI_LOOP` env vars.
+- `scope.ts` — `resolveLoopStorePath` and `resolveTaskStorePath` based on `PI_LOOP_SCOPE` and `PI_LOOP` env vars. Default scope is `project` so loops and tasks persist across sessions under `.pi/loops/loops.json` and `.pi/tasks/tasks.json` (mirrors pi-goal-x's `.pi/goals/` pattern).
 
 ## Conventions
 

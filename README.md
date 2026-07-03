@@ -43,6 +43,13 @@ TaskDelete id="1"
 /loop 5m check the deploy     # 5-minute cron loop
 ```
 
+`/loop-resume <id>` — re-arm a stored loop after a session/process restart. Use this when a project-scoped event/hybrid loop's trigger subscription was lost. Idempotent: also works on paused loops to unpause + re-arm.
+
+```text
+/loop-resume 5        # re-arm loop #5 by id
+/loop-resume          # picker: choose from all stored loops
+```
+
 `/tasks` — interactive native task viewer/manager, only registered when `pi-tasks` is absent.
 
 ```text
@@ -105,18 +112,22 @@ Only task counts and the single active/next task are shown there so attention st
 | Variable | Effect | Default |
 |---|---|---|
 | `PI_LOOP` | Store path override. `off` to disable, absolute or project-relative path | unset → derived from `PI_LOOP_SCOPE` |
-| `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared) | `session` |
+| `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared, persists across sessions) | `project` |
 | `PI_LOOP_DEBUG` | Debug logging to stderr | unset |
 
-In `session` scope (default), loop and task files are saved per session ID (e.g. `.pi/loops/loops-<sessionId>.json` and `.pi/tasks/tasks-<sessionId>.json`) so concurrent sessions and worktree agents do not share state. In `memory` scope nothing persists to disk.
+In `project` scope (default), loop and task files are saved to `.pi/loops/loops.json` and `.pi/tasks/tasks.json` so they survive across chat sessions and process restarts in the same repository — mirroring pi-goal-x's `.pi/goals/` pattern. In `memory` scope nothing persists to disk.
 
 ### Recommended scope policy
 
-Keep `PI_LOOP_SCOPE=session` as the default.
+`PI_LOOP_SCOPE=project` is the default and best balance for normal use.
 
-- `session` is the best balance for normal use: it preserves loops/tasks across a session restart while isolating concurrent sessions and worktrees.
+- `project` is the default: loops and tasks persist across sessions and process restarts in the same repo, so a 5m cron loop survives closing and reopening pi.
+- `session` is best when you want each pi session isolated (e.g. concurrent worktrees, throwaway explorations). Loops disappear when the session ID changes.
 - `memory` is best for disposable scratch work, tests, or situations where you explicitly do not want any persisted loop/task state.
-- `project` should be opt-in for intentionally shared automation, because it allows multiple sessions in the same repo to see the same persisted state.
+
+### Re-arming loops after a restart
+
+Cron loops re-arm themselves automatically after a project-scope restart (the scheduler pumps every 30s via the heartbeat in `session-runtime.ts`). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` (programmatic equivalent: `LoopDelete({id, action: "resume"})`) to re-bind them.
 
 
 

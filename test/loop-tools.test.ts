@@ -126,16 +126,17 @@ describe("LoopDelete", () => {
     await h.text("LoopDelete", { id: "1", action: "pause" });
     (h.triggerSystem.add as any).mockClear();
     const out = await h.text("LoopDelete", { id: "1", action: "resume" });
-    expect(out).toBe("Loop #1 resumed");
+    expect(out).toBe("Loop #1 resumed (status: active)");
     expect(h.store.get("1")?.status).toBe("active");
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
   });
 
-  it("resuming an already-active loop is a no-op (does not re-add trigger)", async () => {
+  it("re-arms an already-active loop so /loop-resume <id> can rebind event subscriptions", async () => {
     (h.triggerSystem.add as any).mockClear();
     const out = await h.text("LoopDelete", { id: "1", action: "resume" });
-    expect(out).toBe("Loop #1 resumed");
-    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(out).toBe("Loop #1 re-armed (status: active)");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
   });
 });
 
