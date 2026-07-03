@@ -414,8 +414,8 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
   }
 
   function buildDiffSummary(
-    _loops: LoopEntry[],
-    _bindings: BindingsStore,
+    loops: LoopEntry[],
+    bindings: BindingsStore,
     pending: Map<string, Toggle>,
   ): string {
     if (pending.size === 0) return "No changes.";
@@ -425,7 +425,20 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       if (toggle === "arm") arm.push(`#${id}`);
       else disarm.push(`#${id}`);
     }
+
+    // Show currently armed loops that will remain armed after pending changes,
+    // so users can see the full picture when they have pre-existing bindings.
+    const willRemainArmed = loops
+      .filter((l) => {
+        if (!bindings.has(l.id)) return false;
+        return pending.get(l.id) !== "disarm";
+      })
+      .map((l) => `#${l.id}`);
+
     const lines: string[] = [];
+    if (willRemainArmed.length > 0) {
+      lines.push(`Armed: ${willRemainArmed.join(", ")}  (unchanged)`);
+    }
     if (arm.length > 0) lines.push(`Arm: ${arm.join(", ")}`);
     if (disarm.length > 0) lines.push(`Disarm: ${disarm.join(", ")}`);
     return lines.join("\n");

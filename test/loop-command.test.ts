@@ -459,6 +459,80 @@ describe("/loop-resume command — governor path", () => {
     expect(h.ui.notify).not.toHaveBeenCalledWith("No changes to apply.", "info");
   });
 
+  it("Continue diff shows currently-armed loops alongside pending changes", async () => {
+    // Loop #1 is already bound (pre-existing binding from previous session).
+    // User arms loop #2 in this session.
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
+    h.bindingsStore.add("1"); // pre-existing binding
+
+    // 1) picker: toggle #2 on → pending = {2: "arm"}
+    // 2) picker: Continue → diff shows Armed (unchanged) for #1 + Arm for #2
+    h.ui.select
+      .mockResolvedValueOnce("[ ] #2 [active] beta (cron: */10 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Armed: #1  (unchanged)"),
+    );
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Arm: #2"),
+    );
+  });
+
+  it("Continue diff shows only pending changes when no pre-existing bindings", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo", { recurring: true });
+    // No pre-existing bindings.
+
+    // 1) picker: toggle loop on
+    // 2) picker: Continue → diff shows only "Arm: #1"
+    h.ui.select
+      .mockResolvedValueOnce("[ ] #1 [active] solo (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "Arm: #1");
+  });
+
+  it("Continue diff excludes loops being disarmed from Armed (unchanged) list", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
+    h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
+    h.bindingsStore.add("1");
+    h.bindingsStore.add("2");
+
+    // User disarms loop #1; #2 stays armed.
+    // Diff should show: Armed: #2 (unchanged) + Disarm: #1
+    h.ui.select
+      .mockResolvedValueOnce("[x] #1 [active] alpha (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Armed: #2  (unchanged)"),
+    );
+    expect(h.ui.confirm).toHaveBeenCalledWith(
+      "Apply changes?",
+      expect.stringContaining("Disarm: #1"),
+    );
+    // Loop #1 should NOT appear in the unchanged list
+    // Confirm was called once with both lines — verify the combined string
+    const confirmCall = h.ui.confirm.mock.calls[0][1] as string;
+    expect(confirmCall).not.toContain("Armed: #1");  // #1 was disarmed, not unchanged
+  });
+
   // Helper: toggle a loop row and then delete the loop before OK is clicked.
   // This simulates another terminal deleting the loop while the Governor is open.
   function setupOrphanedBeforeOk(
