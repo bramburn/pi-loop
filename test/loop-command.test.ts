@@ -813,7 +813,7 @@ describe("/loop-resume command — governor path", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "existing-loop", { recurring: true });
     // Simulate a second loop added externally: create it after the Governor is open
     // by having the store return a fresh list on the Refresh call.
-    const freshLoop = h.store.create({ type: "cron", schedule: "*/3 * * * *" }, "fresh-loop", {
+    h.store.create({ type: "cron", schedule: "*/3 * * * *" }, "fresh-loop", {
       recurring: true,
     });
 

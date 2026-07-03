@@ -52,8 +52,8 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     hasPendingMessages: false,
   };
   let flushPromise: Promise<void> | undefined;
-  let notificationCoordinatorDelivered = false;
-  let notificationCoordinatorDeliveredSuccessfully = false;
+  let _notificationCoordinatorDelivered = false;
+  let _notificationCoordinatorDeliveredSuccessfully = false;
 
   const notificationReducerHandler: ReducerHandler = (incoming: ReducerEvent) => {
     const result = reduceNotificationState(notificationState, incoming as NotificationReducerEvent);
@@ -66,8 +66,8 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     effectHandlers: {
       REQUEST_NOTIFICATION_FLUSH: () => {},
       DELIVER_NOTIFICATION: async (effect: ReducerEffect) => {
-        notificationCoordinatorDelivered = true;
-        notificationCoordinatorDeliveredSuccessfully = await deliverNotification(
+        _notificationCoordinatorDelivered = true;
+        _notificationCoordinatorDeliveredSuccessfully = await deliverNotification(
           (effect.payload as { notification: ReducerNotification }).notification,
         );
       },
@@ -161,8 +161,8 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
 
       while (true) {
         if (Object.keys(notificationState.notificationsByKey).length === 0) return;
-        notificationCoordinatorDelivered = false;
-        notificationCoordinatorDeliveredSuccessfully = false;
+        _notificationCoordinatorDelivered = false;
+        _notificationCoordinatorDeliveredSuccessfully = false;
         await notificationCoordinator.dispatch({
           type: "NOTIFICATION_FLUSH_REQUESTED",
           at: Date.now(),
