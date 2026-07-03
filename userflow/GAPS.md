@@ -447,13 +447,13 @@ No backup, no error message to user.
 | G-32 | ~~Low~~ **Open — #25** | Governor lacks Refresh sentinel | `src/commands/loop-command.ts` |
 | G-33 | ~~Low~~ **Closed #26** | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` — full hybrid spec now shown in Governor + /loop view-loops |
 | G-34 | ~~Low~~ **Closed #22** | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
-| G-35 | ~~Low~~ **Open — #21** | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
+| G-35 | ~~Low~~ **Closed #21** | Governor picker has "Disarm all" sentinel | `src/commands/loop-command.ts` |
 | G-36 | ~~High~~ **Open — #29** | First session_switch creates orphaned undefined-path BindingsStore | `src/runtime/session-runtime.ts`, `src/index.ts` |
 | G-37 | ~~Medium~~ **Closed #30/#24/#36** | Governor applyPending silently skips deleted loops — warning now emitted + orphaned bindings removed | `src/commands/loop-command.ts` |
-| G-38 | ~~Low~~ **Open — #31** | Governor Continue preview doesn't warn about paused loops pending arm | `src/commands/loop-command.ts` |
+| G-38 | ~~Low~~ **Closed #31** | Governor Continue preview warns about paused loops in pending arm list | `src/commands/loop-command.ts` |
 | G-39 | ~~Low~~ **Open — #32** | session_switch always creates two BindingsStore instances | `src/runtime/session-runtime.ts` |
-| G-40 | ~~Low~~ **Open — #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
-| G-41 | ~~Medium~~ **Open — #34** | LoopCreate does not auto-bind the creating terminal's session | `src/commands/loop-command.ts` |
+| G-40 | ~~Low~~ **Closed #33** | BindingsStore lacks a reload() method for external consumers | `src/runtime/bindings-store.ts` |
+| G-41 | ~~Medium~~ **Closed #34** | LoopCreate auto-binds the creating terminal's session | `src/commands/loop-command.ts` |
 | G-42 | ~~Low~~ **Open — #35** | Human-readable debounceMs format in Governor + /loop rows | `src/commands/loop-command.ts` |
 | G-43 | ~~Medium~~ **Closed #37** | Governor Continue+OK with XOR-noop pending exits silently — dirty flag captured before applyPending | `src/commands/loop-command.ts` |
 | G-44 | ~~Low~~ **Open — #45** | Governor cannot distinguish which loops are owned by other terminals in project scope | `src/commands/loop-command.ts` |
