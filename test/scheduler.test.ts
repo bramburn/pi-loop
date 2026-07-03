@@ -167,4 +167,15 @@ describe("CronScheduler", () => {
     expect(fired).toHaveLength(0);
     expect(store.get(entry.id)).toBeUndefined();
   });
+
+  it("add() twice for same cron entry fires once, not twice (G-45)", () => {
+    const entry = store.create(cronTrigger, "dup cron", { recurring: false });
+    scheduler.add(entry);
+    scheduler.add(entry); // duplicate add — must not create a second timer
+
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+    // Exactly one fire, not two
+    expect(fired).toHaveLength(1);
+  });
 });

@@ -34,6 +34,7 @@ export class CronScheduler {
 
   add(entry: LoopEntry): void {
     if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
+      if (this.fireTimes.has(entry.id)) return;
       this.armTimer(entry);
     }
   }

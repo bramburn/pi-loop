@@ -36,6 +36,7 @@ export class TriggerSystem {
     }
     if (entry.trigger.type === "event" || entry.trigger.type === "hybrid") {
       const ev = entry.trigger.type === "hybrid" ? entry.trigger.event : entry.trigger;
+      if (this.eventSubscriptions.get(ev.source)?.has(entry.id)) return;
       this.subscribeEvent(entry, ev.source, ev.filter);
     }
   }
