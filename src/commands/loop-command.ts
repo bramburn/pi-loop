@@ -400,6 +400,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       const entry = getStore().get(id);
       if (!entry) {
         orphaned.push(`#${id}`);
+        // Clean up orphaned binding even though the loop no longer exists —
+        // prevents stale entries from accumulating in the bindings file.
+        bindings.remove(id);
         continue;
       }
       if (toggle === "arm") {
