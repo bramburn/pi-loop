@@ -166,6 +166,22 @@ describe("/loop-resume command — governor path", () => {
     expect(options[0]).toMatch(/^\[x\] #1 /);
   });
 
+  it("governor row shows hybrid event source and debounceMs", async () => {
+    h.store.create(
+      { type: "hybrid", cron: "*/10 * * * *", event: { source: "tool_execution_end" }, debounceMs: 60000 },
+      "hybrid-check",
+      { recurring: true },
+    );
+
+    h.ui.select.mockResolvedValueOnce("< Cancel");
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const [, options] = h.ui.select.mock.calls[0];
+    expect(options[0]).toMatch(/^\[ \] #1 /);
+    expect(options[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60000ms debounce)");
+  });
+
   it("toggles a row, then OK applies and persists bindings", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "toggled", { recurring: true });
 
@@ -365,5 +381,28 @@ describe("/loop command", () => {
         expect.stringContaining("Settings"),
       ]),
     );
+  });
+
+  it("view loops shows hybrid event source and debounceMs", async () => {
+    const h = setup();
+    h.store.create(
+      { type: "hybrid", cron: "*/10 * * * *", event: { source: "tool_execution_end" }, debounceMs: 60000 },
+      "hybrid-check",
+      { recurring: true },
+    );
+
+    // First select: top-level menu → "View loops"
+    // Second select: "View loops" submenu → "< Back"
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("< Back");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // The view loops submenu calls ui.select with all loop rows
+    const viewLoopsCall = h.ui.select.mock.calls[1];
+    const loopOptions = viewLoopsCall[1];
+    expect(loopOptions[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60000ms debounce)");
   });
 });

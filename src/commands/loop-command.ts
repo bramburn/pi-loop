@@ -78,7 +78,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ? `cron: ${l.trigger.schedule}`
         : l.trigger.type === "event"
           ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron}`;
+          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
       return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
     });
     choices.push("< Back");
@@ -304,7 +304,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ? `cron: ${l.trigger.schedule}`
         : l.trigger.type === "event"
           ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron}`;
+          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${l.trigger.debounceMs}ms debounce)`;
       const finalBound = computeFinalBound(l.id, bindings, pending);
       const box = finalBound ? "[x]" : "[ ]";
       return `${box} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
