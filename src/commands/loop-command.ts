@@ -42,7 +42,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     try {
       const parsed = parseInterval(interval);
       const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-      const entry = getStore().create(trigger, p, { recurring: true });
+      const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
       getTriggerSystem().add(entry);
       getBindingsStore().add(entry.id);
       updateWidget();
@@ -60,7 +60,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (!source) return;
 
     const trigger: Trigger = { type: "event", source };
-    const entry = getStore().create(trigger, p, { recurring: true });
+    const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
     getTriggerSystem().add(entry);
     getBindingsStore().add(entry.id);
     updateWidget();
@@ -218,7 +218,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         try {
           const parsed = parseInterval(interval);
           const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-          const entry = getStore().create(trigger, prompt, { recurring: true });
+          const entry = getStore().create(trigger, prompt, { recurring: true, createdBy: getBindingsStore().sessionId });
           getTriggerSystem().add(entry);
           getBindingsStore().add(entry.id);
           updateWidget();
@@ -294,6 +294,12 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       return;
     }
 
+    // Partition loops into "My loops" (created by this session) and "Other terminals"
+    // (created by other sessions or before this field was introduced).
+    const mySessionId = bindings.sessionId;
+    const [mine, others] = partitionLoopsBySession(loops, mySessionId);
+    if (mine.length === 0 && others.length === 0) return; // just in case
+
     // pending toggles: ids the user flipped while in the picker. The final
     // applied state for an id is (bindings.has(id) XOR pending.has(id)).
     const pending = new Map<string, Toggle>();
@@ -305,7 +311,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const rows = buildGovernorRows(loops, bindings, pending, otherSessionCounts);
+      const rows = buildGovernorRows(mine, others, bindings, pending, otherSessionCounts);
       const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Refresh / < Cancel>", [
         ...rows,
         SENTINEL_OK,
@@ -356,7 +362,12 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       // the current state and any stale toggles from external changes are discarded.
       if (selected === SENTINEL_REFRESH) {
         bindings.load();
-        loops = getStore().list();
+        const allLoops = getStore().list();
+        const [newMine, newOthers] = partitionLoopsBySession(allLoops, mySessionId);
+        mine.length = 0;
+        mine.push(...newMine);
+        others.length = 0;
+        others.push(...newOthers);
         // Re-scan other-session bindings in case another terminal armed loops
         // while the Governor was open.
         otherSessionCounts.clear();
@@ -414,29 +425,71 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     }
   }
 
+  /**
+   * Partitions loops into "My loops" (created by this session) and
+   * "Other terminals" (created by other sessions or before createdBy was added).
+   * Preserves original order within each partition.
+   */
+  function partitionLoopsBySession(loops: LoopEntry[], sessionId: string | undefined): [LoopEntry[], LoopEntry[]] {
+    const mine: LoopEntry[] = [];
+    const others: LoopEntry[] = [];
+    for (const loop of loops) {
+      if (loop.createdBy === sessionId) {
+        mine.push(loop);
+      } else {
+        others.push(loop);
+      }
+    }
+    return [mine, others];
+  }
+
   function buildGovernorRows(
-    loops: LoopEntry[],
+    mine: LoopEntry[],
+    others: LoopEntry[],
     bindings: BindingsStore,
     pending: Map<string, Toggle>,
     otherSessionCounts: Map<string, number>,
   ): string[] {
-    return loops.map((l) => {
-      const triggerDesc = l.trigger.type === "cron"
-        ? `cron: ${l.trigger.schedule}`
-        : l.trigger.type === "event"
-          ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
-      const finalBound = computeFinalBound(l.id, bindings, pending);
-      const box = finalBound ? "[x]" : "[ ]";
-      // Paused loops get a `~` suffix on the checkbox so the user can see
-      // at a glance that a bound loop won't fire until resumed.
-      const pausedMark = l.status === "paused" ? "~" : "";
-      // G-44: annotate with per-session binding count so the user can see
-      // which loops are armed by other terminals in project scope.
-      const otherCount = otherSessionCounts.get(l.id) ?? 0;
-      const otherMark = otherCount > 0 ? ` · bound in ${otherCount} other session${otherCount === 1 ? "" : "s"}` : "";
-      return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})${otherMark}`;
-    });
+    const rows: string[] = [];
+
+    if (mine.length > 0) {
+      rows.push("— My loops —");
+      for (const l of mine) {
+        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
+      }
+    }
+
+    if (others.length > 0) {
+      rows.push("— Other terminals —");
+      for (const l of others) {
+        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
+      }
+    }
+
+    return rows;
+  }
+
+  function formatLoopRow(
+    l: LoopEntry,
+    bindings: BindingsStore,
+    pending: Map<string, Toggle>,
+    otherSessionCounts: Map<string, number>,
+  ): string {
+    const triggerDesc = l.trigger.type === "cron"
+      ? `cron: ${l.trigger.schedule}`
+      : l.trigger.type === "event"
+        ? `event: ${l.trigger.source}`
+        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
+    const finalBound = computeFinalBound(l.id, bindings, pending);
+    const box = finalBound ? "[x]" : "[ ]";
+    // Paused loops get a `~` suffix on the checkbox so the user can see
+    // at a glance that a bound loop won't fire until resumed.
+    const pausedMark = l.status === "paused" ? "~" : "";
+    // G-44: annotate with per-session binding count so the user can see
+    // which loops are armed by other terminals in project scope.
+    const otherCount = otherSessionCounts.get(l.id) ?? 0;
+    const otherMark = otherCount > 0 ? ` · bound in ${otherCount} other session${otherCount === 1 ? "" : "s"}` : "";
+    return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})${otherMark}`;
   }
 
   function computeFinalBound(id: string, bindings: BindingsStore, pending: Map<string, Toggle>): boolean {

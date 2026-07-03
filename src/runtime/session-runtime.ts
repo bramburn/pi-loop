@@ -31,7 +31,7 @@ export interface SessionRuntimeOptions {
   getLatestCtx: () => ExtensionContext | undefined;
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
-  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
+  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void; dispose(): void };
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   cleanupTaskBacklogLoops: () => Promise<number>;

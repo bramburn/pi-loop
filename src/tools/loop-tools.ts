@@ -12,6 +12,7 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
+    createdBy?: string;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
@@ -30,6 +31,7 @@ interface TriggerSystemLike {
 interface BindingsStoreLike {
   add(id: string): void;
   has(id: string): boolean;
+  readonly sessionId: string | undefined;
 }
 
 interface SchedulerLike {
@@ -219,6 +221,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         taskBacklog,
         readOnly,
         maxFires,
+        createdBy: getBindingsStore().sessionId,
       });
 
       getTriggerSystem().add(entry);

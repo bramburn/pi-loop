@@ -28,16 +28,30 @@ export class BindingsStore {
   private ids = new Set<string>();
 
   /**
+   * The sessionId associated with this BindingsStore. Set at construction
+   * time (via setSessionId in index.ts) or mutated directly by tests.
+   * Used by the Governor to partition loops into "My loops"
+   * (createdBy === sessionId) and "Other terminals"
+   * (createdBy !== sessionId or undefined).
+   */
+  sessionId: string | undefined;
+
+  /**
    * Construct a bindings store.
    *
    * @param filePath  Absolute path to the bindings JSON file, or undefined
    *                  for in-memory mode (PI_LOOP_SCOPE=memory).
    * @param scope     Loop scope — currently only `memory` suppresses file I/O.
+   * @param sessionId The sessionId this store belongs to (used for Governor
+   *                  loop-partitioning by creation session).
    */
   constructor(
     private readonly filePath: string | undefined,
     private readonly scope: LoopScope,
-  ) {}
+    sessionId?: string,
+  ) {
+    this.sessionId = sessionId;
+  }
 
   /**
    * Force a reload from disk, discarding any unsaved in-memory changes.

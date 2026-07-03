@@ -17,13 +17,29 @@ function makeCtx(ui: FakeUI) {
 
 function setup() {
   const { pi, commandMap } = createMockPi();
-  const store = new LoopStore();
   const triggerSystem = { add: vi.fn(), remove: vi.fn() };
   // In-memory BindingsStore — exercises the same code path as file-backed
   // for has/add/remove semantics without tmpdir churn. File-backed behavior
   // is covered separately in test/bindings-store.test.ts.
-  const bindingsStore = new BindingsStore(undefined, "memory");
+  const bindingsStore = new BindingsStore(undefined, "memory", "test-session");
   const updateWidget = vi.fn();
+
+  // Wrap the store with a proxy that auto-injects createdBy on every create()
+  // call, mirroring the production behavior in Governor and LoopCreate. Tests
+  // that want a loop in "Other terminals" can override by passing
+  // createdBy: undefined or a different value explicitly.
+  const rawStore = new LoopStore();
+  const store = new Proxy(rawStore, {
+    get(target, prop) {
+      const val = (target as any)[prop];
+      if (prop === "create") {
+        return (trigger: any, prompt: any, opts: any) =>
+          rawStore.create(trigger, prompt, { ...opts, createdBy: bindingsStore.sessionId });
+      }
+      if (typeof val === "function") return val.bind(target);
+      return val;
+    },
+  });
 
   registerLoopCommand({
     pi,
@@ -150,8 +166,8 @@ describe("/loop-resume command — governor path", () => {
     expect(options[options.length - 3]).toBe("< Disarm all");
     expect(options[options.length - 2]).toBe("< Refresh>");
     expect(options[options.length - 1]).toBe("< Cancel");
-    // Loop row uses [x] for currently-bound, [ ] for not
-    expect(options[0]).toMatch(/^\[ \] #1 /);
+    // Loop row uses [x] for currently-bound, [ ] for not; section header is at options[0]
+    expect(options[1]).toMatch(/^\[ \] #1 /);
   });
 
   it("reflects existing bindings state in the governor checkbox", async () => {
@@ -165,7 +181,8 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    expect(options[0]).toMatch(/^\[x\] #1 /);
+    // Section header at options[0]; loop row at options[1]
+    expect(options[1]).toMatch(/^\[x\] #1 /);
   });
 
   it("governor row shows hybrid event source and debounceMs", async () => {
@@ -180,8 +197,9 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    expect(options[0]).toMatch(/^\[ \] #1 /);
-    expect(options[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
+    // options[0] is section header "— My loops —"; loop row at options[1]
+    expect(options[1]).toMatch(/^\[ \] #1 /);
+    expect(options[1]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
   });
 
   it("governor row marks paused loops with a ~ suffix", async () => {
@@ -196,8 +214,9 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
+    // options[0] is section header "— My loops —"; loop row at options[1]
     // ~ suffix appears after [x] for a bound, paused loop
-    expect(options[0]).toMatch(/^\[x\]~ #1 \[paused\]/);
+    expect(options[1]).toMatch(/^\[x\]~ #1 \[paused\]/);
   });
 
   it("arming a paused loop emits a warning notification", async () => {
@@ -886,11 +905,13 @@ describe("/loop-resume command — governor path", () => {
   });
 
   it("Governor rows annotate loops with per-session binding count (G-44)", async () => {
-    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", { recurring: true });
+    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", {
+      recurring: true, createdBy: "test-session",
+    });
     h.bindingsStore.add("1");
 
     // Patch getOtherSessionBindingCounts to simulate 2 other sessions binding loop #1
-    const origCounts = h.bindingsStore.getOtherSessionBindingCounts.bind(h.bindingsStore);
     h.bindingsStore.getOtherSessionBindingCounts = () =>
       new Map([["1", 2], ["999", 1]]); // loop 999 won't appear since it's not in store
 
@@ -899,12 +920,16 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    const loopRow = options[0] as string;
+    expect(options[0]).toBe("— My loops —"); // section header
+    const loopRow = options[1] as string;
     expect(loopRow).toContain("· bound in 2 other sessions");
   });
 
   it("Governor rows show no annotation when no other sessions bind the loop (G-44)", async () => {
-    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo-loop", { recurring: true });
+    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo-loop", {
+      recurring: true, createdBy: "test-session",
+    });
 
     // Patch getOtherSessionBindingCounts to return empty (no other sessions)
     h.bindingsStore.getOtherSessionBindingCounts = () => new Map();
@@ -914,13 +939,17 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    const loopRow = options[0] as string;
+    expect(options[0]).toBe("— My loops —"); // section header
+    const loopRow = options[1] as string;
     // No per-session annotation when no other sessions have the loop bound
     expect(loopRow).not.toContain("· bound in");
   });
 
   it("Governor rows show singular 'session' for exactly 1 other session (G-44)", async () => {
-    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", { recurring: true });
+    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", {
+      recurring: true, createdBy: "test-session",
+    });
 
     h.bindingsStore.getOtherSessionBindingCounts = () => new Map([["1", 1]]);
 
@@ -929,7 +958,8 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    const loopRow = options[0] as string;
+    expect(options[0]).toBe("— My loops —"); // section header
+    const loopRow = options[1] as string;
     expect(loopRow).toContain("· bound in 1 other session"); // singular
   });
 });

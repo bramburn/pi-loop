@@ -71,7 +71,7 @@ export default function (pi: ExtensionAPI) {
   // Per-session loop bindings — see docs/loop-governor-design.md.
   // Initial path is undefined because the sessionId is not yet known at
   // extension load time; the session-runtime hook swaps it on session_switch.
-  let bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), _sessionId), loopScope);
+  let bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), _sessionId), loopScope, _sessionId);
   const widget = new LoopWidget(store, monitorManager);
   // Repaint the status bar when a monitor finishes/prunes on its own (no tool
   // call), so stale monitors don't linger in the count between turns.
@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 
   const taskBacklogRuntime = createTaskBacklogRuntime({
     getLoops: () => store.list(),
-    createLoop: (trigger, prompt, options) => store.create(trigger, prompt, options),
+    createLoop: (trigger, prompt, options) => store.create(trigger, prompt, { ...options, createdBy: _sessionId }),
     deleteLoop: (id) => {
       store.delete(id);
     },
@@ -257,7 +257,7 @@ export default function (pi: ExtensionAPI) {
       // Only swap if the current store's path doesn't already match.
       const expectedPath = resolveBindingsPath(getScopeOptions(), sessionId);
       if (bindingsStore.path !== expectedPath) {
-        bindingsStore = new BindingsStore(expectedPath, loopScope);
+        bindingsStore = new BindingsStore(expectedPath, loopScope, sessionId);
       }
     },
     widget,
@@ -307,6 +307,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getMonitorManager: () => monitorManager,
+    getBindingsStore: () => bindingsStore,
     updateWidget: () => {
       widget.update();
     },
