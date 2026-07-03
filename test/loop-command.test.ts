@@ -351,6 +351,53 @@ describe("/loop-resume command — governor path", () => {
     expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "No changes.");
   });
 
+  it("Continue+OK with XOR-noop pending (arm then disarm same loop) shows 'No changes to apply.'", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "xor-noop", { recurring: true });
+    h.bindingsStore.add("1"); // loop is already bound — toggling off then back = net zero
+
+    // 1) picker: toggle loop → pending = {1: "disarm"} (currently bound → disarm)
+    // 2) picker: toggle same loop again → pending.delete(1) (undoes the disarm)
+    // 3) picker: Continue → confirm shows "No changes."
+    // 4) confirm: OK → applyPending with empty pending → no-op
+    // 5) expect "No changes to apply." notification
+    h.ui.select
+      .mockResolvedValueOnce("[x] #1 [active] xor-noop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("[ ] #1 [active] xor-noop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "No changes.");
+    expect(h.bindingsStore.has("1")).toBe(true); // still bound — net zero change
+    expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
+  });
+
+  it("Continue+OK with real pending changes emits Armed/Disarmed summary", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "real", { recurring: true });
+    h.bindingsStore.add("1"); // loop already bound
+
+    // 1) picker: toggle loop off → pending = {1: "disarm"}
+    // 2) picker: Continue → confirm shows "Disarm: #1"
+    // 3) confirm: OK → loop disarmed
+    h.ui.select
+      .mockResolvedValueOnce("[x] #1 [active] real (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Continue");
+    h.ui.confirm.mockResolvedValueOnce(true);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.bindingsStore.has("1")).toBe(false);
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Disarmed: #1"),
+      "info",
+    );
+    // No "No changes to apply." because there were real changes
+    expect(h.ui.notify).not.toHaveBeenCalledWith("No changes to apply.", "info");
+  });
+
   // Helper: toggle a loop row and then delete the loop before OK is clicked.
   // This simulates another terminal deleting the loop while the Governor is open.
   function setupOrphanedBeforeOk(

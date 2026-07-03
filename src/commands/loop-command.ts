@@ -326,8 +326,15 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         const diff = buildDiffSummary(loops, bindings, pending);
         const ok = await ui.confirm("Apply changes?", diff);
         if (ok) {
+          // Capture dirty state BEFORE applyPending clears pending. This
+          // ensures we notify even when the user toggled loops but the net
+          // result was zero binding changes (e.g., arm then disarm the same
+          // loop — a "XOR no-op" that would otherwise exit silently).
+          const hadChanges = dirty;
           applyPending(ui, bindings, pending);
-          if (pending.size > 0) dirty = true;
+          if (!hadChanges) {
+            ui.notify("No changes to apply.", "info");
+          }
           return;
         }
         // Cancel from the confirm returns to the picker; pending stays.
