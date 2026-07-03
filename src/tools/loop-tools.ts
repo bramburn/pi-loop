@@ -139,8 +139,12 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 ## Trigger Types
 
 - **cron**: time-based. "30s" (rounded to 1m), "5m", "2h", "1d", or full cron like "0 9 * * 1-5"
-- **event**: fires on pi events like "tool_execution_start", "before_agent_start"
-- **hybrid**: both cron + event with debounce
+- **event**: fires on pi events like "tool_execution_start", "before_agent_start".
+- **hybrid**: both cron + event with debounce. Event filters support:
+  - regex:pattern - regex test against JSON-stringified event data (e.g., "regex:.*deploy.*")
+  - {"key":"value"} - exact key-value match (e.g., {"toolName":"LoopCreate"})
+
+  Example hybrid with filter: {"type":"hybrid","cron":"5m","event":{"source":"tool_execution_end","filter":"regex:.*build.*"},"debounceMs":30000}
 
 ## Parameters
 
