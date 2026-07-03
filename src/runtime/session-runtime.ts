@@ -211,6 +211,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   pi.on("session_shutdown", async () => {
     stopHeartbeat();
     notificationRuntime.clear("session_shutdown");
+    widget.dispose();
   });
 
   pi.on("session_switch" as never, async (event: SessionSwitchEvent, ctx: ExtensionContext) => {

@@ -323,6 +323,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       }
 
       if (selected === SENTINEL_CONTINUE) {
+        // No toggles at all — stay in the picker rather than exiting
+        if (!dirty) {
+          ui.notify("No pending changes — select loops to toggle or click Cancel.", "info");
+          continue;
+        }
         const diff = buildDiffSummary(loops, bindings, pending);
         const ok = await ui.confirm("Apply changes?", diff);
         if (ok) {

@@ -399,17 +399,26 @@ describe("/loop-resume command — governor path", () => {
     expect(h.store.get(b.id)?.status).toBe(statusB);
   });
 
-  it("Continue with no pending changes shows 'No changes.' preview", async () => {
+  it("Continue with no pending changes stays in the picker and notifies", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "noop", { recurring: true });
     h.bindingsStore.add("1");
 
-    h.ui.select.mockResolvedValueOnce("< Continue");
-    h.ui.confirm.mockResolvedValueOnce(true);
+    // First select: Governor opens → Continue → notify → back to picker
+    // Second select: Cancel → exit
+    h.ui.select
+      .mockResolvedValueOnce("< Continue")
+      .mockResolvedValueOnce("< Cancel");
 
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "No changes.");
+    // No confirm dialog shown when there are no pending toggles
+    expect(h.ui.confirm).not.toHaveBeenCalled();
+    // Picker stays open instead of exiting
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      "No pending changes — select loops to toggle or click Cancel.",
+      "info",
+    );
   });
 
   it("Continue+OK with XOR-noop pending (arm then disarm same loop) shows 'No changes to apply.'", async () => {

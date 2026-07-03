@@ -115,7 +115,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   }
 
   function buildPendingNotification(data: LoopFireEvent): PendingNotification {
-    const key = data.recurring ? `loop:${data.loopId}` : `loop:${data.loopId}:${data.timestamp}`;
+    const key = `loop:${data.loopId}:${data.timestamp}`;
     return {
       ...data,
       key,
@@ -160,6 +160,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       syncRuntimeState({ hasPendingMessages: getHasPendingMessages() });
 
       while (true) {
+        if (Object.keys(notificationState.notificationsByKey).length === 0) return;
         notificationCoordinatorDelivered = false;
         notificationCoordinatorDeliveredSuccessfully = false;
         await notificationCoordinator.dispatch({
@@ -169,8 +170,6 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
           entityType: "notification",
           payload: { ignorePendingMessages: options?.ignorePendingMessages },
         });
-        if (!notificationCoordinatorDelivered) return;
-        if (notificationCoordinatorDeliveredSuccessfully) return;
       }
     })().finally(() => {
       flushPromise = undefined;

@@ -27,7 +27,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     getLatestCtx: () => undefined,
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
-    widget: { setUICtx: vi.fn(), update: vi.fn() },
+    widget: { setUICtx: vi.fn(), update: vi.fn(), dispose: vi.fn() },
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),
@@ -76,16 +76,19 @@ describe("session-runtime heartbeat lifecycle", () => {
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the heartbeat on session_shutdown", async () => {
+  it("clears the heartbeat on session_shutdown and disposes the widget", async () => {
     const timer = { unref: vi.fn() };
     vi.spyOn(global, "setInterval").mockReturnValue(timer as any);
     const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+    const disposeSpy = vi.fn();
 
-    const { drive } = setup();
+    const { drive } = setup({ widget: { setUICtx: vi.fn(), update: vi.fn(), dispose: disposeSpy } });
     await drive("turn_start");
     await drive("session_shutdown");
 
     expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+    // widget.dispose() clears the status bar so no stale state remains after session ends
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not leak an unhandled rejection when a heartbeat pump throws", async () => {

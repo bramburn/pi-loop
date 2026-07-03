@@ -77,7 +77,7 @@ describe("loop:fire custom message delivery", () => {
     expect(sentMessages[0].message.content).toContain("Deliver after current work finishes");
   });
 
-  it("dedupes buffered recurring fires by loop id and keeps the latest prompt", async () => {
+  it("delivers all buffered recurring fires — distinct keys prevent overwrites (G-46)", async () => {
     const { pi, sentMessages, emitExtension } = createMockPi();
     const extension = await import("../src/index.js");
     extension.default(pi);
@@ -88,14 +88,14 @@ describe("loop:fire custom message delivery", () => {
 
     pi.events.emit("loop:fire", {
       loopId: "13",
-      prompt: "Old prompt",
+      prompt: "Fire 1",
       trigger: { type: "cron", schedule: "*/1 * * * *" },
       timestamp: Date.now(),
       recurring: true,
     });
     pi.events.emit("loop:fire", {
       loopId: "13",
-      prompt: "Latest prompt",
+      prompt: "Fire 2",
       trigger: { type: "cron", schedule: "*/1 * * * *" },
       timestamp: Date.now() + 1,
       recurring: true,
@@ -105,9 +105,11 @@ describe("loop:fire custom message delivery", () => {
     await emitExtension("agent_end", null, ctx);
     await flushAsync();
 
-    expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0].message.content).toContain("Latest prompt");
-    expect(sentMessages[0].message.content).not.toContain("Old prompt");
+    // With timestamp-in-key fix, both fires coexist in the queue and both get delivered
+    expect(sentMessages).toHaveLength(2);
+    const contents = sentMessages.map((m) => m.message.content);
+    expect(contents).toContainEqual(expect.stringContaining("Fire 1"));
+    expect(contents).toContainEqual(expect.stringContaining("Fire 2"));
   });
 
   it("flushes one-shot monitor wakes after the current agent run", async () => {
