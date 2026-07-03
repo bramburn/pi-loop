@@ -46,6 +46,67 @@ describe("TaskList", () => {
   });
 });
 
+describe("TaskGet", () => {
+  it("returns not found for unknown id", async () => {
+    const { text } = setup();
+    expect(await text("TaskGet", { id: "99" })).toBe("Task #99 not found");
+  });
+
+  it("shows id, subject, status, description, timestamps", async () => {
+    const { taskStore, text } = setup();
+    const t = taskStore.create("Design the flux capacitor", "Build it in the DeLorean");
+    const out = await text("TaskGet", { id: t.id });
+    expect(out).toContain(`Task #${t.id}: Design the flux capacitor`);
+    expect(out).toContain("Status: pending");
+    expect(out).toContain("Build it in the DeLorean");
+    expect(out).toContain("Created:");
+    expect(out).toContain("Updated:");
+  });
+
+  it("shows owner and activeForm when set", async () => {
+    const { taskStore, text } = setup();
+    const t = taskStore.create("Run tests", "desc", {}, { owner: "agent-1", activeForm: "Running tests" });
+    const out = await text("TaskGet", { id: t.id });
+    expect(out).toContain("Owner: agent-1");
+    expect(out).toContain("Active form: Running tests");
+  });
+
+  it("shows blocks and blockedBy dependency edges", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    const c = taskStore.create("c", "desc");
+    // a is blocked by b and c (b and c both block a)
+    taskStore.addBlockedBy(a.id, [b.id, c.id]);
+    // b blocks c (separate dependency chain)
+    taskStore.addBlocks(b.id, [c.id]);
+    const out = await text("TaskGet", { id: a.id });
+    expect(out).toContain("Blocked by: #2, #3");
+    // b.blocks = [#a, #c] (from both addBlockedBy(a,[b]) and addBlocks(b,[c]))
+    const bOut = await text("TaskGet", { id: b.id });
+    expect(bOut).toMatch(/Blocks: #1, #3/);
+  });
+
+  it("marks completed blockers as (completed) in blockedBy", async () => {
+    const { taskStore, text } = setup();
+    const a = taskStore.create("a", "desc");
+    const b = taskStore.create("b", "desc");
+    taskStore.addBlockedBy(a.id, [b.id]);
+    taskStore.complete(b.id);
+    const out = await text("TaskGet", { id: a.id });
+    expect(out).toContain("#2 (completed)");
+  });
+
+  it("shows metadata as JSON", async () => {
+    const { taskStore, text } = setup();
+    const t = taskStore.create("t", "desc", { priority: "high", tags: ["bug", "auth"] });
+    const out = await text("TaskGet", { id: t.id });
+    expect(out).toContain('"priority": "high"');
+    expect(out).toContain('"tags"');
+    expect(out).toContain("Metadata:");
+  });
+});
+
 describe("TaskUpdate", () => {
   let h: ReturnType<typeof setup>;
   beforeEach(() => {

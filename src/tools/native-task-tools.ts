@@ -175,6 +175,58 @@ Parameters: id (required), status, subject, description`,
   });
 
   pi.registerTool({
+    name: "TaskGet",
+    label: "TaskGet",
+    description: `Get full details for a specific task: id, subject, status, owner, activeForm, description, createdAt, updatedAt, completedAt, blocks, blockedBy (all edges), and metadata as JSON.
+
+Shows all dependency edges including completed blockers. Use to inspect a task's full state.`,
+    parameters: Type.Object({
+      id: Type.String({ description: "Task ID to retrieve" }),
+    }),
+    async execute(_toolCallId, params) {
+      const { entry, openBlockers } = taskStore.getWithDependencies(params.id);
+      if (!entry) return Promise.resolve(textResult(`Task #${params.id} not found`));
+
+      const lines: string[] = [];
+      lines.push(`Task #${entry.id}: ${entry.subject}`);
+      lines.push(`Status: ${entry.status}`);
+      if (entry.owner) lines.push(`Owner: ${entry.owner}`);
+      if (entry.activeForm) lines.push(`Active form: ${entry.activeForm}`);
+      lines.push("");
+      lines.push(entry.description);
+
+      if (entry.blocks.length > 0) {
+        lines.push(`Blocks: ${entry.blocks.map((b) => `#${b}`).join(", ")}`);
+      }
+      if (entry.blockedBy.length > 0) {
+        const allBlockers = entry.blockedBy.map((b) => `#${b}`);
+        const openBlockerIds = new Set(openBlockers.map((t) => t.id));
+        const allBlockerLines = allBlockers.map((b) => {
+          const id = b.slice(1);
+          return openBlockerIds.has(id) ? b : `${b} (completed)`;
+        });
+        lines.push(`Blocked by: ${allBlockerLines.join(", ")}`);
+      }
+
+      const metaKeys = Object.keys(entry.metadata);
+      if (metaKeys.length > 0) {
+        lines.push("");
+        lines.push("Metadata:");
+        lines.push(JSON.stringify(entry.metadata, null, 2));
+      }
+
+      lines.push("");
+      lines.push(`Created: ${new Date(entry.createdAt).toISOString()}`);
+      lines.push(`Updated: ${new Date(entry.updatedAt).toISOString()}`);
+      if (entry.completedAt) {
+        lines.push(`Completed: ${new Date(entry.completedAt).toISOString()}`);
+      }
+
+      return Promise.resolve(textResult(lines.join("\n")));
+    },
+  });
+
+  pi.registerTool({
     name: "TaskPrune",
     label: "TaskPrune",
     description: `Bulk-delete all completed tasks. Use to clear a backlog of done work without calling TaskDelete once per task.
