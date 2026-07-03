@@ -424,11 +424,11 @@ No backup, no error message to user.
 | G-09 | ~~Low~~ **Open — #46** | onDone loop orphaned cleanup — monitor completes before tool returns | `src/tools/monitor-tools.ts` |
 | G-10 | ~~High~~ **Open — #45** | Tasks unavailable when pi-tasks present | `src/index.ts` |
 | G-11 | ~~Low~~ **Open — #46** | `maxFires` enforcement for non-recurring loops in scheduler pump() needs verification | `src/scheduler.ts` |
-| G-12 | ~~Low~~ **Open — #47** | No `subject` length validation in TaskCreate | `src/commands/tasks-command.ts` |
+| G-12 | ~~Low~~ **Closed #47** | TaskCreate subject length validated at 80 chars in interactive mode | `src/commands/tasks-command.ts` |
 | G-13 | Low | Widget monitor count not interactive | `src/ui/widget.ts` |
 | G-14 | ~~Medium~~ **Open — #46** | File lock retry busy-wait — should use setTimeout callback pattern | `src/reducer-backed-store.ts` |
-| G-15 | ~~Low~~ **Open — #47** | Event filter format undocumented — regex: and JSON object formats not described | `src/types.ts`, `src/trigger-system.ts` |
-| G-16 | ~~Low~~ **Open — #47** | No `/tasks` interactive menu — jumps to viewNativeTasks with no top-level selection | `src/commands/tasks-command.ts` |
+| G-15 | ~~Low~~ **Closed #47** | Event filter formats documented in LoopCreate description | `src/types.ts`, `src/trigger-system.ts` |
+| G-16 | ~~Low~~ **Closed #47** | `/tasks` interactive menu already implemented | `src/commands/tasks-command.ts` |
 | G-17 | ~~Medium~~ **Closed in code** | `maxFires` checked before `onFire()` in trigger-system.ts | `src/trigger-system.ts` |
 | G-18 | ~~Low~~ **Open — #45** | AUTO_TASK_WORKER_THRESHOLD not configurable — hardcoded to 5 | `src/runtime/task-backlog-runtime.ts` |
 | G-19 | ~~Medium~~ **Open — #45** | Native task events conflict with pi-tasks — not gated by isTasksAvailable() | `src/runtime/task-events.ts` |
