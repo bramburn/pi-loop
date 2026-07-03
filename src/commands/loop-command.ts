@@ -394,9 +394,14 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     }
     const armed: string[] = [];
     const disarmed: string[] = [];
+    const orphaned: string[] = [];
+
     for (const [id, toggle] of pending) {
       const entry = getStore().get(id);
-      if (!entry) continue;
+      if (!entry) {
+        orphaned.push(`#${id}`);
+        continue;
+      }
       if (toggle === "arm") {
         bindings.add(id);
         getTriggerSystem().add(entry);
@@ -407,8 +412,17 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         disarmed.push(`#${id}`);
       }
     }
+
     pending.clear();
     updateWidget();
+
+    if (orphaned.length > 0) {
+      ui.notify(
+        `Skipped — loops no longer exist: ${orphaned.join(", ")}. Re-open /loop-resume to see the current loop list.`,
+        "warning",
+      );
+    }
+
     const summary = [
       armed.length > 0 ? `Armed: ${armed.join(", ")}` : null,
       disarmed.length > 0 ? `Disarmed: ${disarmed.join(", ")}` : null,

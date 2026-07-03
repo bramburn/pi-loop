@@ -349,6 +349,134 @@ describe("/loop-resume command — governor path", () => {
 
     expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "No changes.");
   });
+
+  // Helper: toggle a loop row and then delete the loop before OK is clicked.
+  // This simulates another terminal deleting the loop while the Governor is open.
+  function setupOrphanedBeforeOk(
+    h: ReturnType<typeof setup>,
+    loopId: string,
+    alreadyBound: boolean,
+  ) {
+    if (alreadyBound) h.bindingsStore.add(loopId);
+    h.ui.select
+      .mockResolvedValueOnce(`[ ] #${loopId} [active] loop (cron: */5 * * * *)`)
+      .mockResolvedValueOnce("< OK");
+    const origGet = h.store.get.bind(h.store);
+    h.store.get = (id: string) => {
+      if (id === loopId) h.store.delete(id);
+      return origGet(id);
+    };
+  }
+
+  it("arm pending loop that was deleted from store emits warning", async () => {
+    const loop = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "deleted-before-apply",
+      { recurring: true },
+    );
+    setupOrphanedBeforeOk(h, loop.id, false);
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped — loops no longer exist"),
+      "warning",
+    );
+    // The loop was orphaned — binding was never added because the loop no
+    // longer exists in the store at apply time.
+    expect(h.bindingsStore.has(loop.id)).toBe(false);
+  });
+
+  it("disarm pending loop that was deleted from store emits warning", async () => {
+    const loop = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "disarm-deleted",
+      { recurring: true },
+    );
+    setupOrphanedBeforeOk(h, loop.id, true); // already bound
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped — loops no longer exist"),
+      "warning",
+    );
+  });
+
+  it("all pending loops deleted — warning but no false Armed/Disarmed summary", async () => {
+    const loop1 = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "orphan-a",
+      { recurring: true },
+    );
+    const loop2 = h.store.create(
+      { type: "cron", schedule: "*/10 * * * *" },
+      "orphan-b",
+      { recurring: true },
+    );
+    // Both toggled on but deleted before OK
+    h.ui.select
+      .mockResolvedValueOnce(`[ ] #${loop1.id} [active] a (cron: */5 * * * *)`)
+      .mockResolvedValueOnce(`[ ] #${loop2.id} [active] b (cron: */10 * * * *)`)
+      .mockResolvedValueOnce("< OK");
+    const origGet = h.store.get.bind(h.store);
+    h.store.get = (id: string) => {
+      if (id === loop1.id || id === loop2.id) h.store.delete(id);
+      return origGet(id);
+    };
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    const warns = h.ui.notify.mock.calls.filter(
+      ([_msg, type]) => type === "warning",
+    );
+    const infos = h.ui.notify.mock.calls.filter(
+      ([_msg, type]) => type === "info",
+    );
+    expect(warns).toHaveLength(1);
+    expect(warns[0][0]).toContain("Skipped — loops no longer exist");
+    expect(infos).toHaveLength(1);
+    expect(infos[0][0]).toBe("Governor applied.");
+  });
+
+  it("mixed orphaned and valid pending — valid changes applied, orphaned warned", async () => {
+    const valid = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "valid-loop",
+      { recurring: true },
+    );
+    const orphaned = h.store.create(
+      { type: "cron", schedule: "*/10 * * * *" },
+      "orphaned-loop",
+      { recurring: true },
+    );
+    h.ui.select
+      .mockResolvedValueOnce(`[ ] #${valid.id} [active] v (cron: */5 * * * *)`)
+      .mockResolvedValueOnce(`[ ] #${orphaned.id} [active] o (cron: */10 * * * *)`)
+      .mockResolvedValueOnce("< OK");
+    const origGet = h.store.get.bind(h.store);
+    h.store.get = (id: string) => {
+      if (id === orphaned.id) h.store.delete(id);
+      return origGet(id);
+    };
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.bindingsStore.has(valid.id)).toBe(true);
+    expect(h.triggerSystem.add).toHaveBeenCalled();
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped — loops no longer exist"),
+      "warning",
+    );
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Armed"),
+      "info",
+    );
+  });
 });
 
 describe("/loop command", () => {
