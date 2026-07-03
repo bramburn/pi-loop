@@ -104,6 +104,38 @@ describe("BindingsStore", () => {
       expect(fresh.list()).toEqual(["5", "9"]);
     });
 
+    it("reload() discards unsaved in-memory changes and reloads from disk", () => {
+      // Two separate stores pointing at the same file
+      const storeA = newStore();
+      storeA.add("1");
+      storeA.add("3");
+
+      const storeB = newStore();
+      storeB.add("5");
+      storeB.add("7");
+      storeB.save(); // persist only 5 and 7 to disk
+
+      // storeA has 1 and 3 in memory, but the file has 5 and 7
+      // reload() discards the unsaved in-memory state and picks up from disk
+      expect(storeA.list()).toEqual(["1", "3"]); // before reload
+      storeA.reload();
+      expect(storeA.list()).toEqual(["5", "7"]); // after reload — disk wins
+    });
+
+    it("reload() returns true when a file existed and was loaded", () => {
+      const store = newStore();
+      store.add("99");
+
+      const fresh = newStore();
+      expect(fresh.reload()).toBe(true);
+      expect(fresh.list()).toEqual(["99"]);
+    });
+
+    it("reload() returns false when no file exists", () => {
+      const store = newStore();
+      expect(store.reload()).toBe(false);
+    });
+
     it("recovers from a corrupt file by renaming it and starting fresh", () => {
       const path = join(cwd, ".pi", "loops", "bindings-test-session.json");
       const store = new BindingsStore(path, "project");
@@ -143,6 +175,15 @@ describe("BindingsStore", () => {
       expect(store.has("1")).toBe(true);
       expect(store.list()).toEqual(["1"]);
       expect(existsSync(join(cwd, ".pi", "loops", "bindings-test-session.json"))).toBe(false);
+    });
+
+    it("reload() is a no-op in memory scope — Set preserved", () => {
+      const store = new BindingsStore(undefined, "memory");
+      store.add("1");
+      store.add("2");
+      // reload() is a no-op in memory scope — Set stays intact
+      expect(store.reload()).toBe(false);
+      expect(store.list()).toEqual(["1", "2"]);
     });
   });
 

@@ -39,6 +39,19 @@ export class BindingsStore {
     private readonly scope: LoopScope,
   ) {}
 
+  /**
+   * Force a reload from disk, discarding any unsaved in-memory changes.
+   * Unlike `load()` which may be a no-op when no backing file exists,
+   * `reload()` always empties the in-memory Set first and then calls `load()`,
+   * so callers can be certain the Set reflects the current file state.
+   * No-op in memory scope (path === undefined) — nothing to reload from.
+   */
+  reload(): boolean {
+    if (!this.filePath) return false;
+    this.ids = new Set();
+    return this.load();
+  }
+
   // ── File I/O ──
 
   /** Returns true if a backing file exists at the configured path. */

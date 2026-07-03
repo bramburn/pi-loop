@@ -147,7 +147,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
 
   async function viewBindings(ui: ExtensionUIContext) {
     const bindings = getBindingsStore();
-    bindings.load(); // ensure in-memory Set reflects current file state
+    bindings.reload(); // force a fresh read from disk
     const allLoops = getStore().list();
     const bound = allLoops.filter((l) => bindings.has(l.id));
     const unbound = allLoops.filter((l) => !bindings.has(l.id));
