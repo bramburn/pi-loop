@@ -284,10 +284,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
   const SENTINEL_OK = "< OK";
   const SENTINEL_CONTINUE = "< Continue";
   const SENTINEL_DISARM_ALL = "< Disarm all";
+  const SENTINEL_REFRESH = "< Refresh>";
   const SENTINEL_CANCEL = "< Cancel";
 
   async function openGovernor(ui: ExtensionUIContext, bindings: BindingsStore): Promise<void> {
-    const loops = getStore().list();
+    let loops = getStore().list();
     if (loops.length === 0) {
       ui.notify("No stored loops to bind. Use /loop to create one first.", "info");
       return;
@@ -301,11 +302,12 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const rows = buildGovernorRows(loops, bindings, pending);
-      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Cancel", [
+      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Refresh / < Cancel>", [
         ...rows,
         SENTINEL_OK,
         SENTINEL_CONTINUE,
         SENTINEL_DISARM_ALL,
+        SENTINEL_REFRESH,
         SENTINEL_CANCEL,
       ]);
 
@@ -343,6 +345,17 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           return;
         }
         // Cancel from the confirm returns to the picker; pending stays.
+        continue;
+      }
+
+      // Refresh: re-read store + bindings, clear pending — the user sees
+      // the current state and any stale toggles from external changes are discarded.
+      if (selected === SENTINEL_REFRESH) {
+        bindings.load();
+        loops = getStore().list();
+        pending.clear();
+        dirty = false;
+        ui.notify("Governor refreshed — loop list and bindings re-read from disk.", "info");
         continue;
       }
 

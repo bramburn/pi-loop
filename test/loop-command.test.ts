@@ -144,10 +144,11 @@ describe("/loop-resume command — governor path", () => {
     expect(h.ui.select).toHaveBeenCalledTimes(1);
     const [title, options] = h.ui.select.mock.calls[0];
     expect(title).toContain("Governor");
-    // First option is the loop row; last four are sentinels (OK, Continue, Disarm all, Cancel)
-    expect(options[options.length - 4]).toBe("< OK");
-    expect(options[options.length - 3]).toBe("< Continue");
-    expect(options[options.length - 2]).toBe("< Disarm all");
+    // First option is the loop row; last five are sentinels (OK, Continue, Disarm all, Refresh, Cancel)
+    expect(options[options.length - 5]).toBe("< OK");
+    expect(options[options.length - 4]).toBe("< Continue");
+    expect(options[options.length - 3]).toBe("< Disarm all");
+    expect(options[options.length - 2]).toBe("< Refresh>");
     expect(options[options.length - 1]).toBe("< Cancel");
     // Loop row uses [x] for currently-bound, [ ] for not
     expect(options[0]).toMatch(/^\[ \] #1 /);
@@ -785,6 +786,103 @@ describe("/loop-resume command — governor path", () => {
 
     expect(h.bindingsStore.has("1")).toBe(false);
     expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
+  });
+
+  it("< Refresh > re-reads store, reloads bindings, clears pending, and stays open", async () => {
+    // Loop 1 is created; user is mid-session and another terminal may have
+    // added loop 2 while the Governor is open.
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "existing-loop", { recurring: true });
+    // Simulate a second loop added externally: create it after the Governor is open
+    // by having the store return a fresh list on the Refresh call.
+    const freshLoop = h.store.create({ type: "cron", schedule: "*/3 * * * *" }, "fresh-loop", {
+      recurring: true,
+    });
+
+    // 1) picker: toggle loop 1 -> pending has {1: "arm"}
+    // 2) picker: < Refresh> -> reloads store, shows both loops, clears pending
+    // 3) picker: < Cancel>
+    h.ui.select
+      .mockResolvedValueOnce("[ ] #1 [active] existing-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Refresh>")
+      .mockResolvedValueOnce("< Cancel");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // Pending was cleared — no bindings were applied
+    expect(h.bindingsStore.has("1")).toBe(false);
+    // Notify confirms refresh happened
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      "Governor refreshed — loop list and bindings re-read from disk.",
+      "info",
+    );
+    // Governor stayed open (three select calls: loop, Refresh, Cancel)
+    expect(h.ui.select).toHaveBeenCalledTimes(3);
+  });
+
+  it("< Refresh > shows the current loop list after external changes", async () => {
+    // Initial state: one loop exists
+    const loop1 = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "first-loop",
+      { recurring: true },
+    );
+    h.bindingsStore.add(loop1.id);
+
+    // After Governor is open, another terminal creates a second loop.
+    // Capture origCreate before patching list() so we can call it from within the patch.
+    const origList = h.store.list.bind(h.store);
+    const origCreate = h.store.create.bind(h.store);
+    let callCount = 0;
+    h.store.list = () => {
+      callCount++;
+      // First call (Governor open): return only loop 1
+      // Second call (Refresh): return loop 1 + new loop 2
+      if (callCount === 1) return origList();
+      return [
+        ...origList(),
+        origCreate({ type: "cron", schedule: "*/3 * * * *" }, "new-loop", { recurring: true }),
+      ];
+    };
+
+    h.ui.select
+      .mockResolvedValueOnce("[x] #1 [active] first-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Refresh>")
+      .mockResolvedValueOnce("< OK");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // Governor made 3 select calls: initial open, Refresh (which re-reads the list),
+    // and OK to apply (no pending changes after Refresh clears the map).
+    expect(h.ui.select).toHaveBeenCalledTimes(3);
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      "Governor refreshed — loop list and bindings re-read from disk.",
+      "info",
+    );
+  });
+
+  it("< Refresh > on no-op (nothing changed externally) is still useful — clears pending", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "idle-loop", { recurring: true });
+
+    // User toggles a loop then decides to refresh instead
+    // 1) picker: toggle loop -> pending has {1: "arm"}
+    // 2) picker: < Refresh> -> store unchanged, pending cleared, notify sent
+    // 3) picker: < Cancel> -> discarded changes notification
+    h.ui.select
+      .mockResolvedValueOnce("[ ] #1 [active] idle-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("< Refresh>")
+      .mockResolvedValueOnce("< Cancel");
+
+    const cmd = h.commandMap.get("loop-resume")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // Pending was cleared — no bindings applied from the toggle
+    expect(h.bindingsStore.has("1")).toBe(false);
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      "Governor refreshed — loop list and bindings re-read from disk.",
+      "info",
+    );
   });
 });
 
