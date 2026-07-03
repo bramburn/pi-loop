@@ -436,6 +436,16 @@ No backup, no error message to user.
 | G-23 | High | Test suite uses Unix-only commands | `test/monitor-manager.test.ts` |
 | G-24 | Medium | Busy-wait lock retry | `src/reducer-backed-store.ts` |
 | G-25 | Medium | Silent corrupt-file reset | `src/reducer-backed-store.ts` |
+| G-26 | High | Governor Continue with no pending toggles exits picker | `src/commands/loop-command.ts` |
+| G-27 | High | `session_switch` calls `showPersistedLoops` before `setSessionId` — wrong bindings armed | `src/runtime/session-runtime.ts` |
+| G-28 | Medium | Governor stale loop list if store modified while picker open | `src/commands/loop-command.ts` |
+| G-29 | Medium | Governor Continue diff lacks prompt context | `src/commands/loop-command.ts` |
+| G-30 | Low | Governor does not warn when arming a paused loop | `src/commands/loop-command.ts` |
+| G-31 | Low | Governor shows all project loops — can't distinguish other terminals' loops | `src/commands/loop-command.ts` |
+| G-32 | Low | Governor lacks `< Refresh >` sentinel | `src/commands/loop-command.ts` |
+| G-33 | Low | Governor doesn't show event source or debounce for hybrid loops | `src/commands/loop-command.ts` |
+| G-34 | Low | No `/loop-bindings` read-only diagnostic command | `src/commands/loop-command.ts` |
+| G-35 | Low | No "Disarm all" sentinel in Governor picker | `src/commands/loop-command.ts` |
 
 ---
 
@@ -457,3 +467,7 @@ No backup, no error message to user.
    Or use `execa` / `cross-spawn` for automatic handling.
 
 6. **G-22 (High)**: On Windows, replace SIGTERM with `taskkill` or `TerminateProcess()` for graceful shutdown.
+
+7. **G-26 + G-27 (High, Governor + Bindings)**: Two bugs in the bindings loading flow:
+   - G-26: Governor `< Continue >` with zero pending toggles calls `applyPending` → empty pending → returns early → `while(true)` exits. Fix: guard with `if (pending.size === 0) { notify + continue }`.
+   - G-27: `session_switch` calls `showPersistedLoops` before `setSessionId(sessionId)` — wrong BindingsStore path, empty bindings, zero loops armed on switch. Fix: move `setSessionId(ctx.sessionManager.getSessionId())` to before `showPersistedLoops`. G-27 is the precise root cause; G-17 (#17) was the symptom.

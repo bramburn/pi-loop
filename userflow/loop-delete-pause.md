@@ -116,6 +116,28 @@ stateDiagram-v2
    - Re-adds trigger to TriggerSystem
    - Loop starts firing again
 
+4. **Note:** This path does NOT update the bindings file. The loop resumes in-process but will not be re-armed automatically on session restart. Use `/loop-resume <id>` for bindings-aware resume.
+
+### Resume via `/loop-resume <id>` — Recommended
+
+`/loop-resume <id>` is the **recommended way** to resume a loop. It does three things atomically:
+
+1. `store.resume(id)` — sets status to `active` (idempotent)
+2. `triggerSystem.add(entry)` — re-subscribes cron timer / event listener
+3. `bindings.add(id)` — records this session's intent to arm this loop in `bindings-<sessionId>.json`
+
+On session restart, `showPersistedLoops()` reads the bindings file and re-arms exactly those loops automatically. See [Loop Resume](./loop-resume.md).
+
+### Resume via Tool: `LoopDelete({ action: "resume" })`
+
+Agent calls `LoopDelete({ id: "123", action: "resume" })`:
+
+1. `store.resume(id)` — sets status to `active` (idempotent)
+2. `triggerSystem.add(entry)` — re-subscribes the trigger
+3. Loop starts firing again
+
+**Bindings note:** This tool does NOT update the bindings file. For bindings-aware resume, use `/loop-resume <id>`.
+
 ## Data Structure
 
 ```typescript
