@@ -44,6 +44,63 @@ describe("TaskList", () => {
     expect(out).toContain("#1");
     expect(out).toContain("[in_progress]");
   });
+
+  it("shows blockedBy dependency in list rows", async () => {
+    const { taskStore, text } = setup();
+    taskStore.create("a", "d");
+    taskStore.create("b", "d");
+    taskStore.addBlockedBy("1", ["2"]);
+    const out = await text("TaskList", {});
+    expect(out).toContain("[blocked by #2]");
+  });
+
+  it("sortOrder=id (default) sorts by id", async () => {
+    const { taskStore, text } = setup();
+    taskStore.create("z", "d");
+    taskStore.create("a", "d");
+    const out = await text("TaskList", { sortOrder: "id" });
+    const idx1 = out.indexOf("#1");
+    const idx2 = out.indexOf("#2");
+    expect(idx1).toBeLessThan(idx2); // id order
+  });
+
+  it("sortOrder=status groups completed first", async () => {
+    const { taskStore, text } = setup();
+    taskStore.create("a", "d");
+    taskStore.create("b", "d");
+    taskStore.complete("1");
+    const out = await text("TaskList", { sortOrder: "status" });
+    const idx1 = out.indexOf("#1");
+    const idx2 = out.indexOf("#2");
+    expect(idx1).toBeLessThan(idx2); // completed first
+  });
+
+  it("sortOrder=recent puts newest first (distinct from id order)", async () => {
+    const { taskStore, text } = setup();
+    taskStore.create("a", "d"); // #1
+    taskStore.create("b", "d"); // #2
+    taskStore.complete("1"); // #1 updated more recently than #2
+    const out = await text("TaskList", { sortOrder: "recent" });
+    // #1 completed more recently → appears before #2
+    expect(out.indexOf("#1")).toBeLessThan(out.indexOf("#2"));
+  });
+
+  it("TaskCreate accepts activeForm, owner, agentType, metadata", async () => {
+    const { taskStore, text } = setup();
+    const out = await text("TaskCreate", {
+      subject: "Run tests",
+      description: "Full test suite",
+      activeForm: "Running tests",
+      owner: "agent-1",
+      agentType: "general-purpose",
+      metadata: { priority: "high" },
+    });
+    expect(out).toContain("Task #1 created: Run tests");
+    expect(taskStore.get("1")!.activeForm).toBe("Running tests");
+    expect(taskStore.get("1")!.owner).toBe("agent-1");
+    expect(taskStore.get("1")!.agentType).toBe("general-purpose");
+    expect(taskStore.get("1")!.metadata).toEqual({ priority: "high" });
+  });
 });
 
 describe("TaskGet", () => {

@@ -26,6 +26,7 @@ import {
   createNotificationRuntime,
   type LoopFireEvent,
 } from "./runtime/notification-runtime.js";
+import { createAutoClearManager } from "./auto-clear.js";
 import { resolveBindingsPath, resolveLoopStorePath, resolveTaskStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
 import { createTaskBacklogRuntime } from "./runtime/task-backlog-runtime.js";
@@ -363,6 +364,14 @@ export default function (pi: ExtensionAPI) {
         updateWidget: () => {
           widget.update();
         },
+      });
+
+      // Auto-clear manager: turns-based completed task cleanup
+      createAutoClearManager({
+        pi,
+        cwd: process.cwd(),
+        getTaskStore: () => nativeTaskStore,
+        updateWidget: () => widget.update(),
       });
     } catch (error) {
       if (isStaleExtensionContextError(error)) {

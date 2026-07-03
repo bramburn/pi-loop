@@ -1,6 +1,6 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { AutoClearMode, HiddenAt, SortOrder, TaskScope, TasksConfig } from "../tasks-config.js";
-import { DEFAULT_TASKS_CONFIG } from "../tasks-config.js";
+import { DEFAULT_TASKS_CONFIG, loadTasksConfig, saveTasksConfig } from "../tasks-config.js";
 
 export interface SettingsMenuOptions {
   cwd: string;
@@ -108,7 +108,7 @@ export async function openSettingsMenu(options: SettingsMenuOptions): Promise<vo
 
   while (true) {
     const choices = KEYS.map((key) => {
-      const current = (config as Record<string, unknown>)[key] as unknown;
+      const current = (config as unknown as Record<string, unknown>)[key];
       const value = formatValue(key, current);
       return `${settingLabel(key)}: ${value}`;
     });
@@ -121,8 +121,8 @@ export async function openSettingsMenu(options: SettingsMenuOptions): Promise<vo
     if (idx < 0 || idx >= KEYS.length) break;
 
     const key = KEYS[idx];
-    const newValue = nextValue(key, (config as Record<string, unknown>)[key]);
-    (config as Record<string, unknown>)[key] = newValue;
+    const newValue = nextValue(key, (config as unknown as Record<string, unknown>)[key]);
+    (config as unknown as Record<string, unknown>)[key] = newValue;
 
     // Save immediately
     _saveConfig(cwd, config);

@@ -45,10 +45,18 @@ Fields:
     parameters: Type.Object({
       subject: Type.String({ description: "Brief actionable title for the task (max 80 chars)", maxLength: 80 }),
       description: Type.String({ description: "Detailed description of what needs to be done" }),
+      activeForm: Type.Optional(Type.String({ description: "Present-continuous form for the active spinner (e.g. 'Running tests')" })),
+      owner: Type.Optional(Type.String({ description: "Agent or owner name" })),
+      agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g. 'general-purpose')" })),
+      metadata: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Boolean(), Type.Number()]))),
     }),
     async execute(_toolCallId, params) {
       const subject = params.subject.slice(0, 80);
-      const entry = taskStore.create(subject, params.description);
+      const entry = taskStore.create(subject, params.description, params.metadata, {
+        activeForm: params.activeForm,
+        owner: params.owner,
+        agentType: params.agentType,
+      });
       emitNativeTaskEvent(pi, "tasks:created", entry, undefined, {
         suppressIfPiTasks: true,
         piTasksAvailable: false,
@@ -66,10 +74,30 @@ Fields:
   pi.registerTool({
     name: "TaskList",
     label: "TaskList",
-    description: "List all tasks with status. Use to check progress and find available work.",
-    parameters: Type.Object({}),
-    execute() {
-      const tasks = taskStore.list();
+    description: `List all tasks with status. Use to check progress and find available work.
+
+sortOrder: id (creation order), status (completed → in_progress → pending), recent (most recently updated), oldest (least recently updated)`,
+    parameters: Type.Object({
+      sortOrder: Type.Optional(Type.String({
+        description: "Sort order: id | status | recent | oldest",
+        enum: ["id", "status", "recent", "oldest"],
+      })),
+    }),
+    execute(_toolCallId, params) {
+      let tasks = taskStore.list();
+
+      if (params.sortOrder === "status") {
+        const order = { completed: 0, in_progress: 1, pending: 2 };
+        tasks = [...tasks].sort((a, b) => order[a.status] - order[b.status] || a.id.localeCompare(b.id));
+      } else if (params.sortOrder === "recent") {
+        tasks = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
+      } else if (params.sortOrder === "oldest") {
+        tasks = [...tasks].sort((a, b) => a.updatedAt - b.updatedAt);
+      } else {
+        // id — default order by id (creation order)
+        tasks = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+      }
+
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks."));
 
       const lines: string[] = [];
@@ -81,7 +109,10 @@ Fields:
       for (const t of tasks) {
         statuses[t.status]++;
         const icon = t.status === "completed" ? "ok" : t.status === "in_progress" ? ">" : "*";
-        lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`);
+        const dep = t.blockedBy.length > 0
+          ? ` [blocked by ${t.blockedBy.map((b) => `#${b}`).join(", ")}]`
+          : "";
+        lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80 - dep.length)}${dep}`);
       }
       lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done)`);
       return Promise.resolve(textResult(lines.join("\n")));
