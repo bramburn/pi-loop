@@ -86,15 +86,49 @@ export default function (pi: ExtensionAPI) {
   monitorManager.setOnChange(() => widget.update());
   widget.setTaskSummaryProvider(() => {
     if (!nativeTaskStore) return { count: 0 };
-    const tasks = nativeTaskStore.list().filter(t => t.status === "pending" || t.status === "in_progress");
-    const active = tasks.find(t => t.status === "in_progress");
-    const next = tasks.find(t => t.status === "pending");
+
+    let tasks = nativeTaskStore.list().filter((t) => t.status === "pending" || t.status === "in_progress");
+
+    // Wire widget display settings from tasks-config
+    let cfg: ReturnType<typeof loadTasksConfig>;
+    try {
+      cfg = loadTasksConfig(process.cwd());
+    } catch {
+      cfg = { taskScope: "session", sortOrder: "id", maxVisible: 10, showAll: false, hiddenAt: "bottom", autoClearCompleted: "on_list_complete" };
+    }
+
+    if (cfg.sortOrder === "status") {
+      const order = { completed: 0, in_progress: 1, pending: 2 };
+      tasks = [...tasks].sort((a, b) => order[a.status] - order[b.status]);
+    }
+    if (!cfg.showAll) {
+      tasks = tasks.slice(0, cfg.maxVisible);
+    }
+
+    const active = tasks.find((t) => t.status === "in_progress");
+    const next = tasks.find((t) => t.status === "pending");
     const focus = active
       ? `active: ${active.subject.slice(0, 50)}`
       : next
         ? `next: ${next.subject.slice(0, 50)}`
         : undefined;
-    return { count: tasks.length, focusText: focus };
+
+    // Show blockedBy inline for tasks that are blocked
+    const blockedByLines: string[] = [];
+    for (const t of tasks) {
+      if (t.blockedBy.length > 0) {
+        const { openBlockers } = nativeTaskStore.getWithDependencies(t.id);
+        if (openBlockers.length > 0) {
+          const blockerLabels = openBlockers
+            .map((b) => `#${b.id}`)
+            .slice(0, cfg.maxVisible)
+            .join(", ");
+          blockedByLines.push(`${t.subject.slice(0, 30)} (blocked by ${blockerLabels})`);
+        }
+      }
+    }
+
+    return { count: tasks.length, focusText: focus, blockedByLines };
   });
 
   scheduler = new CronScheduler(store, onLoopFire);
