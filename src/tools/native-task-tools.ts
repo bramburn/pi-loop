@@ -45,10 +45,18 @@ Fields:
     parameters: Type.Object({
       subject: Type.String({ description: "Brief actionable title for the task (max 80 chars)", maxLength: 80 }),
       description: Type.String({ description: "Detailed description of what needs to be done" }),
+      activeForm: Type.Optional(Type.String({ description: "Present-continuous form for the active spinner (e.g. 'Running tests')" })),
+      owner: Type.Optional(Type.String({ description: "Agent or owner name" })),
+      agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g. 'general-purpose')" })),
+      metadata: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Boolean(), Type.Number()]))),
     }),
     async execute(_toolCallId, params) {
       const subject = params.subject.slice(0, 80);
-      const entry = taskStore.create(subject, params.description);
+      const entry = taskStore.create(subject, params.description, params.metadata, {
+        activeForm: params.activeForm,
+        owner: params.owner,
+        agentType: params.agentType,
+      });
       emitNativeTaskEvent(pi, "tasks:created", entry, undefined, {
         suppressIfPiTasks: true,
         piTasksAvailable: false,
@@ -66,10 +74,30 @@ Fields:
   pi.registerTool({
     name: "TaskList",
     label: "TaskList",
-    description: "List all tasks with status. Use to check progress and find available work.",
-    parameters: Type.Object({}),
-    execute() {
-      const tasks = taskStore.list();
+    description: `List all tasks with status. Use to check progress and find available work.
+
+sortOrder: id (creation order), status (completed → in_progress → pending), recent (most recently updated), oldest (least recently updated)`,
+    parameters: Type.Object({
+      sortOrder: Type.Optional(Type.String({
+        description: "Sort order: id | status | recent | oldest",
+        enum: ["id", "status", "recent", "oldest"],
+      })),
+    }),
+    execute(_toolCallId, params) {
+      let tasks = taskStore.list();
+
+      if (params.sortOrder === "status") {
+        const order = { completed: 0, in_progress: 1, pending: 2 };
+        tasks = [...tasks].sort((a, b) => order[a.status] - order[b.status] || a.id.localeCompare(b.id));
+      } else if (params.sortOrder === "recent") {
+        tasks = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
+      } else if (params.sortOrder === "oldest") {
+        tasks = [...tasks].sort((a, b) => a.updatedAt - b.updatedAt);
+      } else {
+        // id — default order by id (creation order)
+        tasks = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+      }
+
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks."));
 
       const lines: string[] = [];
@@ -81,7 +109,10 @@ Fields:
       for (const t of tasks) {
         statuses[t.status]++;
         const icon = t.status === "completed" ? "ok" : t.status === "in_progress" ? ">" : "*";
-        lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`);
+        const dep = t.blockedBy.length > 0
+          ? ` [blocked by ${t.blockedBy.map((b) => `#${b}`).join(", ")}]`
+          : "";
+        lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80 - dep.length)}${dep}`);
       }
       lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done)`);
       return Promise.resolve(textResult(lines.join("\n")));
@@ -91,13 +122,18 @@ Fields:
   pi.registerTool({
     name: "TaskUpdate",
     label: "TaskUpdate",
-    description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done.
+    description: `Update task status, details, metadata, and dependency edges. Set status to "in_progress" before starting work, "completed" when done.
 
 Statuses: pending → in_progress → completed
-Parameters: id (required), status, subject, description`,
+Parameters: id (required), status, subject, description, activeForm, owner, agentType, metadata, addBlocks, addBlockedBy, removeBlocks, removeBlockedBy
+
+Metadata: shallow merge — existing keys are preserved; set a key to null to delete it.
+Dependency edges: addBlocks adds task IDs this task blocks; addBlockedBy adds task IDs that block this task. Bidirectional — both sides of the edge are updated. Cycles, self-dependency, and dangling references produce warnings in the response.`,
     promptGuidelines: [
       "TaskUpdate uses parameter `id`, not `taskId`.",
-      "Accepted parameters: `id` (required), `status`, `subject`, `description`.",
+      "Accepted parameters: `id` (required), `status`, `subject`, `description`, `activeForm`, `owner`, `agentType`, `metadata`, `addBlocks`, `addBlockedBy`, `removeBlocks`, `removeBlockedBy`.",
+      "Metadata: shallow merge. Set a key to null to delete it from metadata.",
+      "Dependency edges: addBlocks/addBlockedBy are bidirectional — both sides of the edge update. Cycles and self-dependency are rejected with warnings.",
       "When validation fails with 'must have required properties id', you passed `taskId` instead of `id`. Correct silently and retry.",
     ],
     parameters: Type.Object({
@@ -105,9 +141,17 @@ Parameters: id (required), status, subject, description`,
       status: Type.Optional(Type.String({ description: "New status", enum: ["pending", "in_progress", "completed"] })),
       subject: Type.Optional(Type.String({ description: "New title" })),
       description: Type.Optional(Type.String({ description: "New description" })),
+      activeForm: Type.Optional(Type.String({ description: "Present-continuous text for the active spinner (e.g. 'Running tests')" })),
+      owner: Type.Optional(Type.String({ description: "Agent or owner name" })),
+      agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g. 'general-purpose')" })),
+      metadata: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]))),
+      addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs this task blocks (bidirectional — target's blockedBy is also updated)" })),
+      addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (bidirectional — blocker's blocks is also updated)" })),
+      removeBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to unblock" })),
+      removeBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs to remove as blockers" })),
     }),
     async execute(_toolCallId, params) {
-      const { id, status, subject, description } = params;
+      const { id, status, subject, description, activeForm, owner, agentType, metadata, addBlocks, addBlockedBy, removeBlocks, removeBlockedBy } = params;
       let entry = taskStore.get(id);
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
 
@@ -132,14 +176,36 @@ Parameters: id (required), status, subject, description`,
         });
       }
 
-      if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
-      if (subject !== undefined || description !== undefined) {
-        entry = taskStore.updateDetails(id, { subject, description });
+      const hasDetailUpdate = subject !== undefined || description !== undefined ||
+        activeForm !== undefined || owner !== undefined || agentType !== undefined || metadata !== undefined;
+      if (hasDetailUpdate) {
+        entry = taskStore.updateDetails(id, { subject, description, activeForm, owner, agentType, metadata });
         if (entry) emitNativeTaskEvent(pi, "tasks:updated", entry, previousStatus, {
           suppressIfPiTasks: true,
           piTasksAvailable: false,
         });
       }
+
+      const warnings: string[] = [];
+      if (addBlocks?.length) {
+        const r = taskStore.addBlocks(id, addBlocks);
+        if (r.warnings.selfDependency) warnings.push("warning: self-dependency");
+        if (r.warnings.cycle) warnings.push("warning: cycle detected");
+        if (r.warnings.danglingReference?.length) {
+          warnings.push(`warning: non-existent tasks: #${r.warnings.danglingReference.join(", #")}`);
+        }
+      }
+      if (addBlockedBy?.length) {
+        const r = taskStore.addBlockedBy(id, addBlockedBy);
+        if (r.warnings.selfDependency) warnings.push("warning: self-dependency");
+        if (r.warnings.cycle) warnings.push("warning: cycle detected");
+        if (r.warnings.danglingReference?.length) {
+          warnings.push(`warning: non-existent tasks: #${r.warnings.danglingReference.join(", #")}`);
+        }
+      }
+      if (removeBlocks?.length) taskStore.removeBlocks(id, removeBlocks);
+      if (removeBlockedBy?.length) taskStore.removeBlockedBy(id, removeBlockedBy);
+
       if (!entry) return Promise.resolve(textResult(`Task #${id} not found`));
       updateWidget();
       const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
@@ -147,7 +213,8 @@ Parameters: id (required), status, subject, description`,
       const autoLoopMsg = backlog.created && backlog.entry
         ? `\nBacklog worker loop #${backlog.entry.id} created`
         : "";
-      return Promise.resolve(textResult(`Task #${id} updated${statusMsg}${autoLoopMsg}`));
+      const warningsMsg = warnings.length > 0 ? `\n${warnings.join("; ")}` : "";
+      return Promise.resolve(textResult(`Task #${id} updated${statusMsg}${warningsMsg}${autoLoopMsg}`));
     },
   });
 
@@ -171,6 +238,58 @@ Parameters: id (required), status, subject, description`,
         return Promise.resolve(textResult(`Task #${params.id} deleted`));
       }
       return Promise.resolve(textResult(`Task #${params.id} not found`));
+    },
+  });
+
+  pi.registerTool({
+    name: "TaskGet",
+    label: "TaskGet",
+    description: `Get full details for a specific task: id, subject, status, owner, activeForm, description, createdAt, updatedAt, completedAt, blocks, blockedBy (all edges), and metadata as JSON.
+
+Shows all dependency edges including completed blockers. Use to inspect a task's full state.`,
+    parameters: Type.Object({
+      id: Type.String({ description: "Task ID to retrieve" }),
+    }),
+    async execute(_toolCallId, params) {
+      const { entry, openBlockers } = taskStore.getWithDependencies(params.id);
+      if (!entry) return Promise.resolve(textResult(`Task #${params.id} not found`));
+
+      const lines: string[] = [];
+      lines.push(`Task #${entry.id}: ${entry.subject}`);
+      lines.push(`Status: ${entry.status}`);
+      if (entry.owner) lines.push(`Owner: ${entry.owner}`);
+      if (entry.activeForm) lines.push(`Active form: ${entry.activeForm}`);
+      lines.push("");
+      lines.push(entry.description);
+
+      if (entry.blocks.length > 0) {
+        lines.push(`Blocks: ${entry.blocks.map((b) => `#${b}`).join(", ")}`);
+      }
+      if (entry.blockedBy.length > 0) {
+        const allBlockers = entry.blockedBy.map((b) => `#${b}`);
+        const openBlockerIds = new Set(openBlockers.map((t) => t.id));
+        const allBlockerLines = allBlockers.map((b) => {
+          const id = b.slice(1);
+          return openBlockerIds.has(id) ? b : `${b} (completed)`;
+        });
+        lines.push(`Blocked by: ${allBlockerLines.join(", ")}`);
+      }
+
+      const metaKeys = Object.keys(entry.metadata);
+      if (metaKeys.length > 0) {
+        lines.push("");
+        lines.push("Metadata:");
+        lines.push(JSON.stringify(entry.metadata, null, 2));
+      }
+
+      lines.push("");
+      lines.push(`Created: ${new Date(entry.createdAt).toISOString()}`);
+      lines.push(`Updated: ${new Date(entry.updatedAt).toISOString()}`);
+      if (entry.completedAt) {
+        lines.push(`Completed: ${new Date(entry.completedAt).toISOString()}`);
+      }
+
+      return Promise.resolve(textResult(lines.join("\n")));
     },
   });
 

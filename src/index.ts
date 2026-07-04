@@ -15,6 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createAutoClearManager } from "./auto-clear.js";
 import { registerLoopCommand } from "./commands/loop-command.js";
 import { registerMonitorsCommand } from "./commands/monitors-command.js";
 import { registerTasksCommand } from "./commands/tasks-command.js";
@@ -33,6 +34,7 @@ import { createTaskRuntimeBridge } from "./runtime/task-rpc.js";
 import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
 import { TaskStore } from "./task-store.js";
+import { loadTasksConfig } from "./tasks-config.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
 import { registerMonitorTools } from "./tools/monitor-tools.js";
 import { registerNativeTaskTools } from "./tools/native-task-tools.js";
@@ -58,7 +60,13 @@ export default function (pi: ExtensionAPI) {
   // PI_LOOP_SCOPE=memory to disable on-disk persistence entirely.
   let loopScope: "memory" | "session" | "project" = piLoopScope ?? "project";
 
-  const getScopeOptions = () => ({ piLoopEnv, loopScope });
+  // Task scope: PI_TASKS_SCOPE env var overrides, otherwise from tasks config file.
+  // Default to "session" matching pi-tasks' default.
+  const piTasksScope = process.env.PI_TASKS_SCOPE as "memory" | "session" | "project" | undefined;
+  let taskScope: "memory" | "session" | "project" =
+    piTasksScope ?? loadTasksConfig(process.cwd()).taskScope;
+
+  const getScopeOptions = () => ({ piLoopEnv, loopScope, taskScope });
 
   // Hoisted so the BindingsStore below can reference it on init.
   let _latestCtx: ExtensionContext | undefined;
@@ -78,15 +86,49 @@ export default function (pi: ExtensionAPI) {
   monitorManager.setOnChange(() => widget.update());
   widget.setTaskSummaryProvider(() => {
     if (!nativeTaskStore) return { count: 0 };
-    const tasks = nativeTaskStore.list().filter(t => t.status === "pending" || t.status === "in_progress");
-    const active = tasks.find(t => t.status === "in_progress");
-    const next = tasks.find(t => t.status === "pending");
+
+    let tasks = nativeTaskStore.list().filter((t) => t.status === "pending" || t.status === "in_progress");
+
+    // Wire widget display settings from tasks-config
+    let cfg: ReturnType<typeof loadTasksConfig>;
+    try {
+      cfg = loadTasksConfig(process.cwd());
+    } catch {
+      cfg = { taskScope: "session", sortOrder: "id", maxVisible: 10, showAll: false, hiddenAt: "bottom", autoClearCompleted: "on_list_complete" };
+    }
+
+    if (cfg.sortOrder === "status") {
+      const order = { completed: 0, in_progress: 1, pending: 2 };
+      tasks = [...tasks].sort((a, b) => order[a.status] - order[b.status]);
+    }
+    if (!cfg.showAll) {
+      tasks = tasks.slice(0, cfg.maxVisible);
+    }
+
+    const active = tasks.find((t) => t.status === "in_progress");
+    const next = tasks.find((t) => t.status === "pending");
     const focus = active
       ? `active: ${active.subject.slice(0, 50)}`
       : next
         ? `next: ${next.subject.slice(0, 50)}`
         : undefined;
-    return { count: tasks.length, focusText: focus };
+
+    // Show blockedBy inline for tasks that are blocked
+    const blockedByLines: string[] = [];
+    for (const t of tasks) {
+      if (t.blockedBy.length > 0) {
+        const { openBlockers } = nativeTaskStore.getWithDependencies(t.id);
+        if (openBlockers.length > 0) {
+          const blockerLabels = openBlockers
+            .map((b) => `#${b.id}`)
+            .slice(0, cfg.maxVisible)
+            .join(", ");
+          blockedByLines.push(`${t.subject.slice(0, 30)} (blocked by ${blockerLabels})`);
+        }
+      }
+    }
+
+    return { count: tasks.length, focusText: focus, blockedByLines };
   });
 
   scheduler = new CronScheduler(store, onLoopFire);
@@ -346,6 +388,7 @@ export default function (pi: ExtensionAPI) {
         updateWidget: () => {
           widget.update();
         },
+        cwd: process.cwd(),
       });
 
       registerNativeTaskTools({
@@ -355,6 +398,14 @@ export default function (pi: ExtensionAPI) {
         updateWidget: () => {
           widget.update();
         },
+      });
+
+      // Auto-clear manager: turns-based completed task cleanup
+      createAutoClearManager({
+        pi,
+        cwd: process.cwd(),
+        getTaskStore: () => nativeTaskStore,
+        updateWidget: () => widget.update(),
       });
     } catch (error) {
       if (isStaleExtensionContextError(error)) {

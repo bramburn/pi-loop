@@ -15,6 +15,9 @@ export type TaskReducerEvent =
     payload: {
       subject: string;
       description: string;
+      activeForm?: string;
+      owner?: string;
+      agentType?: string;
       metadata?: Record<string, unknown>;
     };
   }
@@ -36,6 +39,14 @@ export type TaskReducerEvent =
       id: string;
       subject?: string;
       description?: string;
+      activeForm?: string;
+      owner?: string;
+      agentType?: string;
+      metadata?: Record<string, unknown>;
+      addBlocks?: string[];
+      removeBlocks?: string[];
+      addBlockedBy?: string[];
+      removeBlockedBy?: string[];
     };
   }
   | {
@@ -84,9 +95,14 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
       subject: event.payload.subject,
       description: event.payload.description,
       status: "pending",
+      activeForm: event.payload.activeForm,
+      owner: event.payload.owner,
+      agentType: event.payload.agentType,
+      metadata: event.payload.metadata ?? {},
+      blocks: [],
+      blockedBy: [],
       createdAt: event.at,
       updatedAt: event.at,
-      metadata: event.payload.metadata,
     };
     next.tasksById[id] = task;
     return {
@@ -112,6 +128,11 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
 
   if (event.type === "TASK_DELETED") {
     const next = cloneState(state);
+    // Clean up dependency edges pointing to the deleted task
+    for (const t of Object.values(next.tasksById)) {
+      t.blocks = (t.blocks ?? []).filter((b) => b !== id);
+      t.blockedBy = (t.blockedBy ?? []).filter((b) => b !== id);
+    }
     delete next.tasksById[id];
     return {
       state: next,
@@ -144,6 +165,20 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
   if (event.type === "TASK_UPDATED") {
     if (event.payload.subject !== undefined) task.subject = event.payload.subject;
     if (event.payload.description !== undefined) task.description = event.payload.description;
+    if (event.payload.activeForm !== undefined) task.activeForm = event.payload.activeForm;
+    if (event.payload.owner !== undefined) task.owner = event.payload.owner;
+    if (event.payload.agentType !== undefined) task.agentType = event.payload.agentType;
+    if (event.payload.metadata !== undefined) {
+      Object.assign(task.metadata, event.payload.metadata);
+      // null values in payload are intentional deletes
+      for (const key of Object.keys(event.payload.metadata)) {
+        if (event.payload.metadata[key] === null) delete task.metadata[key];
+      }
+    }
+    if (event.payload.addBlocks) task.blocks = [...new Set([...task.blocks, ...event.payload.addBlocks])];
+    if (event.payload.removeBlocks) task.blocks = task.blocks.filter((b) => !event.payload.removeBlocks!.includes(b));
+    if (event.payload.addBlockedBy) task.blockedBy = [...new Set([...task.blockedBy, ...event.payload.addBlockedBy])];
+    if (event.payload.removeBlockedBy) task.blockedBy = task.blockedBy.filter((b) => !event.payload.removeBlockedBy!.includes(b));
     task.updatedAt = event.at;
   }
 

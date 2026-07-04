@@ -131,4 +131,31 @@ describe("LoopWidget status rendering", () => {
     widget.update();
     expect(latestStatusCall()).toEqual(["loops", undefined]);
   });
+
+  it("shows blockedBy lines inline after focus text", () => {
+    widget.setTaskSummaryProvider(() => ({
+      count: 1,
+      focusText: "active: Implement widget",
+      blockedByLines: [
+        "Setup dependencies (blocked by #2, #3)",
+      ],
+    }));
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "1 task | active: Implement widget › Setup dependencies (blocked by #2, #3)"]);
+  });
+
+  it("shows multiple blockedBy lines after focus text", () => {
+    widget.setTaskSummaryProvider(() => ({
+      count: 2,
+      focusText: "active: Implement widget",
+      blockedByLines: [
+        "Setup deps (blocked by #2)",
+        "Write tests (blocked by #3)",
+      ],
+    }));
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "2 tasks | active: Implement widget › Setup deps (blocked by #2) › Write tests (blocked by #3)"]);
+  });
 });

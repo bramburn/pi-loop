@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { emitNativeTaskEvent } from "../runtime/task-events.js";
 import { TaskStore } from "../task-store.js";
 import type { TaskEntry } from "../task-types.js";
+import { openSettingsMenu } from "../ui/settings-menu.js";
 
 export interface TaskBacklogResult {
   created: boolean;
@@ -13,10 +14,11 @@ export interface TasksCommandOptions {
   getNativeTaskStore: () => TaskStore | undefined;
   evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
   updateWidget: () => void;
+  cwd: string;
 }
 
 export function registerTasksCommand(options: TasksCommandOptions): void {
-  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget } = options;
+  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget, cwd } = options;
 
   async function emitCreated(entry: TaskEntry) {
     // Closes G-19: when pi-tasks is active, the native tools are not
@@ -64,7 +66,8 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     const tasks = taskStore.list();
     const choices = tasks.map((task) => {
       const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : "*";
-      return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60)}`;
+      const dep = task.blockedBy.length > 0 ? ` [blocked by ${task.blockedBy.map((b) => `#${b}`).join(", ")}]` : "";
+      return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60 - dep.length)}${dep}`;
     });
     choices.unshift("+ Create task");
     choices.push("< Back");
@@ -82,7 +85,32 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     const task = taskStore.get(match[1]);
     if (!task) return viewNativeTasks(ui);
 
-    const actions = ["x Delete"];
+    const detailLines: string[] = [`#${task.id}: ${task.subject}`, ""];
+    if (task.owner) detailLines.push(`Owner: ${task.owner}`);
+    if (task.activeForm) detailLines.push(`Active: ${task.activeForm}`);
+    detailLines.push(task.description);
+    if (task.blockedBy.length > 0) {
+      const { openBlockers } = taskStore.getWithDependencies(task.id);
+      const openIds = new Set(openBlockers.map((t) => t.id));
+      const blockerLines = task.blockedBy.map((b) => {
+        const blocker = taskStore.get(b);
+        if (!blocker) return `#${b} (unknown)`;
+        return openIds.has(b) ? `#${b} ${blocker.subject}` : `#${b} ${blocker.subject} [completed]`;
+      });
+      detailLines.push("", `Blocked by: ${blockerLines.join(", ")}`);
+    }
+    if (task.blocks.length > 0) {
+      const blockLines = task.blocks.map((b) => {
+        const blocked = taskStore.get(b);
+        return blocked ? `#${b} ${blocked.subject}` : `#${b} (unknown)`;
+      });
+      detailLines.push("", `Blocks: ${blockLines.join(", ")}`);
+    }
+    if (Object.keys(task.metadata).length > 0) {
+      detailLines.push("", `Metadata: ${JSON.stringify(task.metadata)}`);
+    }
+
+    const actions = ["x Delete", "✎ Edit"];
     if (task.status === "pending") {
       actions.unshift("ok Complete");
       actions.unshift("> Start");
@@ -92,9 +120,10 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     } else {
       actions.unshift("* Reopen");
     }
+    if (task.status === "pending") actions.push("+ Add blocker");
     actions.push("< Back");
 
-    const action = await ui.select(`#${task.id}: ${task.subject}\n\n${task.description}`, actions);
+    const action = await ui.select(detailLines.join("\n"), actions);
     if (!action || action === "< Back") return viewNativeTasks(ui);
 
     if (action === "x Delete") {
@@ -125,6 +154,30 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         piTasksAvailable: !getNativeTaskStore(),
       });
       ui.notify(`Task #${task.id} reopened`, "info");
+    } else if (action === "✎ Edit") {
+      const newSubject = await ui.input("New subject", task.subject);
+      if (!newSubject) return viewNativeTasks(ui);
+      const newDesc = await ui.input("New description", task.description);
+      const updated = taskStore.updateDetails(task.id, {
+        subject: newSubject.trim() || task.subject,
+        description: newDesc?.trim() || task.description,
+      });
+      if (updated) emitNativeTaskEvent(pi, "tasks:updated", updated, task.status, {
+        suppressIfPiTasks: true,
+        piTasksAvailable: !getNativeTaskStore(),
+      });
+      ui.notify(`Task #${task.id} updated`, "info");
+    } else if (action === "+ Add blocker") {
+      const blockerId = await ui.input("Blocker task ID (e.g. 1, 2)");
+      if (!blockerId) return viewNativeTasks(ui);
+      const trimmed = blockerId.trim();
+      if (!trimmed) return viewNativeTasks(ui);
+      const blockerIds = trimmed.split(/[\s,]+/).filter(Boolean);
+      const result = taskStore.addBlockedBy(task.id, blockerIds);
+      if (result.warnings.selfDependency) ui.notify(`Task #${task.id}: cannot block itself`, "warning");
+      if (result.warnings.cycle) ui.notify(`Task #${task.id}: would create a dependency cycle — not applied`, "warning");
+      else if (result.warnings.danglingReference?.length) ui.notify(`Task #${task.id}: unknown tasks: #${result.warnings.danglingReference.join(", #")}`, "warning");
+      else ui.notify(`Task #${task.id} is now blocked by ${blockerIds.join(", ")}`, "info");
     }
 
     updateWidget();
@@ -151,13 +204,40 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         return;
       }
       // Top-level menu: matches /loop's interactive UX.
+      const allCount = taskStore.list().length;
+      const completedCount = taskStore.list().filter((t) => t.status === "completed").length;
       const choice = await ctx.ui.select("Tasks", [
         "Create task",
-        "View tasks",
+        `View tasks (${allCount})`,
+        `Clear completed (${completedCount})`,
+        "Clear all",
+        "Settings",
       ]);
       if (!choice) return;
       if (choice.startsWith("Create")) return createNativeTaskInteractively(ctx.ui);
       if (choice.startsWith("View")) return viewNativeTasks(ctx.ui);
+      if (choice.startsWith("Clear completed")) {
+        const removed = taskStore.pruneCompleted();
+        ctx.ui.notify(`Pruned ${removed} completed task(s)`, "info");
+        updateWidget();
+        return;
+      }
+      if (choice === "Clear all") {
+        const confirmed = await ctx.ui.select("Clear all tasks?", ["< Cancel", "Clear all"]);
+        if (confirmed !== "Clear all") return;
+        const all = taskStore.list();
+        for (const t of all) taskStore.delete(t.id);
+        ctx.ui.notify(`Cleared ${all.length} task(s)`, "info");
+        updateWidget();
+        return;
+      }
+      if (choice === "Settings") {
+        await openSettingsMenu({
+          cwd,
+          ui: ctx.ui,
+          onSave: () => updateWidget(),
+        });
+      }
     },
   });
 }

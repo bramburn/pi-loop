@@ -6,6 +6,7 @@ import type { LoopEntry } from "../types.js";
 interface TaskSummary {
   count: number;
   focusText?: string;
+  blockedByLines?: string[];
 }
 
 export class LoopWidget {
@@ -50,6 +51,9 @@ export class LoopWidget {
 
     let line = parts.join(" · ");
     if (taskSummary.focusText) line += ` | ${taskSummary.focusText}`;
+    if (taskSummary.blockedByLines?.length) {
+      line += taskSummary.blockedByLines.map((b) => ` › ${b}`).join("");
+    }
     return line;
   }
 
