@@ -364,6 +364,7 @@ export default function (pi: ExtensionAPI) {
     updateWidget: () => {
       widget.update();
     },
+    fireLoopNow: onLoopFire,
   });
 
   registerMonitorsCommand({

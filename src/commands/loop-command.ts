@@ -27,10 +27,12 @@ export interface LoopCommandOptions {
   getTriggerSystem: () => TriggerSystemLike;
   getBindingsStore: () => BindingsStore;
   updateWidget: () => void;
+  /** Fire a loop entry immediately (mimics the scheduler firing it). */
+  fireLoopNow: (entry: LoopEntry) => void;
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, getBindingsStore, updateWidget } = options;
+  const { pi, getStore, getTriggerSystem, getBindingsStore, updateWidget, fireLoopNow } = options;
 
   async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
@@ -46,7 +48,15 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       getTriggerSystem().add(entry);
       getBindingsStore().add(entry.id);
       updateWidget();
-      ui.notify(`Loop #${entry.id} created: every ${parsed.description} — bound to this session`, "info");
+
+      const fireNow = await ui.select(`Loop #${entry.id} created: every ${parsed.description}`, [
+        "Leave on schedule",
+        "Start immediately",
+      ]);
+      if (fireNow === "Start immediately") {
+        fireLoopNow(entry);
+        ui.notify(`Loop #${entry.id} fired immediately`, "info");
+      }
     } catch (err: unknown) {
       ui.notify((err as Error).message, "error");
     }
@@ -64,7 +74,15 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     getTriggerSystem().add(entry);
     getBindingsStore().add(entry.id);
     updateWidget();
-    ui.notify(`Event loop #${entry.id} created: fires on "${source}" — bound to this session`, "info");
+
+    const fireNow = await ui.select(`Event loop #${entry.id} created: fires on "${source}"`, [
+      "Leave on schedule",
+      "Start immediately",
+    ]);
+    if (fireNow === "Start immediately") {
+      fireLoopNow(entry);
+      ui.notify(`Event loop #${entry.id} fired immediately`, "info");
+    }
   }
 
   async function viewLoops(ui: ExtensionUIContext) {
@@ -222,7 +240,17 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           getTriggerSystem().add(entry);
           getBindingsStore().add(entry.id);
           updateWidget();
-          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)} — bound to this session`, "info");
+
+          const fireNow = await ui.select(`Loop #${entry.id} created: every ${parsed.description}`, [
+            "Leave on schedule",
+            "Start immediately",
+          ]);
+          if (fireNow === "Start immediately") {
+            fireLoopNow(entry);
+            ui.notify(`Loop #${entry.id} fired immediately`, "info");
+          } else {
+            ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)} — bound to this session`, "info");
+          }
         } catch (err: unknown) {
           ui.notify((err as Error).message, "error");
         }

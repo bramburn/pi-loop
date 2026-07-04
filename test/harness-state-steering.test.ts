@@ -25,7 +25,7 @@ describe("harness state steering", () => {
     expect(sentMessages[0].message.display).toBe(false);
   });
 
-  it("does not deliver while idle if the harness reports pending queued messages, then force-flushes on agent_end", async () => {
+  it("does not deliver while agent is running, then force-flushes on agent_end regardless of hasPendingMessages", async () => {
     const { pi, sentMessages, emitExtension } = createMockPi();
     const extension = await import("../src/index.js");
     extension.default(pi);
