@@ -32,6 +32,8 @@ describe("harness state steering", () => {
 
     const busyQueueCtx = createCtx(true);
     await emitExtension("turn_start", null, busyQueueCtx);
+    // agent_start sets agentRunning=true so the loop is deferred to agent_end
+    await emitExtension("agent_start", null, busyQueueCtx);
 
     pi.events.emit("loop:fire", {
       loopId: "51",
