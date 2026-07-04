@@ -188,7 +188,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       entityId: notification.key,
       payload: { notification },
     });
-    await flushPendingNotifications();
+    await flushPendingNotifications({ ignorePendingMessages: true });
   }
 
   function clear(reason: "session_shutdown" | "session_switch") {
