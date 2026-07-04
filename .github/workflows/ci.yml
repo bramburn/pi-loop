@@ -30,6 +30,18 @@ jobs:
 
       # vitest hangs on exit due to pool worker teardown issues on shared CI runners;
       # use timeout to prevent indefinite hang while preserving non-zero exit on real failures
-      - run: timeout 5m npm run test || test $? -eq 124
+      # timeout is a GNU command (Linux); macOS runners lack it, so use a bash loop instead
+      - run: |
+          # Run tests in background, kill after 5 minutes if still running
+          npm run test &
+          TEST_PID=$!
+          sleep 300
+          if kill -0 $TEST_PID 2>/dev/null; then
+            # Still running after 5 minutes → vitest is hanging, kill and succeed
+            kill $TEST_PID 2>/dev/null || true
+            exit 0
+          fi
+          # Process finished naturally → preserve its exit code
+          wait $TEST_PID
 
       - run: npm run build
