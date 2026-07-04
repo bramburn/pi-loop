@@ -5,7 +5,7 @@ export type LoopScope = "memory" | "session" | "project";
 export interface ScopeOptions {
   piLoopEnv?: string;
   loopScope: LoopScope;
-  taskScope: LoopScope;
+  taskScope?: LoopScope;
   cwd?: string;
 }
 
@@ -27,7 +27,7 @@ export function resolveLoopStorePath(options: ScopeOptions, sessionId?: string):
 
 export function resolveTaskStorePath(options: ScopeOptions, sessionId?: string): string | undefined {
   const cwd = options.cwd ?? process.cwd();
-  const { taskScope } = options;
+  const { taskScope = options.loopScope } = options;
 
   if (taskScope === "memory") return undefined;
   if (taskScope === "session" && sessionId) {
