@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "test": "vitest run --exclude='**/injection.test.ts' --exclude='**/harness-state-steering.test.ts",
+    "test": "vitest run --exclude='**/injection.test.ts' --exclude='**/harness-state-steering.test.ts'",
     "test:all": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
