@@ -67,7 +67,6 @@ Multiple pi terminals in the same repo each pick a disjoint subset of stored loo
 - **Concurrent-session invariant**: two terminals in the same repo write only their own bindings files; the shared `.pi/loops/loops.json` registry is read by all sessions and written through the existing `LoopStore.withLock`. Trigger subscriptions are process-local — terminal A's `triggerSystem.add(#5)` does NOT cause terminal B to fire `#5`.
 
 Implementation: `src/runtime/bindings-store.ts` (BindingsStore class), `src/runtime/scope.ts` (`resolveBindingsPath`), `src/runtime/session-runtime.ts` (`showPersistedLoops` filters arm-list by bindings), `src/commands/loop-command.ts` (governor + bindings-aware one-shot).
-
 ## Trigger Types
 Three trigger types, all stored as `LoopEntry.trigger`:
 - `{ type: "cron", schedule: "*/5 * * * *" }` — timer-based

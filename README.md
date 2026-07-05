@@ -59,7 +59,6 @@ TaskDelete id="1"
 ```
 
 Use the governor when running two or three pi terminals in the same repo and you want each terminal to fire only a disjoint subset of stored loops. Each terminal writes its own `.pi/loops/bindings-<sessionId>.json` file so parallel sessions do not interfere.
-
 `/tasks` — interactive native task viewer/manager, only registered when `pi-tasks` is absent.
 
 ```text
