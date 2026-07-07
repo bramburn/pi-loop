@@ -27,11 +27,15 @@ function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id
     stop: managerOverrides.stop ?? vi.fn(async () => true),
     delete: managerOverrides.delete ?? vi.fn(async () => true),
   };
+  const bindingsStore = {
+    sessionId: "test-session",
+  };
   const handleMonitorDoneLoop = vi.fn();
   registerMonitorTools({
     pi,
     getStore: () => store as any,
     getMonitorManager: () => manager as any,
+    getBindingsStore: () => bindingsStore as any,
     updateWidget: vi.fn(),
     handleMonitorDoneLoop,
   });
