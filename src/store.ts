@@ -111,19 +111,18 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       if (!current) return { entry: undefined, changedFields: [] };
 
       const changedFields: string[] = [];
-      const now = Date.now();
+      if (fields.trigger !== undefined) changedFields.push("trigger");
+      if (fields.prompt !== undefined) changedFields.push("prompt");
+      if (changedFields.length === 0) return { entry: current, changedFields: [] };
 
-      if (fields.trigger !== undefined) {
-        current.trigger = fields.trigger;
-        changedFields.push("trigger");
-      }
-      if (fields.prompt !== undefined) {
-        current.prompt = fields.prompt;
-        changedFields.push("prompt");
-      }
-      if (changedFields.length > 0) {
-        current.updatedAt = now;
-      }
+      this.applyReducerEvent({
+        type: "LOOP_UPDATED",
+        at: Date.now(),
+        source: "tool",
+        entityType: "loop",
+        entityId: id,
+        payload: { id, prompt: fields.prompt, trigger: fields.trigger },
+      });
 
       return { entry: this.entries.get(id), changedFields };
     });

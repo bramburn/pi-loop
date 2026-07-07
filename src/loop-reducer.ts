@@ -52,6 +52,14 @@ export type LoopReducerEvent =
     payload: { id: string };
   }
   | {
+    type: "LOOP_UPDATED";
+    at: number;
+    source: ReducerSource;
+    entityType?: "loop";
+    entityId?: string;
+    payload: { id: string; prompt?: string; trigger?: Trigger };
+  }
+  | {
     type: "LOOP_EXPIRED";
     at: number;
     source: ReducerSource;
@@ -149,6 +157,12 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
 
   if (event.type === "LOOP_FIRED") {
     loop.fireCount = (loop.fireCount ?? 0) + 1;
+    loop.updatedAt = event.at;
+  }
+
+  if (event.type === "LOOP_UPDATED") {
+    if (event.payload.trigger !== undefined) loop.trigger = event.payload.trigger;
+    if (event.payload.prompt !== undefined) loop.prompt = event.payload.prompt;
     loop.updatedAt = event.at;
   }
 
