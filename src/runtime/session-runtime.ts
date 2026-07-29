@@ -31,7 +31,7 @@ export interface SessionRuntimeOptions {
   getLatestCtx: () => ExtensionContext | undefined;
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
-  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void; dispose(): void };
+  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void; dispose(): void; setFiringStatus(loopId: string, prompt: string): void };
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   cleanupTaskBacklogLoops: () => Promise<number>;
@@ -121,6 +121,22 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     const boundEntries = allLoops.filter((entry) => bindings.has(entry.id));
     for (const entry of boundEntries) {
       getTriggerSystem().add(entry);
+      // Fire-on-create for loops created during THIS session. Loops that
+      // were created in a previous session and are being re-armed after a
+      // restart do NOT re-fire — their next iteration is driven by the
+      // scheduler/cron interval.
+      if (entry.runOnCreate && entry.createdAt >= sessionStartedAt) {
+        widget.setFiringStatus(entry.id, entry.prompt);
+        void notificationRuntime.queueOrDeliverNotification({
+          loopId: entry.id,
+          prompt: entry.prompt,
+          trigger: entry.trigger,
+          timestamp: Date.now(),
+          readOnly: entry.readOnly,
+          recurring: entry.recurring,
+          autoTask: entry.autoTask,
+        });
+      }
     }
     if (boundEntries.length > 0) {
       getTriggerSystem().start();
@@ -173,6 +189,16 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       return true;
     });
   }
+
+  pi.on("session_start", async (_event, ctx) => {
+    setLatestCtx(ctx);
+    setSessionId(ctx.sessionManager.getSessionId());
+    widget.setUICtx(ctx.ui);
+    upgradeStoreIfNeeded(ctx);
+    ensureHeartbeat();
+    showPersistedLoops();
+    widget.update();
+  });
 
   pi.on("turn_start", async (_event, ctx) => {
     setLatestCtx(ctx);

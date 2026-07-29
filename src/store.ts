@@ -31,7 +31,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     this.onLoopRemoved = onLoopRemoved;
   }
 
-  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; createdBy?: string }): LoopEntry {
+  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; createdBy?: string; runOnCreate?: boolean }): LoopEntry {
     return this.withLock(() => {
       if (this.entries.size >= MAX_LOOPS) {
         throw new Error(`Maximum of ${MAX_LOOPS} loops reached. Delete some before creating new ones.`);
@@ -51,6 +51,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           readOnly: opts.readOnly,
           maxFires: opts.maxFires,
           createdBy: opts.createdBy,
+          runOnCreate: opts.runOnCreate,
         },
       });
       return this.entries.get(String(this.nextId - 1))!;
@@ -105,7 +106,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string }): { entry: LoopEntry | undefined; changedFields: string[] } {
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; runOnCreate?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] } {
     return this.withLock(() => {
       const current = this.entries.get(id);
       if (!current) return { entry: undefined, changedFields: [] };
@@ -113,6 +114,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       const changedFields: string[] = [];
       if (fields.trigger !== undefined) changedFields.push("trigger");
       if (fields.prompt !== undefined) changedFields.push("prompt");
+      if (fields.runOnCreate !== undefined) changedFields.push("runOnCreate");
       if (changedFields.length === 0) return { entry: current, changedFields: [] };
 
       this.applyReducerEvent({
@@ -121,7 +123,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
         source: "tool",
         entityType: "loop",
         entityId: id,
-        payload: { id, prompt: fields.prompt, trigger: fields.trigger },
+        payload: { id, prompt: fields.prompt, trigger: fields.trigger, runOnCreate: fields.runOnCreate },
       });
 
       return { entry: this.entries.get(id), changedFields };

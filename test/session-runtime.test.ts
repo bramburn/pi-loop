@@ -285,4 +285,98 @@ describe("session-runtime per-session bindings filter", () => {
     expect(armedIds).toContain("1");
     expect(armedIds).toContain("3");
   });
+
+  it("fires stored loops with runOnCreate: true that were created in the current session", async () => {
+    // Isolated setup with its own notificationRuntime so call-count assertions
+    // don't leak state from other tests in the same file.
+    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
+    const { createMockPi } = await import("./helpers/mock-pi.js");
+    const { registerSessionRuntimeHooks } = await import("../src/runtime/session-runtime.js");
+
+    const bindingsStore = new BindingsStore(undefined, "memory");
+    bindingsStore.add("1");
+
+    const now = Date.now();
+    const storedLoops = [
+      {
+        id: "1",
+        status: "active",
+        trigger: { type: "cron" as const, schedule: "*/5 * * * *" },
+        createdAt: now,          // created NOW (this session)
+        runOnCreate: true,
+        prompt: "check build",
+        readOnly: false,
+        recurring: true,
+        autoTask: false,
+        fireCount: 0,
+        expiresAt: now + 7 * 24 * 60 * 60 * 1000,
+      },
+      {
+        id: "2",
+        status: "active",
+        trigger: { type: "cron" as const, schedule: "*/10 * * * *" },
+        createdAt: now - 86_400_000, // created yesterday (previous session)
+        runOnCreate: true,
+        prompt: "old prompt",
+        readOnly: false,
+        recurring: true,
+        autoTask: false,
+        fireCount: 0,
+        expiresAt: now + 7 * 24 * 60 * 60 * 1000,
+      },
+    ];
+    const triggerSystem = {
+      start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn(), wasRecentlyFired: vi.fn(() => false),
+    };
+    const notificationRuntime = {
+      queueOrDeliverNotification: vi.fn(async () => {}),
+      syncRuntimeState: vi.fn(),
+      flushPendingNotifications: vi.fn(async () => {}),
+      clear: vi.fn(),
+    };
+    const widget = { setUICtx: vi.fn(), update: vi.fn(), dispose: vi.fn(), setFiringStatus: vi.fn() };
+    const store = {
+      list: () => storedLoops as any,
+      clearExpired: vi.fn(),
+      expireEventLoops: vi.fn(),
+    };
+
+    const { pi, extensionHandlers } = createMockPi();
+    registerSessionRuntimeHooks({
+      pi,
+      getLoopScope: () => "memory",
+      getPiLoopEnv: () => undefined,
+      recreateSessionStore: vi.fn(),
+      clearAllLoops: vi.fn(),
+      getStore: () => store as any,
+      getScheduler: () => ({ nextFire: vi.fn(() => undefined), pump: vi.fn() }) as any,
+      getTriggerSystem: () => triggerSystem as any,
+      getBindingsStore: () => bindingsStore,
+      getLatestCtx: () => undefined,
+      setLatestCtx: vi.fn(),
+      setSessionId: vi.fn(),
+      widget,
+      notificationRuntime: notificationRuntime as any,
+      flushPendingNotifications: vi.fn(async () => {}),
+      cleanupTaskBacklogLoops: vi.fn(async () => 0),
+      hasPendingTasks: vi.fn(async () => 0),
+      cleanDoneTasks: vi.fn(async () => {}),
+    });
+
+    const drive = async (name: string) => {
+      const { createCtx } = await import("./helpers/mock-pi.js");
+      for (const handler of extensionHandlers.get(name) ?? []) {
+        await handler(null, createCtx());
+      }
+    };
+
+    await drive("before_agent_start");
+
+    // Only loop #1 should fire on create (createdAt === now, not a previous session).
+    // Loop #2 should NOT fire (created yesterday, not this session).
+    // Check widget.setFiringStatus (simpler than queueOrDeliverNotification call-count
+    // which is sensitive to vi.restoreAllMocks() state from other test files).
+    expect(widget.setFiringStatus).toHaveBeenCalledTimes(1);
+    expect(widget.setFiringStatus).toHaveBeenCalledWith("1", "check build");
+  });
 });

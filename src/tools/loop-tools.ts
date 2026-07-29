@@ -13,11 +13,12 @@ interface LoopStoreLike {
     readOnly?: boolean;
     maxFires?: number;
     createdBy?: string;
+    runOnCreate?: boolean;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
   delete(id: string): boolean;
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string }): {
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; runOnCreate?: boolean }): {
     entry: LoopEntry | undefined;
     changedFields: string[];
   };
@@ -47,6 +48,23 @@ interface MonitorManagerLike {
   get(id: string): MonitorLike | undefined;
 }
 
+interface NotificationRuntimeLike {
+  queueOrDeliverNotification(data: {
+    loopId: string;
+    prompt: string;
+    trigger: Trigger | string;
+    timestamp: number;
+    readOnly?: boolean;
+    recurring?: boolean;
+    autoTask?: boolean;
+  }): Promise<void>;
+}
+
+interface WidgetLike {
+  setFiringStatus(loopId: string, prompt: string): void;
+  update(): void;
+}
+
 export interface LoopToolsOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
@@ -54,6 +72,8 @@ export interface LoopToolsOptions {
   getBindingsStore: () => BindingsStoreLike;
   getScheduler: () => SchedulerLike;
   getMonitorManager: () => MonitorManagerLike;
+  getNotificationRuntime: () => NotificationRuntimeLike;
+  getWidget: () => WidgetLike;
   updateWidget: () => void;
   maybeBootstrapTaskLoop: (entry: LoopEntry) => Promise<boolean>;
   isTaskSystemReady: () => boolean;
@@ -113,6 +133,8 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     getBindingsStore,
     getScheduler,
     getMonitorManager,
+    getNotificationRuntime,
+    getWidget,
     updateWidget,
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
@@ -156,6 +178,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 - **autoTask**: when pi-tasks is loaded or native task fallback is active, auto-create a task on each fire
 - **taskBacklog**: mark this as a task-backlog worker loop so it auto-deletes when pending tasks reach zero
 - **readOnly**: restrict the agent to read-only tools when this loop fires (default: false)
+- **runOnCreate**: fire the loop immediately on creation if the agent is idle (default: true). Set to false to only start from the next scheduled interval.
 - **maxFires**: auto-stop after N fires — prevents infinite token burn on polling loops`,
     promptGuidelines: [
       "Use LoopCreate when the user asks for a repeating task, periodic check, scheduled reminder, or 'every X' — never use raw Bash for/sleep/while.",
@@ -187,10 +210,11 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       triggerType: Type.Optional(Type.String({ description: "cron, event, or hybrid (inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid"] })),
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
+      runOnCreate: Type.Optional(Type.Boolean({ description: "Fire immediately on creation if the agent is idle (default: true). Set to false to only start from the next interval.", default: true })),
       maxFires: Type.Optional(Type.Number({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops." })),
     }),
     async execute(_toolCallId, params) {
-      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires } = params;
+      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, runOnCreate, maxFires } = params;
 
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
@@ -222,10 +246,27 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
         readOnly,
         maxFires,
         createdBy: getBindingsStore().sessionId,
+        runOnCreate,
       });
 
       getTriggerSystem().add(entry);
       getBindingsStore().add(entry.id);
+
+      // Fire-on-create: if runOnCreate is true (default), immediately queue
+      // the first iteration for delivery once the agent is idle and flash the
+      // status bar so the user sees an immediate visual cue.
+      if (entry.runOnCreate) {
+        getWidget().setFiringStatus(entry.id, entry.prompt);
+        await getNotificationRuntime().queueOrDeliverNotification({
+          loopId: entry.id,
+          prompt: entry.prompt,
+          trigger: entry.trigger,
+          timestamp: Date.now(),
+          readOnly: entry.readOnly,
+          recurring: entry.recurring,
+          autoTask: entry.autoTask,
+        });
+      }
 
       if (trigger.type === "event" && trigger.source === "monitor:done" && trigger.filter) {
         try {
@@ -363,27 +404,29 @@ Use "pause" to temporarily stop a loop without removing it. Use "delete" to perm
 Use this when the user wants to:
 - change a loop's interval (e.g., "change loop 5 from 5m to 10m")
 - rewrite a loop's prompt
+- enable/disable fire-on-create (runOnCreate)
 - change maxFires or other settings
 
 The change is in-place; the loop ID stays the same. If you change the trigger, the old trigger subscription is removed and the new one is registered.
 
 ## When NOT to Use
 
-This tool does NOT support changing readOnly, autoTask, or taskBacklog (those are runtime-bound at create time). Delete and recreate the loop if you need to change those.`,
+This tool does NOT support changing readOnly, autoTask, or taskBacklog (those are runtime-bound at create time). Delete and recreate the loop if you need to change those. This tool does support changing runOnCreate to enable or disable the immediate-first-fire behaviour.`,
     parameters: Type.Object({
       id: Type.String({ description: "Loop ID to update" }),
       trigger: Type.Optional(Type.String({ description: "New trigger (cron, event source, or hybrid spec). Replaces the existing trigger." })),
       prompt: Type.Optional(Type.String({ description: "New prompt text" })),
+      runOnCreate: Type.Optional(Type.Boolean({ description: "Enable (true) or disable (false) fire-on-create for this loop." })),
       maxFires: Type.Optional(Type.Number({ description: "New maxFires cap. Only enforced for recurring loops." })),
     }),
     async execute(_toolCallId, params) {
-      const { id, trigger: triggerInput, prompt, maxFires } = params;
+      const { id, trigger: triggerInput, prompt, runOnCreate, maxFires } = params;
 
       const existing = getStore().get(id);
       if (!existing) return Promise.resolve(textResult(`Loop #${id} not found`));
 
-      if (triggerInput === undefined && prompt === undefined && maxFires === undefined) {
-        return Promise.resolve(textResult(`No changes provided for loop #${id}. Specify trigger, prompt, or maxFires.`));
+      if (triggerInput === undefined && prompt === undefined && runOnCreate === undefined && maxFires === undefined) {
+        return Promise.resolve(textResult(`No changes provided for loop #${id}. Specify trigger, prompt, runOnCreate, or maxFires.`));
       }
 
       // Validate + parse the new trigger if provided
@@ -417,6 +460,7 @@ This tool does NOT support changing readOnly, autoTask, or taskBacklog (those ar
       const { entry, changedFields } = getStore().updateMetadata(id, {
         trigger: parsedTrigger,
         prompt,
+        runOnCreate,
       });
 
       // Apply maxFires (separate field, not in updateMetadata signature)
