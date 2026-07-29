@@ -363,13 +363,17 @@ describe("session-runtime per-session bindings filter", () => {
       cleanDoneTasks: vi.fn(async () => {}),
     });
 
-    const drive = async (name: string) => {
+    const drive = async (name: string, data?: any) => {
       const { createCtx } = await import("./helpers/mock-pi.js");
       for (const handler of extensionHandlers.get(name) ?? []) {
-        await handler(null, createCtx());
+        await handler(data ?? null, createCtx());
       }
     };
 
+    // Reset persistedShown (module-level closure state from previous tests in this
+    // file) by driving a session_switch. Without this, showPersistedLoops returns
+    // early and setFiringStatus is never called.
+    await drive("session_switch");
     await drive("before_agent_start");
 
     // Only loop #1 should fire on create (createdAt === now, not a previous session).

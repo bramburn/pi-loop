@@ -125,7 +125,11 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       // were created in a previous session and are being re-armed after a
       // restart do NOT re-fire — their next iteration is driven by the
       // scheduler/cron interval.
-      if (entry.runOnCreate && entry.createdAt >= sessionStartedAt) {
+      // sessionStartedAt is captured at the start of showPersistedLoops, which
+      // may be a few ms after loop creation if Date.now() was called between
+      // them. Use a 10ms tolerance so a loop created in the same synchronous
+      // block as session start is correctly identified as "this session".
+      if (entry.runOnCreate && entry.createdAt >= sessionStartedAt - 10) {
         widget.setFiringStatus(entry.id, entry.prompt);
         void notificationRuntime.queueOrDeliverNotification({
           loopId: entry.id,

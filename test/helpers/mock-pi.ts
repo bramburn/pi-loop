@@ -122,11 +122,15 @@ export function createMockPi(options: MockPiOptions = {}): MockPi {
 
   const pi: any = {
     events,
-    on(name: string, handler: (data: any, ctx: any) => unknown) {
+    // Use mockImplementation so the handler-push logic survives vi.restoreAllMocks():
+    // without it, the mock's implementation is restored to an empty fn after each
+    // test's afterEach, breaking subsequent registerSessionRuntimeHooks calls that
+    // depend on pi.on being functional (e.g. the session-runtime fire-on-create test).
+    on: vi.fn((name: string, handler: (data: any, ctx: any) => unknown) => {
       const handlers = extensionHandlers.get(name) ?? [];
       handlers.push(handler);
       extensionHandlers.set(name, handlers);
-    },
+    }),
     registerTool(tool: RegisteredTool) {
       toolMap.set(tool.name, tool);
     },

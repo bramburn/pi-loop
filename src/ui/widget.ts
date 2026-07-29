@@ -64,6 +64,8 @@ export class LoopWidget {
 
   update() {
     if (!this.uiCtx) return;
+    // Never overwrite a live firing flash — let the 5s timer revert naturally.
+    if (this.firingTimer !== undefined) return;
     this.uiCtx.setStatus("loops", this.computeStatus());
   }
 
