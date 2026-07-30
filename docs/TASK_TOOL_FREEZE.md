@@ -48,7 +48,13 @@ TaskCreate 4 ...   ← commit drain
 TaskCreate 5 ...
 ```
 
-The same pattern applies to **any TUI-bound tool** that triggers a visible state mutation on success (e.g. `TaskUpdate`, `TaskDelete`, `LoopCreate`, `LoopDelete`).
+The same pattern applies to **any TUI-bound tool** that triggers a visible state mutation on success — concrete list (all return IPC events that mutate top-level React state):
+
+- `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskDelete`, `TaskGet`, `TaskPrune`
+- `LoopCreate`, `LoopUpdate`, `LoopList`, `LoopDelete`
+- `MonitorCreate`, `MonitorList`, `MonitorStop`, `MonitorDelete`
+- `TaskCreate` (native fallback)
+- Any pi extension tool registered via `pi.registerTool`
 
 ## Mitigation if you hit a freeze
 
@@ -64,6 +70,20 @@ In pi's TUI layer:
 - Or: debounce the task list re-render with a 50-100ms coalescing window.
 
 Filed as a follow-up; no upstream PR yet.
+
+## Local mitigation in `pi-loop`
+
+Since the upstream fix is out of our hands, `pi-loop` ships a runtime guard at the `pi.registerTool` boundary. The `wrapToolExecute` wrapper in `src/telemetry/sentry.ts` counts calls per tool name on a 1-second sliding window. If more than `MAX_PARALLEL_CALLS` (= 2) of the same tool fire in that window, the wrapper throws a clear error:
+
+> Parallel tool call storm for 'MonitorCreate': 3 calls within 1000ms (limit is 2). Call this tool sequentially to avoid TUI freeze.
+
+The model sees the error, learns, and reduces parallelism. Tested in `test/telemetry/sentry.test.ts` (4 cases covering allow / throw / per-tool isolation / reset). The guard is **always on** — it doesn't depend on Sentry being initialized.
+
+Trade-offs:
+
+- The guard fires on the 3rd call, so 1–2 IPC events still happen before the throw. The cumulative load is much lower than the 9+ that caused the original freeze.
+- The error message is visible to the model, so future prompts will self-throttle.
+- Different tools have separate counters, so a `MonitorCreate` storm doesn't block a `LoopCreate` call.
 
 ## Related
 

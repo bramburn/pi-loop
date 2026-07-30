@@ -121,7 +121,8 @@ Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it,
 | `addBreadcrumb(msg, data?)` | Emit a structured breadcrumb | No-op when not initialized |
 | `logInfo / logDebug / logWarn / logError` | Pipe structured logs via Sentry's `logger` | No-op when not initialized |
 | `flushSentry(timeoutMs?)` | Flush buffered events (e.g. on shutdown) | No-op when not initialized |
-| `wrapToolExecute(name, fn)` | Wrap a tool's `execute` with breadcrumb + capture + rethrow | Used at the `pi.registerTool` boundary in `src/index.ts` |
+| `wrapToolExecute(name, fn)` | Wrap a tool's `execute` with parallel-storm guard + breadcrumb + capture + rethrow | Used at the `pi.registerTool` boundary in `src/index.ts` |
+| `recordParallelCall(name)` / `checkParallelStorm(name)` / `resetParallelGuard()` | Per-tool sliding-window call counter (2 calls / 1s) | Throws on the 3rd call to prevent TUI freeze |
 | `scrubPii(input)` | Recursive PII redactor (paths, env, DSN, sensitive keys) | Used by `beforeSend` / `beforeBreadcrumb` / `beforeSendLog` |
 
 **PII scrubbing rules** (in `scrubPii`):

@@ -138,11 +138,48 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 	await Sentry.flush(timeoutMs);
 }
 
+// Parallel-call storm guard. When the LLM fires more than MAX_PARALLEL_CALLS
+// of the same tool inside RECENT_WINDOW_MS, the TUI's render loop saturates
+// (each tool result is an IPC event that mutates top-level React state). The
+// guard throws a clear error so the model learns to call tools sequentially.
+// Tracked per tool name so different tools don't interfere.
+const RECENT_WINDOW_MS = 1000;
+const MAX_PARALLEL_CALLS = 2;
+const recentCalls = new Map<string, number[]>();
+
+export function resetParallelGuard(): void {
+	recentCalls.clear();
+}
+
+export function recordParallelCall(toolName: string): void {
+	const now = Date.now();
+	const timestamps = (recentCalls.get(toolName) ?? []).filter(
+		(t) => now - t < RECENT_WINDOW_MS,
+	);
+	timestamps.push(now);
+	recentCalls.set(toolName, timestamps);
+}
+
+export function checkParallelStorm(toolName: string): void {
+	const now = Date.now();
+	const timestamps = (recentCalls.get(toolName) ?? []).filter(
+		(t) => now - t < RECENT_WINDOW_MS,
+	);
+	if (timestamps.length > MAX_PARALLEL_CALLS) {
+		throw new Error(
+			`Parallel tool call storm for '${toolName}': ${timestamps.length} calls within ${RECENT_WINDOW_MS}ms ` +
+				`(limit is ${MAX_PARALLEL_CALLS}). Call this tool sequentially to avoid TUI freeze.`,
+		);
+	}
+}
+
 export function wrapToolExecute<TArgs extends unknown[], TResult>(
 	toolName: string,
 	fn: (...args: TArgs) => Promise<TResult>,
 ): (...args: TArgs) => Promise<TResult> {
 	return async (...args: TArgs) => {
+		recordParallelCall(toolName);
+		checkParallelStorm(toolName);
 		addBreadcrumb(`tool:${toolName}`);
 		try {
 			return await fn(...args);

@@ -243,3 +243,59 @@ describe("flushSentry", () => {
 		expect(flush).toHaveBeenCalledWith(5000);
 	});
 });
+
+describe("parallel call storm guard", () => {
+	it("allows up to 2 calls in the window", async () => {
+		const { wrapToolExecute, resetParallelGuard } = await import(
+			"../../src/telemetry/sentry.js"
+		);
+		resetParallelGuard();
+		const fn = vi.fn().mockResolvedValue("ok");
+		const wrapped = wrapToolExecute("monitor_create", fn);
+		await expect(wrapped()).resolves.toBe("ok");
+		await expect(wrapped()).resolves.toBe("ok");
+		expect(fn).toHaveBeenCalledTimes(2);
+	});
+
+	it("throws on the 3rd call within the window for the same tool", async () => {
+		const { wrapToolExecute, resetParallelGuard } = await import(
+			"../../src/telemetry/sentry.js"
+		);
+		resetParallelGuard();
+		const fn = vi.fn().mockResolvedValue("ok");
+		const wrapped = wrapToolExecute("monitor_create", fn);
+		await wrapped();
+		await wrapped();
+		await expect(wrapped()).rejects.toThrow(/Parallel tool call storm/);
+	});
+
+	it("tracks per tool name independently", async () => {
+		const { wrapToolExecute, resetParallelGuard } = await import(
+			"../../src/telemetry/sentry.js"
+		);
+		resetParallelGuard();
+		const fn = vi.fn().mockResolvedValue("ok");
+		const mon = wrapToolExecute("monitor_create", fn);
+		const loop = wrapToolExecute("loop_create", fn);
+		await mon();
+		await mon();
+		await loop();
+		await loop();
+		// Third call to either should still throw.
+		await expect(mon()).rejects.toThrow(/Parallel tool call storm/);
+		await expect(loop()).rejects.toThrow(/Parallel tool call storm/);
+	});
+
+	it("resetParallelGuard clears the counters", async () => {
+		const { wrapToolExecute, resetParallelGuard } = await import(
+			"../../src/telemetry/sentry.js"
+		);
+		resetParallelGuard();
+		const fn = vi.fn().mockResolvedValue("ok");
+		const wrapped = wrapToolExecute("monitor_create", fn);
+		await wrapped();
+		await wrapped();
+		resetParallelGuard();
+		await expect(wrapped()).resolves.toBe("ok");
+	});
+});
