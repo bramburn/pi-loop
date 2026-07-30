@@ -23,12 +23,15 @@ function setup() {
   // is covered separately in test/bindings-store.test.ts.
   const bindingsStore = new BindingsStore(undefined, "memory", "test-session");
   const updateWidget = vi.fn();
+  const widget = { setFiringStatus: vi.fn() };
+  const notificationRuntime = { queueOrDeliverNotification: vi.fn(async () => {}) };
 
   // Wrap the store with a proxy that auto-injects createdBy on every create()
   // call, mirroring the production behavior in Governor and LoopCreate. Tests
   // that want a loop in "Other terminals" can override by passing
   // createdBy: undefined or a different value explicitly.
   const rawStore = new LoopStore();
+  const updateMetadataSpy = vi.spyOn(rawStore, "updateMetadata");
   const store = new Proxy(rawStore, {
     get(target, prop) {
       const val = (target as any)[prop];
@@ -46,6 +49,8 @@ function setup() {
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
     getBindingsStore: () => bindingsStore,
+    getNotificationRuntime: () => notificationRuntime as any,
+    getWidget: () => widget as any,
     updateWidget,
   });
 
@@ -56,7 +61,7 @@ function setup() {
     confirm: vi.fn(),
   };
 
-  return { commandMap, store, triggerSystem, bindingsStore, updateWidget, ui };
+  return { commandMap, store, rawStore, triggerSystem, bindingsStore, updateWidget, ui, updateMetadataSpy, notificationRuntime, widget };
 }
 
 describe("/loop-resume command — one-shot path", () => {
@@ -197,7 +202,6 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    // options[0] is section header "— My loops —"; loop row at options[1]
     expect(options[1]).toMatch(/^\[ \] #1 /);
     expect(options[1]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
   });
@@ -214,8 +218,6 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    // options[0] is section header "— My loops —"; loop row at options[1]
-    // ~ suffix appears after [x] for a bound, paused loop
     expect(options[1]).toMatch(/^\[x\]~ #1 \[paused\]/);
   });
 
@@ -239,7 +241,6 @@ describe("/loop-resume command — governor path", () => {
       expect.stringContaining("Loop #1 is paused"),
       "warning",
     );
-    // Loop is bound despite being paused
     expect(h.bindingsStore.has(paused.id)).toBe(true);
   });
 
@@ -247,10 +248,7 @@ describe("/loop-resume command — governor path", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "active-loop", {
       recurring: true,
     });
-    // Not bound — toggling it on means arming
 
-    // 1) picker: toggle loop → pending arm, NO warning (loop is active)
-    // 2) picker: < OK
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] active-loop (cron: */5 * * * *)")
       .mockResolvedValueOnce("< OK");
@@ -267,8 +265,6 @@ describe("/loop-resume command — governor path", () => {
   it("toggles a row, then OK applies and persists bindings", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "toggled", { recurring: true });
 
-    // First render: pick the loop row (toggles it on, pending={1: "arm"})
-    // Second render: pick < OK
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] toggled (cron: */5 * * * *)")
       .mockResolvedValueOnce("< OK");
@@ -308,9 +304,6 @@ describe("/loop-resume command — governor path", () => {
   it("Continue opens ui.confirm; OK applies, Cancel returns to picker", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "to-arm", { recurring: true });
 
-    // 1) picker: toggle loop on
-    // 2) picker: < Continue → ui.confirm
-    // 3) ui.confirm OK
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] to-arm (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -333,10 +326,6 @@ describe("/loop-resume command — governor path", () => {
       recurring: true,
     });
 
-    // 1) picker: toggle loop on
-    // 2) picker: < Continue → ui.confirm
-    // 3) ui.confirm Cancel → return to picker
-    // 4) picker: < Cancel (exit)
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] stays-unbound (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue")
@@ -354,8 +343,6 @@ describe("/loop-resume command — governor path", () => {
   it("< Cancel from the picker discards pending changes", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "abort-me", { recurring: true });
 
-    // 1) picker: toggle loop on (pending = {1: "arm"})
-    // 2) picker: < Cancel → discard
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] abort-me (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Cancel");
@@ -378,9 +365,6 @@ describe("/loop-resume command — governor path", () => {
     });
     h.bindingsStore.add("2"); // beta is already bound
 
-    // Render 1: toggle alpha (off → arm)
-    // Render 2: toggle beta (bound → disarm)
-    // Render 3: < OK → apply
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] alpha (cron: */5 * * * *)")
       .mockResolvedValueOnce("[x] #2 [active] beta (event: tool_execution_start)")
@@ -423,8 +407,6 @@ describe("/loop-resume command — governor path", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "noop", { recurring: true });
     h.bindingsStore.add("1");
 
-    // First select: Governor opens → Continue → notify → back to picker
-    // Second select: Cancel → exit
     h.ui.select
       .mockResolvedValueOnce("< Continue")
       .mockResolvedValueOnce("< Cancel");
@@ -432,24 +414,17 @@ describe("/loop-resume command — governor path", () => {
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    // No confirm dialog shown when there are no pending toggles
     expect(h.ui.confirm).not.toHaveBeenCalled();
-    // Picker stays open instead of exiting
     expect(h.ui.notify).toHaveBeenCalledWith(
       "No pending changes — select loops to toggle or click Cancel.",
       "info",
     );
   });
 
-  it("Continue+OK with XOR-noop pending (arm then disarm same loop) shows 'No changes to apply.'", async () => {
+  it("Continue+OK with XOR-noop pending shows 'No changes to apply.'", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "xor-noop", { recurring: true });
-    h.bindingsStore.add("1"); // loop is already bound — toggling off then back = net zero
+    h.bindingsStore.add("1");
 
-    // 1) picker: toggle loop → pending = {1: "disarm"} (currently bound → disarm)
-    // 2) picker: toggle same loop again → pending.delete(1) (undoes the disarm)
-    // 3) picker: Continue → confirm shows "No changes."
-    // 4) confirm: OK → applyPending with empty pending → no-op
-    // 5) expect "No changes to apply." notification
     h.ui.select
       .mockResolvedValueOnce("[x] #1 [active] xor-noop (cron: */5 * * * *)")
       .mockResolvedValueOnce("[ ] #1 [active] xor-noop (cron: */5 * * * *)")
@@ -460,17 +435,14 @@ describe("/loop-resume command — governor path", () => {
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     expect(h.ui.confirm).toHaveBeenCalledWith("Apply changes?", "No changes.");
-    expect(h.bindingsStore.has("1")).toBe(true); // still bound — net zero change
+    expect(h.bindingsStore.has("1")).toBe(true);
     expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
   });
 
   it("Continue+OK with real pending changes emits Armed/Disarmed summary", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "real", { recurring: true });
-    h.bindingsStore.add("1"); // loop already bound
+    h.bindingsStore.add("1");
 
-    // 1) picker: toggle loop off → pending = {1: "disarm"}
-    // 2) picker: Continue → confirm shows "Disarm: #1"
-    // 3) confirm: OK → loop disarmed
     h.ui.select
       .mockResolvedValueOnce("[x] #1 [active] real (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -484,19 +456,14 @@ describe("/loop-resume command — governor path", () => {
       expect.stringContaining("Disarmed: #1"),
       "info",
     );
-    // No "No changes to apply." because there were real changes
     expect(h.ui.notify).not.toHaveBeenCalledWith("No changes to apply.", "info");
   });
 
   it("Continue diff shows currently-armed loops alongside pending changes", async () => {
-    // Loop #1 is already bound (pre-existing binding from previous session).
-    // User arms loop #2 in this session.
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
-    h.bindingsStore.add("1"); // pre-existing binding
+    h.bindingsStore.add("1");
 
-    // 1) picker: toggle #2 on → pending = {2: "arm"}
-    // 2) picker: Continue → diff shows Armed (unchanged) for #1 + Arm for #2
     h.ui.select
       .mockResolvedValueOnce("[ ] #2 [active] beta (cron: */10 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -517,10 +484,7 @@ describe("/loop-resume command — governor path", () => {
 
   it("Continue diff shows only pending changes when no pre-existing bindings", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo", { recurring: true });
-    // No pre-existing bindings.
 
-    // 1) picker: toggle loop on
-    // 2) picker: Continue → diff shows only "Arm: #1"
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] solo (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -538,8 +502,6 @@ describe("/loop-resume command — governor path", () => {
     h.bindingsStore.add("1");
     h.bindingsStore.add("2");
 
-    // User disarms loop #1; #2 stays armed.
-    // Diff should show: Armed: #2 (unchanged) + Disarm: #1
     h.ui.select
       .mockResolvedValueOnce("[x] #1 [active] alpha (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -556,10 +518,8 @@ describe("/loop-resume command — governor path", () => {
       "Apply changes?",
       expect.stringContaining("Disarm:\n  #1 alpha"),
     );
-    // Loop #1 should NOT appear in the unchanged list
-    // Confirm was called once with both lines — verify the combined string
     const confirmCall = h.ui.confirm.mock.calls[0][1] as string;
-    expect(confirmCall).not.toContain("Armed: #1");  // #1 was disarmed, not unchanged
+    expect(confirmCall).not.toContain("Armed: #1");
   });
 
   it("Continue diff warns about paused loops pending arm", async () => {
@@ -567,10 +527,7 @@ describe("/loop-resume command — governor path", () => {
       recurring: true,
     });
     h.store.pause(paused.id);
-    // Not bound — arming it in the Governor
 
-    // 1) picker: toggle loop on → pending arm, warning emitted (tested separately)
-    // 2) picker: Continue → diff shows warning about paused loop
     h.ui.select
       .mockResolvedValueOnce("[~] #1 [paused] paused-loop (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Continue");
@@ -595,9 +552,6 @@ describe("/loop-resume command — governor path", () => {
     h.store.pause(paused1.id);
     h.store.pause(paused2.id);
 
-    // 1) picker: toggle loop #1 on → pending arm
-    // 2) picker: toggle loop #2 on → pending arm
-    // 3) picker: Continue → diff shows plural warning
     h.ui.select
       .mockResolvedValueOnce("[~] #1 [paused] p1 (cron: */5 * * * *)")
       .mockResolvedValueOnce("[~] #2 [paused] p2 (cron: */10 * * * *)")
@@ -614,7 +568,6 @@ describe("/loop-resume command — governor path", () => {
   });
 
   // Helper: toggle a loop row and then delete the loop before OK is clicked.
-  // This simulates another terminal deleting the loop while the Governor is open.
   function setupOrphanedBeforeOk(
     h: ReturnType<typeof setup>,
     loopId: string,
@@ -646,8 +599,6 @@ describe("/loop-resume command — governor path", () => {
       expect.stringContaining("Skipped — loops no longer exist"),
       "warning",
     );
-    // The loop was orphaned — binding was never added because the loop no
-    // longer exists in the store at apply time.
     expect(h.bindingsStore.has(loop.id)).toBe(false);
   });
 
@@ -657,7 +608,7 @@ describe("/loop-resume command — governor path", () => {
       "disarm-deleted",
       { recurring: true },
     );
-    setupOrphanedBeforeOk(h, loop.id, true); // already bound
+    setupOrphanedBeforeOk(h, loop.id, true);
 
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
@@ -679,7 +630,6 @@ describe("/loop-resume command — governor path", () => {
       "orphan-b",
       { recurring: true },
     );
-    // Both toggled on but deleted before OK
     h.ui.select
       .mockResolvedValueOnce(`[ ] #${loop1.id} [active] a (cron: */5 * * * *)`)
       .mockResolvedValueOnce(`[ ] #${loop2.id} [active] b (cron: */10 * * * *)`)
@@ -742,15 +692,12 @@ describe("/loop-resume command — governor path", () => {
   });
 
   it("< Disarm all > disarms all currently-bound loops", async () => {
-    // Three loops; loop 1 and 3 are currently bound.
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "alpha", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/15 * * * *" }, "gamma", { recurring: true });
     h.bindingsStore.add("1");
     h.bindingsStore.add("3");
 
-    // 1) picker: < Disarm all -> all bound marked for disarm
-    // 2) picker: < OK -> apply pending
     h.ui.select
       .mockResolvedValueOnce("< Disarm all")
       .mockResolvedValueOnce("< OK");
@@ -773,9 +720,6 @@ describe("/loop-resume command — governor path", () => {
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "beta", { recurring: true });
     h.bindingsStore.add("1");
 
-    // 1) picker: < Disarm all -> pending = {1: "disarm"}
-    // 2) picker: toggle #1 -> prev=disarm -> delete(1) removes the disarm entry
-    // 3) picker: < OK -> no pending for #1, stays in original state (bound)
     h.ui.select
       .mockResolvedValueOnce("< Disarm all")
       .mockResolvedValueOnce("[ ] #1 [active] alpha (cron: */5 * * * *)")
@@ -786,16 +730,12 @@ describe("/loop-resume command — governor path", () => {
 
     expect(h.bindingsStore.has("1")).toBe(true);
     expect(h.bindingsStore.has("2")).toBe(false);
-    // No pending disarm survived, so the notify shows no changes applied
     expect(h.ui.notify).toHaveBeenCalledWith("No changes to apply.", "info");
   });
 
   it("< Disarm all > with no bound loops is a no-op that refreshes the picker", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo", { recurring: true });
-    // No loops are bound.
 
-    // 1) picker: < Disarm all -> pending stays empty (no bound loops to disarm)
-    // 2) picker: < OK -> no-op
     h.ui.select
       .mockResolvedValueOnce("< Disarm all")
       .mockResolvedValueOnce("< OK");
@@ -808,18 +748,11 @@ describe("/loop-resume command — governor path", () => {
   });
 
   it("< Refresh > re-reads store, reloads bindings, clears pending, and stays open", async () => {
-    // Loop 1 is created; user is mid-session and another terminal may have
-    // added loop 2 while the Governor is open.
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "existing-loop", { recurring: true });
-    // Simulate a second loop added externally: create it after the Governor is open
-    // by having the store return a fresh list on the Refresh call.
     h.store.create({ type: "cron", schedule: "*/3 * * * *" }, "fresh-loop", {
       recurring: true,
     });
 
-    // 1) picker: toggle loop 1 -> pending has {1: "arm"}
-    // 2) picker: < Refresh> -> reloads store, shows both loops, clears pending
-    // 3) picker: < Cancel>
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] existing-loop (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Refresh>")
@@ -828,19 +761,15 @@ describe("/loop-resume command — governor path", () => {
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    // Pending was cleared — no bindings were applied
     expect(h.bindingsStore.has("1")).toBe(false);
-    // Notify confirms refresh happened
     expect(h.ui.notify).toHaveBeenCalledWith(
       "Governor refreshed — loop list and bindings re-read from disk.",
       "info",
     );
-    // Governor stayed open (three select calls: loop, Refresh, Cancel)
     expect(h.ui.select).toHaveBeenCalledTimes(3);
   });
 
   it("< Refresh > shows the current loop list after external changes", async () => {
-    // Initial state: one loop exists
     const loop1 = h.store.create(
       { type: "cron", schedule: "*/5 * * * *" },
       "first-loop",
@@ -848,15 +777,11 @@ describe("/loop-resume command — governor path", () => {
     );
     h.bindingsStore.add(loop1.id);
 
-    // After Governor is open, another terminal creates a second loop.
-    // Capture origCreate before patching list() so we can call it from within the patch.
     const origList = h.store.list.bind(h.store);
     const origCreate = h.store.create.bind(h.store);
     let callCount = 0;
     h.store.list = () => {
       callCount++;
-      // First call (Governor open): return only loop 1
-      // Second call (Refresh): return loop 1 + new loop 2
       if (callCount === 1) return origList();
       return [
         ...origList(),
@@ -872,8 +797,6 @@ describe("/loop-resume command — governor path", () => {
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    // Governor made 3 select calls: initial open, Refresh (which re-reads the list),
-    // and OK to apply (no pending changes after Refresh clears the map).
     expect(h.ui.select).toHaveBeenCalledTimes(3);
     expect(h.ui.notify).toHaveBeenCalledWith(
       "Governor refreshed — loop list and bindings re-read from disk.",
@@ -881,13 +804,9 @@ describe("/loop-resume command — governor path", () => {
     );
   });
 
-  it("< Refresh > on no-op (nothing changed externally) is still useful — clears pending", async () => {
+  it("< Refresh > on no-op clears pending", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "idle-loop", { recurring: true });
 
-    // User toggles a loop then decides to refresh instead
-    // 1) picker: toggle loop -> pending has {1: "arm"}
-    // 2) picker: < Refresh> -> store unchanged, pending cleared, notify sent
-    // 3) picker: < Cancel> -> discarded changes notification
     h.ui.select
       .mockResolvedValueOnce("[ ] #1 [active] idle-loop (cron: */5 * * * *)")
       .mockResolvedValueOnce("< Refresh>")
@@ -896,7 +815,6 @@ describe("/loop-resume command — governor path", () => {
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    // Pending was cleared — no bindings applied from the toggle
     expect(h.bindingsStore.has("1")).toBe(false);
     expect(h.ui.notify).toHaveBeenCalledWith(
       "Governor refreshed — loop list and bindings re-read from disk.",
@@ -905,48 +823,44 @@ describe("/loop-resume command — governor path", () => {
   });
 
   it("Governor rows annotate loops with per-session binding count (G-44)", async () => {
-    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", {
       recurring: true, createdBy: "test-session",
     });
     h.bindingsStore.add("1");
 
-    // Patch getOtherSessionBindingCounts to simulate 2 other sessions binding loop #1
     h.bindingsStore.getOtherSessionBindingCounts = () =>
-      new Map([["1", 2], ["999", 1]]); // loop 999 won't appear since it's not in store
+      new Map([["1", 2], ["999", 1]]);
 
     h.ui.select.mockResolvedValueOnce("< Cancel>");
+
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    expect(options[0]).toBe("— My loops —"); // section header
+    expect(options[0]).toBe("— My loops —");
     const loopRow = options[1] as string;
     expect(loopRow).toContain("· bound in 2 other sessions");
   });
 
   it("Governor rows show no annotation when no other sessions bind the loop (G-44)", async () => {
-    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "solo-loop", {
       recurring: true, createdBy: "test-session",
     });
 
-    // Patch getOtherSessionBindingCounts to return empty (no other sessions)
     h.bindingsStore.getOtherSessionBindingCounts = () => new Map();
 
     h.ui.select.mockResolvedValueOnce("< Cancel>");
+
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    expect(options[0]).toBe("— My loops —"); // section header
+    expect(options[0]).toBe("— My loops —");
     const loopRow = options[1] as string;
-    // No per-session annotation when no other sessions have the loop bound
     expect(loopRow).not.toContain("· bound in");
   });
 
   it("Governor rows show singular 'session' for exactly 1 other session (G-44)", async () => {
-    // createdBy must match bindingsStore.sessionId so loop appears in "My loops"
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "shared-loop", {
       recurring: true, createdBy: "test-session",
     });
@@ -954,26 +868,31 @@ describe("/loop-resume command — governor path", () => {
     h.bindingsStore.getOtherSessionBindingCounts = () => new Map([["1", 1]]);
 
     h.ui.select.mockResolvedValueOnce("< Cancel>");
+
     const cmd = h.commandMap.get("loop-resume")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
     const [, options] = h.ui.select.mock.calls[0];
-    expect(options[0]).toBe("— My loops —"); // section header
+    expect(options[0]).toBe("— My loops —");
     const loopRow = options[1] as string;
-    expect(loopRow).toContain("· bound in 1 other session"); // singular
+    expect(loopRow).toContain("· bound in 1 other session");
   });
 });
 
 describe("/loop command", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(() => {
+    h = setup();
+  });
+
   it("schedules a cron loop from a bare interval and auto-binds the creating session", async () => {
-    const h = setup();
     const cmd = h.commandMap.get("loop")!;
     await cmd.handler!("5m check the deploy", makeCtx(h.ui) as any);
 
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(h.store.list()).toHaveLength(1);
     expect(h.store.list()[0].trigger.type).toBe("cron");
-    expect(h.bindingsStore.has("1")).toBe(true); // auto-bound to creating session
+    expect(h.bindingsStore.has("1")).toBe(true);
     expect(h.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("Loop #1 created"),
       "info",
@@ -985,7 +904,6 @@ describe("/loop command", () => {
   });
 
   it("shows the top-level menu when called with no args", async () => {
-    const h = setup();
     h.ui.select.mockResolvedValueOnce("");
     const cmd = h.commandMap.get("loop")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
@@ -1002,15 +920,12 @@ describe("/loop command", () => {
   });
 
   it("view loops shows hybrid event source and debounceMs", async () => {
-    const h = setup();
     h.store.create(
       { type: "hybrid", cron: "*/10 * * * *", event: { source: "tool_execution_end" }, debounceMs: 60000 },
       "hybrid-check",
       { recurring: true },
     );
 
-    // First select: top-level menu → "View loops"
-    // Second select: "View loops" submenu → "< Back"
     h.ui.select
       .mockResolvedValueOnce("View loops")
       .mockResolvedValueOnce("< Back");
@@ -1018,7 +933,6 @@ describe("/loop command", () => {
     const cmd = h.commandMap.get("loop")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
 
-    // The view loops submenu calls ui.select with all loop rows
     const viewLoopsCall = h.ui.select.mock.calls[1];
     const loopOptions = viewLoopsCall[1];
     expect(loopOptions[0]).toContain("hybrid: */10 * * * * + event:tool_execution_end (60s debounce)");
@@ -1026,13 +940,16 @@ describe("/loop command", () => {
 });
 
 describe("/loop-bindings command", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(() => {
+    h = setup();
+  });
+
   it("is registered", () => {
-    const h = setup();
     expect(h.commandMap.has("loop-bindings")).toBe(true);
   });
 
   it("shows empty store message when no loops exist", async () => {
-    const h = setup();
     h.ui.select.mockResolvedValueOnce("< Back");
     const cmd = h.commandMap.get("loop-bindings")!;
     await cmd.handler!("", makeCtx(h.ui) as any);
@@ -1043,10 +960,9 @@ describe("/loop-bindings command", () => {
   });
 
   it("groups loops into Armed and Not bound sections", async () => {
-    const h = setup();
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "will-be-bound", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "stays-unbound", { recurring: true });
-    h.bindingsStore.add("1"); // loop #1 is bound
+    h.bindingsStore.add("1");
 
     h.ui.select.mockResolvedValueOnce("< Back");
     const cmd = h.commandMap.get("loop-bindings")!;
@@ -1061,7 +977,6 @@ describe("/loop-bindings command", () => {
   });
 
   it("marks paused-but-bound loops with a warning suffix", async () => {
-    const h = setup();
     const entry = h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-bound", { recurring: true });
     h.store.pause(entry.id);
     h.bindingsStore.add(entry.id);
@@ -1075,7 +990,6 @@ describe("/loop-bindings command", () => {
   });
 
   it("shows only Armed section when all loops are bound", async () => {
-    const h = setup();
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "bound-1", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "bound-2", { recurring: true });
     h.bindingsStore.add("1");
@@ -1091,10 +1005,8 @@ describe("/loop-bindings command", () => {
   });
 
   it("shows only Not bound section when no loops are bound", async () => {
-    const h = setup();
     h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "orphan-1", { recurring: true });
     h.store.create({ type: "cron", schedule: "*/10 * * * *" }, "orphan-2", { recurring: true });
-    // bindingsStore is empty (memory scope, no adds)
 
     h.ui.select.mockResolvedValueOnce("< Back");
     const cmd = h.commandMap.get("loop-bindings")!;
@@ -1103,5 +1015,301 @@ describe("/loop-bindings command", () => {
     const [, options] = h.ui.select.mock.calls[0] as [string, string[]];
     expect(options.some((o) => o.includes("— Not bound —"))).toBe(true);
     expect(options.some((o) => o.includes("— Armed in this session —"))).toBe(false);
+  });
+});
+
+describe("/loop viewLoops — ✎ Edit action", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(() => {
+    h = setup();
+  });
+
+  // Execution path: top-level → viewLoops loop row → ✎ Edit → edit sub-menu (3+ selects)
+  // active actions order: ["- Pause", "✎ Edit", "x Delete", "< Back"]
+  // ui.input returns synchronously (non-Promise) so the async chain drains without deadlock.
+
+  it("✎ Edit is at index 1 in the actions menu (after - Pause for active loops)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "editable-loop", {
+      recurring: true,
+    });
+
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] editable-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("< Back");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // actions[0] = "- Pause", actions[1] = "✎ Edit", actions[2] = "x Delete"
+    const actionsCall = h.ui.select.mock.calls[2];
+    expect(actionsCall[1][0]).toBe("- Pause");
+    expect(actionsCall[1][1]).toBe("✎ Edit");
+    expect(actionsCall[1][2]).toBe("x Delete");
+    expect(actionsCall[1][3]).toBe("< Back");
+  });
+
+  it("✎ Edit action triggers the edit sub-workflow", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "loop-to-edit", {
+      recurring: true,
+    });
+
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] loop-to-edit (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("< Back");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    // 4th select: edit sub-menu title and options
+    const editCall = h.ui.select.mock.calls[3];
+    expect(editCall[0]).toContain("Editing loop #1");
+    expect(editCall[1]).toContain("Edit prompt");
+    expect(editCall[1]).toContain("Edit trigger");
+  });
+
+  it("✎ Edit → Edit prompt calls store.updateMetadata and notifies", async () => {
+    h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "original-prompt",
+      { recurring: true },
+    );
+
+    // ui.input returns synchronously so the flow drains without deadlock
+    h.ui.input.mockReturnValue("Updated prompt");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] original-prompt (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit prompt")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).toHaveBeenCalledWith("1", {
+      prompt: "Updated prompt",
+    });
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Loop #1 updated"),
+      "info",
+    );
+    expect(h.updateWidget).toHaveBeenCalled();
+  });
+
+  it("✎ Edit → Edit trigger (cron) calls store.updateMetadata", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "cron-loop", {
+      recurring: true,
+    });
+
+    h.ui.input.mockReturnValue("*/10 * * * *");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] cron-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("cron: time-based interval")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).toHaveBeenCalledWith("1", {
+      trigger: { type: "cron", schedule: "*/10 * * * *" },
+    });
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Loop #1 updated"),
+      "info",
+    );
+  });
+
+  it("✎ Edit → Edit trigger (event) calls store.updateMetadata", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "event-loop", {
+      recurring: true,
+    });
+
+    h.ui.input
+      .mockResolvedValueOnce("tool_execution_end")
+      .mockResolvedValueOnce(""); // optional filter: empty = skip
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] event-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("event: fires on a pi event")
+      .mockResolvedValueOnce("Save & exit")
+      .mockResolvedValueOnce("Save & exit"); // "Save changes?" prompt
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).toHaveBeenCalledWith("1", {
+      trigger: { type: "event", source: "tool_execution_end", filter: undefined },
+    });
+  });
+
+  it("✎ Edit → Edit trigger (hybrid) calls store.updateMetadata", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "hybrid-loop", {
+      recurring: true,
+    });
+
+    h.ui.input
+      .mockResolvedValueOnce("*/10 * * * *")
+      .mockResolvedValueOnce("tool_execution_end")
+      .mockResolvedValueOnce("60000");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] hybrid-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("hybrid: cron + event with debounce")
+      .mockResolvedValueOnce("Save & exit")
+      .mockResolvedValueOnce("Save & exit"); // "Save changes?" prompt
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).toHaveBeenCalledWith("1", {
+      trigger: { type: "hybrid", cron: "*/10 * * * *", event: { source: "tool_execution_end" }, debounceMs: 60000 },
+    });
+  });
+
+  it("✎ Edit with trigger change re-registers active loop in triggerSystem", async () => {
+    const entry = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "re-register-test",
+      { recurring: true },
+    );
+
+    h.ui.input.mockReturnValue("*/10 * * * *");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] re-register-test (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("cron: time-based interval")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.triggerSystem.remove).toHaveBeenCalledWith(entry.id);
+    expect(h.triggerSystem.add).toHaveBeenCalled();
+    const addedEntry = (h.triggerSystem.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addedEntry.trigger).toEqual({ type: "cron", schedule: "*/10 * * * *" });
+  });
+
+  it("✎ Edit does not re-register triggerSystem when prompt-only change", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "prompt-only-edit", {
+      recurring: true,
+    });
+
+    h.ui.input.mockReturnValue("New prompt");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] prompt-only-edit (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit prompt")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.triggerSystem.remove).not.toHaveBeenCalled();
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+  });
+
+  it("✎ Edit does not re-register paused loop even when trigger changes", async () => {
+    const entry = h.store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused-edit",
+      { recurring: true },
+    );
+    h.store.pause(entry.id);
+
+    h.ui.input.mockReturnValue("*/10 * * * *");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("* #1 [paused] paused-edit (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("cron: time-based interval")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.triggerSystem.remove).not.toHaveBeenCalled();
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Loop #1 updated"),
+      "info",
+    );
+  });
+
+  it("✎ Edit → Continue editing allows multiple changes before saving", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "multi-edit", {
+      recurring: true,
+    });
+
+    h.ui.input
+      .mockResolvedValueOnce("New prompt text")
+      .mockResolvedValueOnce("*/10 * * * *");
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] multi-edit (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("Edit prompt")
+      .mockResolvedValueOnce("Continue editing")
+      .mockResolvedValueOnce("Edit trigger")
+      .mockResolvedValueOnce("cron: time-based interval")
+      .mockResolvedValueOnce("Save & exit");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).toHaveBeenCalledWith("1", {
+      prompt: "New prompt text",
+      trigger: { type: "cron", schedule: "*/10 * * * *" },
+    });
+  });
+
+  it("✎ Edit → < Back without saving does not call store.updateMetadata", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "cancel-edit", {
+      recurring: true,
+    });
+
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("- #1 [active] cancel-edit (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("< Back");
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.updateMetadataSpy).not.toHaveBeenCalled();
+    expect(h.updateWidget).not.toHaveBeenCalled();
+  });
+
+  it("✎ Edit is reachable for paused loops (Resume shown first)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "paused-loop", {
+      recurring: true,
+    });
+
+    h.ui.select
+      .mockResolvedValueOnce("View loops")
+      .mockResolvedValueOnce("* #1 [paused] paused-loop (cron: */5 * * * *)")
+      .mockResolvedValueOnce("✎ Edit")
+      .mockResolvedValueOnce("< Back")
+      .mockResolvedValueOnce("< Back"); // 5th: viewLoops loops again after editLoop returns
+
+    const cmd = h.commandMap.get("loop")!;
+    await cmd.handler!("", makeCtx(h.ui) as any);
+
+    expect(h.ui.select).toHaveBeenCalledTimes(5);
   });
 });

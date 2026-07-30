@@ -35,6 +35,7 @@ export type LoopReducerEvent =
       readOnly?: boolean;
       maxFires?: number;
       createdBy?: string;
+      runOnCreate?: boolean;
     };
   }
   | {
@@ -50,6 +51,14 @@ export type LoopReducerEvent =
     entityType?: "loop";
     entityId?: string;
     payload: { id: string };
+  }
+  | {
+    type: "LOOP_UPDATED";
+    at: number;
+    source: ReducerSource;
+    entityType?: "loop";
+    entityId?: string;
+    payload: { id: string; prompt?: string; trigger?: Trigger; runOnCreate?: boolean };
   }
   | {
     type: "LOOP_EXPIRED";
@@ -106,6 +115,7 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
       taskBacklog: event.payload.taskBacklog,
       readOnly: event.payload.readOnly,
       maxFires: event.payload.maxFires,
+      runOnCreate: event.payload.runOnCreate ?? true,
       fireCount: 0,
       createdBy: event.payload.createdBy,
     };
@@ -149,6 +159,13 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
 
   if (event.type === "LOOP_FIRED") {
     loop.fireCount = (loop.fireCount ?? 0) + 1;
+    loop.updatedAt = event.at;
+  }
+
+  if (event.type === "LOOP_UPDATED") {
+    if (event.payload.trigger !== undefined) loop.trigger = event.payload.trigger;
+    if (event.payload.prompt !== undefined) loop.prompt = event.payload.prompt;
+    if (event.payload.runOnCreate !== undefined) loop.runOnCreate = event.payload.runOnCreate;
     loop.updatedAt = event.at;
   }
 

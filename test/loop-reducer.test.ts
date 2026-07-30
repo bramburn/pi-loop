@@ -334,6 +334,138 @@ describe("loop reducer", () => {
     ]);
   });
 
+  it("updates prompt only on LOOP_UPDATED", () => {
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Old prompt",
+        trigger: cronTrigger,
+        status: "active",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 0,
+      },
+    ], 2);
+
+    const { state, effects } = apply(initial, {
+      type: "LOOP_UPDATED",
+      at: 500,
+      source: "tool",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", prompt: "New prompt" },
+    });
+
+    expect(state.loopsById["1"].prompt).toBe("New prompt");
+    expect(state.loopsById["1"].trigger).toEqual(cronTrigger); // unchanged
+    expect(state.loopsById["1"].updatedAt).toBe(500);
+    expect(state.loopsById["1"].status).toBe("active"); // unchanged
+    expect(effects).toEqual([
+      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
+    ]);
+  });
+
+  it("updates trigger only on LOOP_UPDATED", () => {
+    const newTrigger: Trigger = { type: "cron", schedule: "*/10 * * * *" };
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Check something",
+        trigger: cronTrigger,
+        status: "active",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 0,
+      },
+    ], 2);
+
+    const { state, effects } = apply(initial, {
+      type: "LOOP_UPDATED",
+      at: 600,
+      source: "command",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", trigger: newTrigger },
+    });
+
+    expect(state.loopsById["1"].trigger).toEqual(newTrigger);
+    expect(state.loopsById["1"].prompt).toBe("Check something"); // unchanged
+    expect(state.loopsById["1"].updatedAt).toBe(600);
+    expect(effects).toEqual([
+      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
+    ]);
+  });
+
+  it("updates both prompt and trigger on LOOP_UPDATED", () => {
+    const newTrigger: Trigger = { type: "event", source: "tool_execution_start" };
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Old prompt",
+        trigger: cronTrigger,
+        status: "active",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 0,
+      },
+    ], 2);
+
+    const { state, effects } = apply(initial, {
+      type: "LOOP_UPDATED",
+      at: 700,
+      source: "tool",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", prompt: "New prompt", trigger: newTrigger },
+    });
+
+    expect(state.loopsById["1"].prompt).toBe("New prompt");
+    expect(state.loopsById["1"].trigger).toEqual(newTrigger);
+    expect(state.loopsById["1"].updatedAt).toBe(700);
+    expect(effects).toEqual([
+      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
+    ]);
+  });
+
+  it("updates status-unchanged loop (paused) on LOOP_UPDATED", () => {
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Old prompt",
+        trigger: cronTrigger,
+        status: "paused",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 5,
+      },
+    ], 2);
+
+    const { state, effects } = apply(initial, {
+      type: "LOOP_UPDATED",
+      at: 800,
+      source: "tool",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", prompt: "Updated while paused" },
+    });
+
+    expect(state.loopsById["1"].prompt).toBe("Updated while paused");
+    expect(state.loopsById["1"].status).toBe("paused"); // status preserved
+    expect(state.loopsById["1"].fireCount).toBe(5); // fireCount preserved
+    expect(state.loopsById["1"].updatedAt).toBe(800);
+    expect(effects).toEqual([
+      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
+    ]);
+  });
+
   it("leaves state unchanged when the loop does not exist", () => {
     const initial = makeState([], 3);
 

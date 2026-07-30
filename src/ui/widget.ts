@@ -3,6 +3,9 @@ import type { MonitorManager } from "../monitor-manager.js";
 import type { LoopStore } from "../store.js";
 import type { LoopEntry } from "../types.js";
 
+// How long the firing flash is shown before reverting to the normal status line.
+const FIRING_FLASH_MS = 5000;
+
 interface TaskSummary {
   count: number;
   focusText?: string;
@@ -12,6 +15,8 @@ interface TaskSummary {
 export class LoopWidget {
   private uiCtx: ExtensionUIContext | undefined;
   private taskSummaryProvider: (() => TaskSummary) | undefined;
+  private firingLoopId: string | undefined;
+  private firingTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private store: LoopStore,
@@ -30,8 +35,37 @@ export class LoopWidget {
     this.taskSummaryProvider = provider;
   }
 
+  /** Show a short-lived "Loop #N → firing..." flash in the status bar, then
+   *  revert to the normal loop/monitor summary after FIRING_FLASH_MS.
+   *  Idempotent: calling again for the same loop resets the timer. */
+  setFiringStatus(loopId: string, prompt: string): void {
+    if (this.firingLoopId === loopId && this.firingTimer !== undefined) {
+      clearTimeout(this.firingTimer);
+    } else {
+      this.firingLoopId = loopId;
+    }
+    if (!this.uiCtx) return;
+    this.uiCtx.setStatus("loops", `Loop #${loopId} → firing: ${prompt.slice(0, 40)}`);
+    this.firingTimer = setTimeout(() => {
+      this.firingLoopId = undefined;
+      this.firingTimer = undefined;
+      this.update();
+    }, FIRING_FLASH_MS);
+  }
+
+  /** Clear any in-flight firing flash. Called when the widget is disposed. */
+  private clearFiringTimer(): void {
+    if (this.firingTimer !== undefined) {
+      clearTimeout(this.firingTimer);
+      this.firingTimer = undefined;
+      this.firingLoopId = undefined;
+    }
+  }
+
   update() {
     if (!this.uiCtx) return;
+    // Never overwrite a live firing flash — let the 5s timer revert naturally.
+    if (this.firingTimer !== undefined) return;
     this.uiCtx.setStatus("loops", this.computeStatus());
   }
 
@@ -58,6 +92,7 @@ export class LoopWidget {
   }
 
   dispose() {
+    this.clearFiringTimer();
     this.uiCtx?.setStatus("loops", undefined);
   }
 }

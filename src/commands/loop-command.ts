@@ -14,6 +14,7 @@ interface LoopStoreLike {
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
   delete(id: string): boolean;
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; runOnCreate?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] };
 }
 
 interface TriggerSystemLike {
@@ -21,18 +22,36 @@ interface TriggerSystemLike {
   remove(id: string): void;
 }
 
+interface NotificationRuntimeLike {
+  queueOrDeliverNotification(data: {
+    loopId: string;
+    prompt: string;
+    trigger: Trigger | string;
+    timestamp: number;
+    readOnly?: boolean;
+    recurring?: boolean;
+    autoTask?: boolean;
+  }): Promise<void>;
+}
+
+interface WidgetLike {
+  setFiringStatus(loopId: string, prompt: string): void;
+}
+
 export interface LoopCommandOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
   getBindingsStore: () => BindingsStore;
+  getNotificationRuntime: () => NotificationRuntimeLike;
+  getWidget: () => WidgetLike;
   updateWidget: () => void;
   /** Fire a loop entry immediately (mimics the scheduler firing it). */
   fireLoopNow: (entry: LoopEntry) => void;
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, getBindingsStore, updateWidget, fireLoopNow } = options;
+  const { pi, getStore, getTriggerSystem, getBindingsStore, getNotificationRuntime, getWidget, updateWidget, fireLoopNow } = options;
 
   async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
@@ -44,19 +63,22 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     try {
       const parsed = parseInterval(interval);
       const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-      const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
+      const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
       getTriggerSystem().add(entry);
       getBindingsStore().add(entry.id);
       updateWidget();
 
-      const fireNow = await ui.select(`Loop #${entry.id} created: every ${parsed.description}`, [
-        "Leave on schedule",
-        "Start immediately",
-      ]);
-      if (fireNow === "Start immediately") {
-        fireLoopNow(entry);
-        ui.notify(`Loop #${entry.id} fired immediately`, "info");
-      }
+      getWidget().setFiringStatus(entry.id, entry.prompt);
+      await getNotificationRuntime().queueOrDeliverNotification({
+        loopId: entry.id,
+        prompt: entry.prompt,
+        trigger: entry.trigger,
+        timestamp: Date.now(),
+        readOnly: entry.readOnly,
+        recurring: entry.recurring,
+        autoTask: entry.autoTask,
+      });
+      ui.notify(`Loop #${entry.id} created: every ${parsed.description} — first iteration queued`, "info");
     } catch (err: unknown) {
       ui.notify((err as Error).message, "error");
     }
@@ -70,76 +92,148 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (!source) return;
 
     const trigger: Trigger = { type: "event", source };
-    const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId });
+    const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
     getTriggerSystem().add(entry);
     getBindingsStore().add(entry.id);
     updateWidget();
 
-    const fireNow = await ui.select(`Event loop #${entry.id} created: fires on "${source}"`, [
-      "Leave on schedule",
-      "Start immediately",
-    ]);
-    if (fireNow === "Start immediately") {
-      fireLoopNow(entry);
-      ui.notify(`Event loop #${entry.id} fired immediately`, "info");
-    }
+    getWidget().setFiringStatus(entry.id, entry.prompt);
+    await getNotificationRuntime().queueOrDeliverNotification({
+      loopId: entry.id,
+      prompt: entry.prompt,
+      trigger: entry.trigger,
+      timestamp: Date.now(),
+      readOnly: entry.readOnly,
+      recurring: entry.recurring,
+      autoTask: entry.autoTask,
+    });
+    ui.notify(`Event loop #${entry.id} created: fires on "${source}" — first iteration queued`, "info");
   }
 
   async function viewLoops(ui: ExtensionUIContext) {
-    const loops = getStore().list();
-    if (loops.length === 0) {
-      await ui.select("No loops configured", ["< Back"]);
-      return;
-    }
+    // do-while keeps the user in the loop list after an action (Delete, Pause,
+    // Resume, Edit) so they can pick another loop without returning to the main
+    // menu. Only exits back to the main menu when "< Back" is selected.
+    while (true) {
+      const loops = getStore().list();
+      if (loops.length === 0) {
+        await ui.select("No loops configured", ["< Back"]);
+        return;
+      }
 
-    const choices = loops.map((l) => {
-      const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
-      const triggerDesc = l.trigger.type === "cron"
-        ? `cron: ${l.trigger.schedule}`
-        : l.trigger.type === "event"
-          ? `event: ${l.trigger.source}`
-          : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
-      return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
-    });
-    choices.push("< Back");
+      const choices = loops.map((l) => {
+        const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
+        const triggerDesc = l.trigger.type === "cron"
+          ? `cron: ${l.trigger.schedule}`
+          : l.trigger.type === "event"
+            ? `event: ${l.trigger.source}`
+            : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
+        return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
+      });
+      choices.push("< Back");
 
-    const selected = await ui.select("Loops", choices);
-    if (!selected || selected === "< Back") return;
+      const selected = await ui.select("Loops", choices);
+      if (!selected || selected === "< Back") return;
 
-    const match = selected.match(/#(\d+)/);
-    if (match) {
+      const match = selected.match(/#(\d+)/);
+      if (!match) return;
+
       const entry = getStore().get(match[1]);
-      if (entry) {
-        const actions = ["x Delete"];
-        if (entry.status === "active") actions.unshift("- Pause");
-        else if (entry.status === "paused") actions.unshift("* Resume");
-        actions.push("< Back");
+      if (!entry) {
+        ui.notify(`Loop #${match[1]} not found — it may have been deleted.`, "warning");
+        return;
+      }
 
-        const action = await ui.select(
-          `#${entry.id}: ${entry.prompt}\nTrigger: ${JSON.stringify(entry.trigger)}`,
-          actions,
-        );
+      const actions = ["✎ Edit", "x Delete"];
+      if (entry.status === "active") actions.unshift("- Pause");
+      else if (entry.status === "paused") actions.unshift("* Resume");
+      actions.push("< Back");
 
-        if (action === "x Delete") {
-          getTriggerSystem().remove(entry.id);
-          getStore().delete(entry.id);
-          updateWidget();
-          ui.notify(`Loop #${entry.id} deleted`, "info");
-        } else if (action === "- Pause") {
-          getStore().pause(entry.id);
-          getTriggerSystem().remove(entry.id);
-          updateWidget();
-          ui.notify(`Loop #${entry.id} paused`, "info");
-        } else if (action === "* Resume") {
-          getStore().resume(entry.id);
-          getTriggerSystem().add(entry);
-          updateWidget();
-          ui.notify(`Loop #${entry.id} resumed`, "info");
+      const action = await ui.select(
+        `#${entry.id}: ${entry.prompt}\nTrigger: ${JSON.stringify(entry.trigger)}`,
+        actions,
+      );
+
+      if (!action || action === "< Back") return;
+
+      if (action === "x Delete") {
+        getTriggerSystem().remove(entry.id);
+        getStore().delete(entry.id);
+        updateWidget();
+        ui.notify(`Loop #${entry.id} deleted`, "info");
+        return;
+      }
+
+      if (action === "- Pause") {
+        getStore().pause(entry.id);
+        getTriggerSystem().remove(entry.id);
+        updateWidget();
+        ui.notify(`Loop #${entry.id} paused`, "info");
+        return;
+      }
+
+      if (action === "* Resume") {
+        getStore().resume(entry.id);
+        getTriggerSystem().add(entry);
+        updateWidget();
+        ui.notify(`Loop #${entry.id} resumed`, "info");
+        return;
+      }
+
+      if (action === "✎ Edit") {
+        let newPrompt: string | undefined = entry.prompt;
+        let newTrigger: Trigger | undefined = entry.trigger;
+        let committed = false;
+
+        while (true) {
+          const editChoice = await ui.select(`Editing loop #${entry.id}`, [
+            "Edit prompt",
+            "Edit trigger",
+            "< Back",
+          ]);
+
+          if (!editChoice || editChoice === "< Back") {
+            // Back out of the edit flow — either saved (committed) or cancelled.
+            // Return to the loop list so the user can pick another loop.
+            break;
+          }
+
+          if (editChoice === "Edit prompt") {
+            const p = await ui.input("New prompt", newPrompt);
+            if (p !== undefined) newPrompt = p;
+          } else if (editChoice === "Edit trigger") {
+            const newT = await collectTrigger(ui, newTrigger);
+            if (newT !== undefined) newTrigger = newT;
+          }
+
+          // Prompt to commit after at least one change was made
+          if (!committed && (newPrompt !== entry.prompt || JSON.stringify(newTrigger) !== JSON.stringify(entry.trigger))) {
+            const save = await ui.select("Save changes?", ["Save & exit", "Continue editing"]);
+            if (save === "Save & exit") {
+              const fields: { prompt?: string; trigger?: Trigger } = {};
+              if (newPrompt !== entry.prompt) fields.prompt = newPrompt;
+              if (JSON.stringify(newTrigger) !== JSON.stringify(entry.trigger)) fields.trigger = newTrigger;
+
+              const { entry: updated, changedFields } = getStore().updateMetadata(entry.id, fields);
+
+              // Re-register live trigger subscription when trigger config changed
+              if (updated && fields.trigger && entry.status === "active") {
+                getTriggerSystem().remove(entry.id);
+                getTriggerSystem().add(updated);
+              }
+
+              updateWidget();
+              ui.notify(`Loop #${entry.id} updated: ${changedFields.join(", ")}`, "info");
+              committed = true;
+              break;
+            }
+          }
         }
+
+        // After Edit exits (saved or cancelled), fall through to re-loop
+        // and re-render the loop list so the user can pick another loop.
       }
     }
-
-    return viewLoops(ui);
   }
 
   async function settings(ui: ExtensionUIContext) {
@@ -155,6 +249,68 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)}h`;
     if (ms > 60_000) return `${Math.round(ms / 60_000)}m`;
     return `${Math.round(ms / 1_000)}s`;
+  }
+
+  /** Prompt the user to build a new Trigger from scratch. Returns undefined on cancel. */
+  async function collectTrigger(ui: ExtensionUIContext, current?: Trigger): Promise<Trigger | undefined> {
+    const choice = await ui.select("Edit trigger — select type", [
+      "cron: time-based interval",
+      "event: fires on a pi event",
+      "hybrid: cron + event with debounce",
+      "< Back",
+    ]);
+    if (!choice || choice === "< Back") return undefined;
+
+    if (choice === "cron: time-based interval") {
+      const defaultInterval = current?.type === "cron" ? current.schedule : "5m";
+      const raw = await ui.input(`New interval (e.g., 5m, 2h, 1d, or full cron)`, defaultInterval);
+      if (!raw) return undefined;
+      try {
+        const parsed = parseInterval(raw);
+        return { type: "cron", schedule: parsed.cron };
+      } catch (err: unknown) {
+        ui.notify((err as Error).message, "error");
+        return undefined;
+      }
+    }
+
+    if (choice === "event: fires on a pi event") {
+      const defaultSource = current?.type === "event" ? current.source : "tool_execution_start";
+      const source = await ui.input("Pi event source", defaultSource);
+      if (!source) return undefined;
+      const filterRaw = await ui.input("Event filter (optional, press Enter to skip)");
+      return { type: "event", source, filter: filterRaw || undefined };
+    }
+
+    if (choice === "hybrid: cron + event with debounce") {
+      const defaultCron = current?.type === "hybrid" ? current.cron : "5m";
+      const rawCron = await ui.input("Hybrid cron interval (e.g., 5m, 2h)", defaultCron);
+      if (!rawCron) return undefined;
+      let cronSchedule: string;
+      try {
+        cronSchedule = parseInterval(rawCron).cron;
+      } catch (err: unknown) {
+        ui.notify((err as Error).message, "error");
+        return undefined;
+      }
+
+      const defaultSource = current?.type === "hybrid" ? current.event.source : "tool_execution_start";
+      const source = await ui.input("Pi event source for hybrid", defaultSource);
+      if (!source) return undefined;
+
+      const debounceRaw = current?.type === "hybrid" ? String(current.debounceMs) : "30000";
+      const debounceStr = await ui.input("Debounce ms (e.g., 30000 = 30s)", debounceRaw);
+      const debounceMs = debounceStr ? parseInt(debounceStr, 10) : 30000;
+
+      return {
+        type: "hybrid",
+        cron: cronSchedule,
+        event: { source },
+        debounceMs,
+      };
+    }
+
+    return undefined;
   }
 
   function triggerDescForLoop(l: LoopEntry): string {
@@ -236,21 +392,22 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         try {
           const parsed = parseInterval(interval);
           const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-          const entry = getStore().create(trigger, prompt, { recurring: true, createdBy: getBindingsStore().sessionId });
+          const entry = getStore().create(trigger, prompt, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
           getTriggerSystem().add(entry);
           getBindingsStore().add(entry.id);
           updateWidget();
 
-          const fireNow = await ui.select(`Loop #${entry.id} created: every ${parsed.description}`, [
-            "Leave on schedule",
-            "Start immediately",
-          ]);
-          if (fireNow === "Start immediately") {
-            fireLoopNow(entry);
-            ui.notify(`Loop #${entry.id} fired immediately`, "info");
-          } else {
-            ui.notify(`Loop #${entry.id} created: every ${parsed.description} — ${prompt.slice(0, 50)} — bound to this session`, "info");
-          }
+          getWidget().setFiringStatus(entry.id, entry.prompt);
+          await getNotificationRuntime().queueOrDeliverNotification({
+            loopId: entry.id,
+            prompt: entry.prompt,
+            trigger: entry.trigger,
+            timestamp: Date.now(),
+            readOnly: entry.readOnly,
+            recurring: entry.recurring,
+            autoTask: entry.autoTask,
+          });
+          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — first iteration queued — bound to this session`, "info");
         } catch (err: unknown) {
           ui.notify((err as Error).message, "error");
         }

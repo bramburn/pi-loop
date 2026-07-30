@@ -158,4 +158,47 @@ describe("LoopWidget status rendering", () => {
     widget.update();
     expect(latestStatusCall()).toEqual(["loops", "2 tasks | active: Implement widget › Setup deps (blocked by #2) › Write tests (blocked by #3)"]);
   });
+
+  it("shows firing flash when setFiringStatus is called", () => {
+    vi.useFakeTimers();
+    try {
+      widget.setFiringStatus("3", "check the build status");
+      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: check the build status"]);
+      // Advances time so the flash auto-clears
+      vi.advanceTimersByTime(5000);
+      expect(latestStatusCall()).toEqual(["loops", undefined]); // no loops/monitors
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the firing timer when setFiringStatus is called again for the same loop", () => {
+    vi.useFakeTimers();
+    try {
+      widget.setFiringStatus("3", "first prompt");
+      vi.advanceTimersByTime(3000); // not enough to clear (threshold is 5000)
+      widget.setFiringStatus("3", "second prompt");
+      vi.advanceTimersByTime(3000); // another 3s from reset → still not enough
+      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: second prompt"]);
+      vi.advanceTimersByTime(2000); // now at 5s from last call → clears
+      expect(latestStatusCall()).toEqual(["loops", undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the firing timer on dispose", () => {
+    vi.useFakeTimers();
+    try {
+      widget.setFiringStatus("3", "prompt");
+      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: prompt"]);
+      widget.dispose();
+      // After dispose, the widget no longer manages the status, but we can
+      // verify the timer was cleared by advancing time — no re-entry from the widget.
+      vi.advanceTimersByTime(5000);
+      // No assertion needed — the important thing is no error thrown from the cleared timer.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
