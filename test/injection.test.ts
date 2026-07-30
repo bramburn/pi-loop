@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest";
 import { createCtx, createMockPi, flushAsync } from "./helpers/mock-pi.js";
 
 describe("loop:fire custom message delivery", () => {
+  it("wakes the agent to inspect a newly started monitor once the current turn is idle", async () => {
+    const { pi, toolMap, sentMessages, emitExtension } = createMockPi();
+    const extension = await import("../src/index.js");
+    extension.default(pi);
+
+    const ctx = createCtx(false);
+    await emitExtension("turn_start", null, ctx);
+    await emitExtension("agent_start", null, ctx);
+
+    await toolMap.get("MonitorCreate")!.execute!("monitor-1", {
+      command: "true",
+      description: "Run tests",
+    });
+    await flushAsync();
+    expect(sentMessages).toHaveLength(0);
+
+    await emitExtension("agent_end", null, ctx);
+    await flushAsync();
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
+    expect(sentMessages[0].message.content).toContain("Monitor #1 started: Run tests");
+    expect(sentMessages[0].message.content).toContain("Use MonitorList");
+  });
+
   it("injects a custom pi-loop message immediately when idle", async () => {
     const { pi, sentMessages, sentUserMessages, emitExtension } = createMockPi();
     const extension = await import("../src/index.js");

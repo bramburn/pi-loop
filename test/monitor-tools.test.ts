@@ -47,6 +47,7 @@ describe("MonitorCreate", () => {
     expect(out).toContain("Output stream: monitor:output");
     expect(h.manager.create).toHaveBeenCalledWith("npm test", undefined, undefined);
     expect(h.handleMonitorDoneLoop).not.toHaveBeenCalled();
+    expect(h.toolMap.get("MonitorCreate")?.renderShell).toBe("self");
     expect(h.toolMap.get("MonitorCreate")?.renderResult).toBeTypeOf("function");
   });
 

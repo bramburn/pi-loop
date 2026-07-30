@@ -217,6 +217,13 @@ export class MonitorManager {
     }
 
     this.processes.set(id, bp);
+    this.pi.events.emit("monitor:started", {
+      monitorId: id,
+      command,
+      description,
+      timeout,
+      timestamp: now,
+    });
     return entry;
   }
 

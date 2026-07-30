@@ -243,6 +243,7 @@ export default function (pi: ExtensionAPI) {
 
   const flushPendingNotifications = notificationRuntime.flushPendingNotifications;
   const queueOrDeliverNotification = notificationRuntime.queueOrDeliverNotification;
+  const queueOrDeliverMonitorStarted = notificationRuntime.queueOrDeliverMonitorStarted;
   const cleanupTaskBacklogLoops = taskBacklogRuntime.cleanupTaskBacklogLoops;
   const evaluateTaskBacklog = taskBacklogRuntime.evaluateTaskBacklog;
 
@@ -341,6 +342,22 @@ export default function (pi: ExtensionAPI) {
     }
 
     await queueOrDeliverNotification(data);
+  });
+
+  pi.events.on("monitor:started", async (event: unknown) => {
+    const data = event as {
+      monitorId?: string;
+      command?: string;
+      description?: string;
+      timestamp?: number;
+    };
+    if (!data.monitorId || !data.command) return;
+    await queueOrDeliverMonitorStarted({
+      monitorId: data.monitorId,
+      command: data.command,
+      description: data.description,
+      timestamp: data.timestamp ?? Date.now(),
+    });
   });
 
   registerLoopTools({

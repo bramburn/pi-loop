@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { LoopEntry, MonitorEntry, Trigger } from "../types.js";
-import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
+import { hideToolTranscript } from "../ui/tool-renderer.js";
 import { displayRows, textResult } from "./tool-result.js";
 
 interface MonitorManagerLike {
@@ -40,8 +40,9 @@ export function registerMonitorTools(options: MonitorToolsOptions): void {
   pi.registerTool({
     name: "MonitorCreate",
     label: "MonitorCreate",
-    renderCall: renderToolCall("Monitor", (args) => `start · ${String(toolArg(args, "description") ?? toolArg(args, "command") ?? "monitor").slice(0, 56)}`),
-    renderResult: renderToolResult,
+    renderShell: "self",
+    renderCall: hideToolTranscript,
+    renderResult: hideToolTranscript,
     description: `Run a shell command in the background and get notified when it finishes. The core tool for async/parallel work.
 
 Fire off a build check, CI monitor, experiment, script, or any slow command — then keep working. Output streams back as "monitor:output" events. When the process exits, "monitor:done" fires (or "monitor:error" on failure).
@@ -121,8 +122,9 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
   pi.registerTool({
     name: "MonitorList",
     label: "MonitorList",
-    renderCall: renderToolCall("Monitor", () => "status"),
-    renderResult: renderToolResult,
+    renderShell: "self",
+    renderCall: hideToolTranscript,
+    renderResult: hideToolTranscript,
     description: "List all monitors with their status, command, exit code, output line count, and last 5 lines of buffered output.",
     parameters: Type.Object({}),
     execute() {
@@ -164,8 +166,9 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
   pi.registerTool({
     name: "MonitorStop",
     label: "MonitorStop",
-    renderCall: renderToolCall("Monitor", (args) => `stop · #${String(toolArg(args, "monitorId") ?? "?")}`),
-    renderResult: renderToolResult,
+    renderShell: "self",
+    renderCall: hideToolTranscript,
+    renderResult: hideToolTranscript,
     description: `Stop a running monitor. Sends SIGTERM, waits 5s, then SIGKILL.
 
 Use MonitorList to find the monitor ID, then stop it with this tool.`,

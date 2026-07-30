@@ -26,6 +26,21 @@ describe("MonitorManager", () => {
     expect(entry.command).toBe("echo hello world");
   });
 
+  it("emits monitor:started once the monitor can be inspected", () => {
+    const events: any[] = [];
+    pi.events.on("monitor:started", (event: any) => events.push(event));
+
+    const entry = manager.create("sleep 30", "started test");
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      command: "sleep 30",
+      description: "started test",
+      timeout: 300000,
+      timestamp: expect.any(Number),
+    }]);
+    expect(manager.get(entry.id)).toBe(entry);
+  });
   it("gets a monitor by ID", () => {
     manager.create("echo test", "get test");
     const entry = manager.get("1");

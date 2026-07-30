@@ -1,5 +1,5 @@
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import type { ToolDisplayDetails } from "../tools/tool-result.js";
 
 type ToolCallArgs = object;
@@ -14,6 +14,10 @@ export function renderToolCall(label: string, summarize: (args: ToolCallArgs) =>
 
 export function toolArg(args: ToolCallArgs, name: string): unknown {
   return (args as Record<string, unknown>)[name];
+}
+
+export function hideToolTranscript() {
+  return new Container();
 }
 
 export function renderToolResult(
