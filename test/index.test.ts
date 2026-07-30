@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import extension from "../src/index.js";
+import { TASKS_RPC } from "../src/rpc/channels.js";
 import { resolveLoopStorePath, resolveTaskStorePath } from "../src/runtime/scope.js";
 import { TaskStore } from "../src/task-store.js";
-import { createMockPi } from "./helpers/mock-pi.js";
+import { createMockPi, flushAsync } from "./helpers/mock-pi.js";
 
 function readJsonFile(path: string): any {
   try {
@@ -14,6 +15,47 @@ function readJsonFile(path: string): any {
     throw new Error(`Failed to parse JSON file ${path}: ${(error as Error).message}`);
   }
 }
+
+describe("workflow runtime wiring", () => {
+  it("creates and completes external workflow tasks", async () => {
+    const { pi, toolMap, extensionHandlers } = createMockPi({
+      respondToTaskPing: true,
+      respondToTaskCreate: () => "workflow-task",
+      respondToTaskUpdate: () => ({ task: { id: "workflow-task", status: "completed" } }),
+    });
+    extension(pi as any);
+    await flushAsync();
+
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "workflow-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) {
+      await handler(null, ctx);
+    }
+
+    const workflowCreate = toolMap.get("WorkflowCreate");
+    const definition = JSON.stringify({
+      version: 1,
+      initialState: "work",
+      states: {
+        work: {
+          prompt: "Do the work",
+          task: { subject: "Do work", description: "Complete the workflow task" },
+          on: { done: "complete" },
+        },
+        complete: { prompt: "Finished", terminal: "completed" },
+      },
+    });
+
+    const created = await workflowCreate!.execute!("workflow-1", { goal: "Finish work", definition });
+    const id = created.content[0].text.match(/Workflow #(\d+) created/)?.[1];
+    const result = await toolMap.get("WorkflowTransition")!.execute!("workflow-2", { id, outcome: "done" });
+
+    expect(result.content[0].text).toContain("completed and deleted");
+  });
+});
 
 describe("native task fallback", () => {
   let cwd: string;
@@ -44,6 +86,20 @@ describe("native task fallback", () => {
     expect(toolMap.has("TaskUpdate")).toBe(true);
     expect(toolMap.has("TaskDelete")).toBe(true);
     expect(commandMap.has("tasks")).toBe(true);
+  });
+
+  it("serves native task RPCs after provider detection settles", async () => {
+    const { pi, emittedEvents } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+
+    pi.events.emit(TASKS_RPC.pending, { requestId: "pending-after-detection" });
+    await Promise.resolve();
+
+    expect(emittedEvents).toContainEqual({
+      name: `${TASKS_RPC.pending}:reply:pending-after-detection`,
+      payload: { success: true, data: { pending: 0 } },
+    });
   });
 
   it("guides TaskCreate toward broad-goal decomposition without advertising unsupported fields", async () => {

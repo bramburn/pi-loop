@@ -41,6 +41,40 @@ describe("MonitorManager", () => {
     }]);
     expect(manager.get(entry.id)).toBe(entry);
   });
+
+  it("emits monitor:finished for a manually stopped monitor", async () => {
+    const events: any[] = [];
+    pi.events.on("monitor:finished", (event: any) => events.push(event));
+    const entry = manager.create("sleep 30", "stopped test");
+
+    await manager.stop(entry.id);
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      status: "stopped",
+      reason: "manual",
+      outputLines: 0,
+    }]);
+  });
+
+  it("emits monitor:finished when a process cannot start", async () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const events: any[] = [];
+    pi.events.on("monitor:finished", (event: any) => events.push(event));
+    const entry = manager.create("missing-command", "spawn error");
+
+    manager.getProcess(entry.id)?.proc.emit("error", new Error("spawn failed"));
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      status: "error",
+      error: "spawn failed",
+      outputLines: 0,
+    }]);
+  });
   it("gets a monitor by ID", () => {
     manager.create("echo test", "get test");
     const entry = manager.get("1");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { displayRows } from "../src/tools/tool-result.js";
-import { hideToolTranscript, renderToolCall, renderToolResult } from "../src/ui/tool-renderer.js";
+import { hideToolTranscript, renderToolCall, renderToolResult, toolArg } from "../src/ui/tool-renderer.js";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -38,6 +38,10 @@ describe("Pi tool renderer", () => {
 
   it("renders no transcript content for hidden tools", () => {
     expect(hideToolTranscript().render(120)).toEqual([]);
+  });
+
+  it("reads a named tool argument", () => {
+    expect(toolArg({ monitorId: "4" }, "monitorId")).toBe("4");
   });
 
   it("does not read expanded rows while a result stays collapsed", () => {

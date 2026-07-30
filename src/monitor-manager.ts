@@ -166,6 +166,12 @@ export class MonitorManager {
         },
       });
       const current = this.get(id)!;
+      this.pi.events.emit("monitor:finished", {
+        monitorId: id,
+        status: current.status,
+        exitCode: current.exitCode,
+        outputLines: current.outputLines,
+      });
       this.pi.events.emit(status === "completed" ? "monitor:done" : "monitor:error", {
         monitorId: id,
         exitCode: code,
@@ -196,6 +202,13 @@ export class MonitorManager {
             id,
             error: err.message,
           },
+        });
+        const current = this.get(id)!;
+        this.pi.events.emit("monitor:finished", {
+          monitorId: id,
+          status: current.status,
+          error: err.message,
+          outputLines: current.outputLines,
         });
         this.pi.events.emit("monitor:error", {
           monitorId: id,
@@ -252,6 +265,12 @@ export class MonitorManager {
         id,
         reason,
       },
+    });
+    this.pi.events.emit("monitor:finished", {
+      monitorId: id,
+      status: "stopped",
+      reason,
+      outputLines: bp.entry.outputLines,
     });
     this.schedulePrune(id);
     bp.proc.kill("SIGTERM");

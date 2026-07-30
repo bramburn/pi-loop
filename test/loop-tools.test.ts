@@ -45,6 +45,9 @@ describe("LoopCreate", () => {
     expect(h.store.get("1")?.trigger.type).toBe("cron");
     expect(h.toolMap.get("LoopCreate")?.renderCall).toBeTypeOf("function");
     expect(h.toolMap.get("LoopCreate")?.renderResult).toBeTypeOf("function");
+    const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
+    expect(h.toolMap.get("LoopCreate")!.renderCall!({ prompt: "check build" }, theme).render(120).map((line) => line.trimEnd()))
+      .toEqual(["Loop create · check build"]);
   });
 
   it("creates an event loop that defaults to non-recurring", async () => {

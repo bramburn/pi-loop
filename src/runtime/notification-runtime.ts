@@ -52,6 +52,7 @@ export interface NotificationRuntime {
   syncRuntimeState(options?: { agentRunning?: boolean; hasPendingMessages?: boolean }): void;
   queueOrDeliverNotification(data: LoopFireEvent): Promise<void>;
   queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void>;
+  discardMonitorStarted(monitorId: string): void;
   flushPendingNotifications(options?: { ignorePendingMessages?: boolean }): Promise<void>;
   clear(reason: "session_shutdown" | "session_switch"): void;
 }
@@ -262,7 +263,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
 
   async function queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void> {
     const notification = buildMonitorStartedNotification(data);
-    applyNotificationEvent({
+    await notificationCoordinator.dispatch({
       type: "NOTIFICATION_QUEUED",
       at: notification.timestamp,
       source: "monitor",
@@ -270,7 +271,18 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       entityId: notification.key,
       payload: { notification },
     });
-    await flushPendingNotifications();
+  }
+
+  function discardMonitorStarted(monitorId: string): void {
+    const key = `monitor:${monitorId}:started`;
+    applyNotificationEvent({
+      type: "NOTIFICATION_DROPPED",
+      at: Date.now(),
+      source: "monitor",
+      entityType: "notification",
+      entityId: key,
+      payload: { key, reason: "superseded" },
+    });
   }
 
   function clear(reason: "session_shutdown" | "session_switch") {
@@ -288,6 +300,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     syncRuntimeState,
     queueOrDeliverNotification,
     queueOrDeliverMonitorStarted,
+    discardMonitorStarted,
     flushPendingNotifications,
     clear,
   };

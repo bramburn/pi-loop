@@ -12,7 +12,7 @@ describe("loop:fire custom message delivery", () => {
     await emitExtension("agent_start", null, ctx);
 
     await toolMap.get("MonitorCreate")!.execute!("monitor-1", {
-      command: "true",
+      command: "sleep 30",
       description: "Run tests",
     });
     await flushAsync();
@@ -25,6 +25,8 @@ describe("loop:fire custom message delivery", () => {
     expect(sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
     expect(sentMessages[0].message.content).toContain("Monitor #1 started: Run tests");
     expect(sentMessages[0].message.content).toContain("Use MonitorList");
+
+    await toolMap.get("MonitorStop")!.execute!("monitor-2", { monitorId: "1" });
   });
 
   it("injects a custom pi-loop message immediately when idle", async () => {
