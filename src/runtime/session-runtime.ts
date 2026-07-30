@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LoopStore } from "../store.js";
+import { addBreadcrumb } from "../telemetry/sentry.js";
 import { BindingsStore } from "./bindings-store.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
@@ -252,6 +253,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   });
 
   pi.on("session_switch" as never, async (event: SessionSwitchEvent, ctx: ExtensionContext) => {
+    addBreadcrumb("session_switch", { reason: event?.reason });
     setLatestCtx(ctx);
     widget.setUICtx(ctx.ui);
     getTriggerSystem().stop();

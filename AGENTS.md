@@ -20,6 +20,9 @@ src/
 ├── trigger-system.ts     # Unified trigger engine: cron timers + pi event subscriptions + hybrid
 ├── monitor-manager.ts    # ChildProcess tracking, output buffering, event emission, stop
 ├── loop-parse.ts         # Human interval → cron expression, next-fire computation, jitter
+├── telemetry/            # Sentry integration (opt-in via SENTRY_DSN)
+│   ├── sentry.ts         # initSentry, captureException, addBreadcrumb, log*, scrubPii, wrapToolExecute
+│   └── index.ts          # Public re-exports
 └── ui/
     └── widget.ts         # Persistent widget: active loops + monitors
 ```
@@ -104,3 +107,30 @@ When no interval is specified in `/loop prompt`, the loop runs in self-paced mod
 - Maximum 25 running monitors
 - 7-day expiry on recurring loops
 - 5-minute default cron interval for self-paced mode
+
+## Telemetry (Sentry)
+
+Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it, every callsite in `src/telemetry/sentry.ts` is a no-op (verified by `test/telemetry/sentry.test.ts`).
+
+**Public API (from `src/telemetry/index.ts`):**
+
+| Function | Purpose | Notes |
+|---|---|---|
+| `initSentry(opts)` | Boot Sentry with PII scrubbing, capture logs, install process handlers | Returns `false` if `SENTRY_DSN` unset |
+| `captureException(err, ctx?)` | Forward an error to Sentry | No-op when not initialized |
+| `addBreadcrumb(msg, data?)` | Emit a structured breadcrumb | No-op when not initialized |
+| `logInfo / logDebug / logWarn / logError` | Pipe structured logs via Sentry's `logger` | No-op when not initialized |
+| `flushSentry(timeoutMs?)` | Flush buffered events (e.g. on shutdown) | No-op when not initialized |
+| `wrapToolExecute(name, fn)` | Wrap a tool's `execute` with breadcrumb + capture + rethrow | Used at the `pi.registerTool` boundary in `src/index.ts` |
+| `scrubPii(input)` | Recursive PII redactor (paths, env, DSN, sensitive keys) | Used by `beforeSend` / `beforeBreadcrumb` / `beforeSendLog` |
+
+**PII scrubbing rules** (in `scrubPii`):
+- Strip `C:\...` and `/Users|...`, `/home|...`, `/root|...` paths from strings
+- Strip `process.env.*` references
+- Strip Sentry DSN URLs (`https://<key>@<org>.ingest.<region>.sentry.io/<id>`)
+- Redact values under keys: `prompt`, `message`, `text`, `body`, `content`, `description`
+- Redact `filename` and `abs_path` fields in stack frames
+
+**Env vars (full list in `.env.example`):** `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG`, `SENTRY_CAPTURE_LOGS`.
+
+**Out of scope:** source-map upload via auth tokens, server-side PII rules (rely on Sentry's defaults), CI-side secret wiring (no production deploy of this package).

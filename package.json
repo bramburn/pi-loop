@@ -22,6 +22,7 @@
     "@earendil-works/pi-tui": "^0.80.3"
   },
   "dependencies": {
+    "@sentry/node": "^10.69.0",
     "typebox": "^1.1.34"
   },
   "scripts": {

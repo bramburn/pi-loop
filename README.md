@@ -123,6 +123,11 @@ Only task counts and the single active/next task are shown there so attention st
 | `PI_LOOP` | Store path override. `off` to disable, absolute or project-relative path | unset → derived from `PI_LOOP_SCOPE` |
 | `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared, persists across sessions) | `project` |
 | `PI_LOOP_DEBUG` | Debug logging to stderr | unset |
+| `SENTRY_DSN` | Enable anonymous crash + log reporting (Sentry). Set to your project DSN to opt in. | unset → telemetry disabled |
+| `SENTRY_ENVIRONMENT` | Environment tag for events (e.g. `production`, `development`) | `development` |
+| `SENTRY_TRACES_SAMPLE_RATE` | Performance transaction sample rate (`0.0`–`1.0`) | `0.1` |
+| `SENTRY_CAPTURE_LOGS` | Pipe `debug()` output into Sentry logs | `true` |
+| `SENTRY_DEBUG` | Verbose Sentry SDK debug logging to stderr | `false` |
 
 In `project` scope (default), loop and task files are saved to `.pi/loops/loops.json` and `.pi/tasks/tasks.json` so they survive across chat sessions and process restarts in the same repository — mirroring pi-goal-x's `.pi/goals/` pattern. In `memory` scope nothing persists to disk.
 
@@ -147,6 +152,36 @@ If you run two or three pi terminals in the same repo and want each one to fire 
 - Terminal A binding loop #5 does **not** cause Terminal B to fire #5, because each session reads only its own bindings file and its trigger subscriptions are process-local.
 
 This is a deliberate behavior change from previous versions, where every session armed every active loop on start.
+
+
+
+## Crash analytics (opt-in)
+
+`pi-loop` integrates with [Sentry](https://sentry.io/) for anonymous crash analytics and structured log capture. **Telemetry is strictly opt-in** — leaving `SENTRY_DSN` unset (the default) makes every Sentry callsite a no-op.
+
+To enable reporting:
+
+1. Apply for [Sentry for Open Source](https://sentry.io/for/open-source/) and create a project for `@bramburn/pi-loop`. Once approved, you'll receive a DSN like `https://publickey@o1234567.ingest.us.sentry.io/1234567`.
+2. Set `SENTRY_DSN` in your shell environment (or add it to `.env` — see `.env.example`):
+   ```bash
+   export SENTRY_DSN=https://publickey@o1234567.ingest.us.sentry.io/1234567
+   ```
+3. Restart pi. The extension will initialize Sentry on load and start capturing:
+   - Unhandled exceptions and unhandled promise rejections
+   - Tool errors via the `wrapToolExecute` wrapper around every `pi.registerTool` call
+   - Breadcrumbs on `session_switch`, `loop_fire`, and tool entry
+   - Optional `debug()` log output (controlled by `SENTRY_CAPTURE_LOGS`)
+
+All events are passed through a `beforeSend` hook that strips:
+- Absolute filesystem paths (Windows + Unix user dirs)
+- `process.env.*` references
+- Sentry DSN literals
+- Values under sensitive keys (`prompt`, `message`, `text`, `body`, `content`, `description`)
+- Stack-frame `filename`/`abs_path` fields
+
+The DSN itself is a *public* client identifier (it's shipped to browsers in Sentry's own SDK) — it only grants permission to *send* events, not to read them. Even so, the DSN is **never** committed to this repository. See `.env.example` for the full telemetry env-var matrix.
+
+For the wider design rationale see [`docs/SENTRY.md`](docs/SENTRY.md).
 
 
 
