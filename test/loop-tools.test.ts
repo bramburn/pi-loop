@@ -10,6 +10,8 @@ function setup() {
   const scheduler = { nextFire: vi.fn(() => undefined) };
   const monitorManager = { get: vi.fn(() => undefined) };
   const bindingsStore = { add: vi.fn(), has: vi.fn(() => false) };
+  const widget = { setFiringStatus: vi.fn(), update: vi.fn() };
+  const notificationRuntime = { queueOrDeliverNotification: vi.fn(async () => {}) };
   registerLoopTools({
     pi,
     getStore: () => store as any,
@@ -17,13 +19,15 @@ function setup() {
     getBindingsStore: () => bindingsStore as any,
     getScheduler: () => scheduler as any,
     getMonitorManager: () => monitorManager as any,
+    getNotificationRuntime: () => notificationRuntime as any,
+    getWidget: () => widget as any,
     updateWidget: vi.fn(),
     maybeBootstrapTaskLoop: vi.fn(async () => false),
     isTaskSystemReady: () => true,
   });
   const text = async (name: string, args: any) =>
     (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
-  return { store, triggerSystem, bindingsStore, text };
+  return { store, triggerSystem, bindingsStore, notificationRuntime, widget, text };
 }
 
 describe("LoopCreate", () => {
@@ -213,5 +217,61 @@ describe("LoopList filter (G-20)", () => {
     const out = await h.text("LoopList", {});
     expect(out).toContain("#1");
     expect(out).not.toContain("internal wake");
+  });
+});
+
+describe("LoopCreate fire-on-create (runOnCreate)", () => {
+  it("queues notification and flashes widget when runOnCreate is true (default)", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "check build", triggerType: "cron" });
+    expect(h.notificationRuntime.queueOrDeliverNotification).toHaveBeenCalledTimes(1);
+    expect(h.notificationRuntime.queueOrDeliverNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ loopId: "1", prompt: "check build" }),
+    );
+    expect(h.widget.setFiringStatus).toHaveBeenCalledWith("1", "check build");
+  });
+
+  it("does NOT queue notification when runOnCreate is explicitly false", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "check build", triggerType: "cron", runOnCreate: false });
+    expect(h.notificationRuntime.queueOrDeliverNotification).not.toHaveBeenCalled();
+    expect(h.widget.setFiringStatus).not.toHaveBeenCalled();
+  });
+
+  it("persists runOnCreate: true in the store", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "poll", triggerType: "cron" });
+    expect(h.store.get("1")?.runOnCreate).toBe(true);
+  });
+
+  it("persists runOnCreate: false in the store", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "poll", triggerType: "cron", runOnCreate: false });
+    expect(h.store.get("1")?.runOnCreate).toBe(false);
+  });
+});
+
+describe("LoopUpdate runOnCreate", () => {
+  it("can disable runOnCreate on an existing loop", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "poll", triggerType: "cron" });
+    (h.notificationRuntime.queueOrDeliverNotification as any).mockClear();
+    (h.widget.setFiringStatus as any).mockClear();
+    await h.text("LoopUpdate", { id: "1", runOnCreate: false });
+    expect(h.store.get("1")?.runOnCreate).toBe(false);
+  });
+
+  it("can re-enable runOnCreate on a loop that had it disabled", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "poll", triggerType: "cron", runOnCreate: false });
+    await h.text("LoopUpdate", { id: "1", runOnCreate: true });
+    expect(h.store.get("1")?.runOnCreate).toBe(true);
+  });
+
+  it("reports changedFields including runOnCreate when toggling", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "poll", triggerType: "cron" });
+    const out = await h.text("LoopUpdate", { id: "1", runOnCreate: false });
+    expect(out).toContain("runOnCreate");
   });
 });

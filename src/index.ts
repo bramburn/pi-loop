@@ -334,6 +334,8 @@ export default function (pi: ExtensionAPI) {
     getBindingsStore: () => bindingsStore,
     getScheduler: () => scheduler,
     getMonitorManager: () => monitorManager,
+    getNotificationRuntime: () => notificationRuntime,
+    getWidget: () => widget,
     updateWidget: () => {
       widget.update();
     },
@@ -361,6 +363,8 @@ export default function (pi: ExtensionAPI) {
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
     getBindingsStore: () => bindingsStore,
+    getNotificationRuntime: () => notificationRuntime,
+    getWidget: () => widget,
     updateWidget: () => {
       widget.update();
     },

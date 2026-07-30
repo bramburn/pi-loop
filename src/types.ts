@@ -53,6 +53,8 @@ export interface LoopEntry {
    * Governor to partition loops into "My loops" and "Other terminals".
    * Undefined for loops created before this field was introduced.
    */
+  /** When true (default), the loop fires immediately on creation if the agent is idle. */
+  runOnCreate?: boolean;
   createdBy?: string;
 }
 

@@ -23,6 +23,8 @@ function setup() {
   // is covered separately in test/bindings-store.test.ts.
   const bindingsStore = new BindingsStore(undefined, "memory", "test-session");
   const updateWidget = vi.fn();
+  const widget = { setFiringStatus: vi.fn() };
+  const notificationRuntime = { queueOrDeliverNotification: vi.fn(async () => {}) };
 
   // Wrap the store with a proxy that auto-injects createdBy on every create()
   // call, mirroring the production behavior in Governor and LoopCreate. Tests
@@ -47,6 +49,8 @@ function setup() {
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
     getBindingsStore: () => bindingsStore,
+    getNotificationRuntime: () => notificationRuntime as any,
+    getWidget: () => widget as any,
     updateWidget,
   });
 
@@ -57,7 +61,7 @@ function setup() {
     confirm: vi.fn(),
   };
 
-  return { commandMap, store, rawStore, triggerSystem, bindingsStore, updateWidget, ui, updateMetadataSpy };
+  return { commandMap, store, rawStore, triggerSystem, bindingsStore, updateWidget, ui, updateMetadataSpy, notificationRuntime, widget };
 }
 
 describe("/loop-resume command — one-shot path", () => {
