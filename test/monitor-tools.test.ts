@@ -133,7 +133,7 @@ describe("MonitorList", () => {
       lastOutputAt: Date.now(),
       outputRatePerMinute: 24,
     })] });
-    expect(await h.text("MonitorList", {})).toContain("log 24/min");
+    expect(await h.text("MonitorList", {})).toContain("24 lines/min");
   });
 
   it("shows quiet time without claiming the monitor has failed", async () => {

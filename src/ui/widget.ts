@@ -83,7 +83,7 @@ function formatMonitorActivity(monitor: {
   const activity = silence >= 60000
     ? `quiet ${Math.round(silence / 60000)}m`
     : monitor.outputRatePerMinute !== undefined
-      ? `log ${monitor.outputRatePerMinute}/min`
+      ? `${monitor.outputRatePerMinute} lines/min`
       : undefined;
   return [progress, activity].filter(Boolean).join(" · ") || undefined;
 }

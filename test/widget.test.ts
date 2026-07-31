@@ -10,6 +10,9 @@ function createMockMonitorManager() {
     status: string;
     startedAt: number;
     outputLines: number;
+    lastOutputAt?: number;
+    outputRatePerMinute?: number;
+    progress?: { current?: number; total?: number; message?: string; source?: string; updatedAt?: number };
   }> = [];
   return {
     list: () => [...monitors],
@@ -117,7 +120,7 @@ describe("LoopWidget status rendering", () => {
     });
 
     widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | log 24/min"]);
+    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | 24 lines/min"]);
   });
 
   it("shows compact loop and monitor counts in status", () => {

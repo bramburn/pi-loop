@@ -39,7 +39,7 @@ function formatActivity(monitor: MonitorEntry): string | undefined {
   const lastActivityAt = monitor.lastOutputAt ?? monitor.startedAt;
   const silence = Date.now() - lastActivityAt;
   if (silence >= 60000) return `quiet ${formatRemaining(silence)}`;
-  if (monitor.outputRatePerMinute !== undefined) return `log ${monitor.outputRatePerMinute}/min`;
+  if (monitor.outputRatePerMinute !== undefined) return `${monitor.outputRatePerMinute} lines/min`;
   return undefined;
 }
 
