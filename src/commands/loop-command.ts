@@ -51,7 +51,7 @@ export interface LoopCommandOptions {
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, getBindingsStore, getNotificationRuntime, getWidget, updateWidget, fireLoopNow } = options;
+  const { pi, getStore, getTriggerSystem, getBindingsStore, getNotificationRuntime, getWidget, updateWidget, fireLoopNow: _fireLoopNow } = options;
 
   async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
