@@ -35,6 +35,7 @@ import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import { addBreadcrumb, initSentry, isSentryInitialized, logDebug, wrapToolExecute } from "./telemetry/sentry.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
 import { registerMonitorTools } from "./tools/monitor-tools.js";
 import { registerNativeTaskTools } from "./tools/native-task-tools.js";
@@ -42,9 +43,12 @@ import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry, Trigger } from "./types.js";
 import { LoopWidget } from "./ui/widget.js";
 
+initSentry();
+
 const DEBUG = !!process.env.PI_LOOP_DEBUG;
 function debug(...args: unknown[]) {
   if (DEBUG) console.error("[pi-loop]", ...args);
+  if (isSentryInitialized()) logDebug("[pi-loop]", ...args);
 }
 
 function isStaleExtensionContextError(error: unknown): boolean {
@@ -52,6 +56,29 @@ function isStaleExtensionContextError(error: unknown): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Wrap every tool's execute() with a Sentry-capturing try/catch. Done once
+  // here so the 14 tool registrations in src/tools/*.ts don't need per-call
+  // try/catch boilerplate. The wrapper re-throws so the tool framework still
+  // sees the original error.
+  interface ToolDefinitionLike {
+    name: string;
+    execute?: (...args: unknown[]) => Promise<unknown>;
+    [key: string]: unknown;
+  }
+  type WideRegisterTool = (def: ToolDefinitionLike) => void;
+  const _realRegisterTool: WideRegisterTool = (pi.registerTool.bind(pi) as unknown) as WideRegisterTool;
+  (pi as unknown as { registerTool: WideRegisterTool }).registerTool = (def: ToolDefinitionLike) => {
+    const wrapped = {
+      ...def,
+      execute: def.execute
+        ? wrapToolExecute(def.name, def.execute)
+        : def.execute,
+    };
+    return _realRegisterTool(wrapped);
+  };
+
+  addBreadcrumb("extension_loaded");
+
   const piLoopEnv = process.env.PI_LOOP;
   const piLoopScope = process.env.PI_LOOP_SCOPE as "memory" | "session" | "project" | undefined;
   // Default to "project" so loops persist across chat sessions at

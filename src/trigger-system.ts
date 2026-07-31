@@ -109,7 +109,7 @@ export class TriggerSystem {
 
   private fireLoop(entry: LoopEntry): void {
     const current = this.store.get(entry.id);
-    if (!current || current.status !== "active") {
+    if (current?.status !== "active") {
       this.remove(entry.id);
       return;
     }

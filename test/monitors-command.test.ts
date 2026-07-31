@@ -18,7 +18,7 @@ function setup() {
     get: vi.fn((id: string) => monitors.get(id)),
     stop: vi.fn(async (id: string) => {
       const m = monitors.get(id);
-      if (!m || m.status !== "running") return false;
+      if (m?.status !== "running") return false;
       m.status = "stopped";
       return true;
     }),

@@ -3,3 +3,6 @@ dist/
 coverage/
 *.tsbuildinfo
 .pi/
+.env
+.env.local
+wt/

@@ -11,6 +11,7 @@ import {
   type ReducerNotification,
   reduceNotificationState,
 } from "../notification-reducer.js";
+import { addBreadcrumb } from "../telemetry/sentry.js";
 import type { Trigger } from "../types.js";
 
 export interface LoopFireEvent {
@@ -179,6 +180,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   }
 
   async function queueOrDeliverNotification(data: LoopFireEvent): Promise<void> {
+    addBreadcrumb("loop_fire", { loopId: data.loopId, trigger: data.trigger });
     const notification = buildPendingNotification(data);
     applyNotificationEvent({
       type: "NOTIFICATION_QUEUED",

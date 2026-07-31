@@ -69,7 +69,7 @@ export class CronScheduler {
       if (now < fireTime) continue;
 
       const entry = this.store.get(id);
-      if (!entry || entry.status !== "active") {
+      if (entry?.status !== "active") {
         this.fireTimes.delete(id);
         continue;
       }
