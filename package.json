@@ -18,8 +18,8 @@
     "scheduler"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.3",
-    "@earendil-works/pi-tui": "^0.80.3"
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-tui": "^0.80.10"
   },
   "dependencies": {
     "@sentry/node": "^10.69.0",

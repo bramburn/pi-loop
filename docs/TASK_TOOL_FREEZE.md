@@ -69,7 +69,47 @@ In pi's TUI layer:
 - Wrap batch tool results in `unstable_batchedUpdates` (or React 18's `startTransition`) so multiple IPC events coalesce into one commit.
 - Or: debounce the task list re-render with a 50-100ms coalescing window.
 
-Filed as a follow-up; no upstream PR yet.
+### Confirmed upstream root cause: **earendil-works/pi#7053**
+
+Investigation on 2026-07-31 traced the freeze to an upstream bug in `@earendil-works/pi-coding-agent`:
+
+- **Issue**: <https://github.com/earendil-works/pi/issues/7053> — *Parallel tool batches lose already-completed tool results when one sibling stalls (orphaned toolCalls -> 'No result provided')*
+- **State**: OPEN
+- **Affected versions**: 0.80.6+ (still open in 0.83.0)
+- **Code path**: `executeToolCallsParallel()` in `packages/agent/src/agent-loop.ts`
+- **Mechanism**: A `Promise.all` barrier at the agent-core level means persistence of *every* result is gated on the *slowest* sibling. The TUI fires per-tool `tool_execution_end` (so the UI shows results as they finish), but the persisted `toolResult` messages are emitted only after the whole batch settles. If one tool stalls, the *entire* batch's persistence is delayed. If the user aborts or kills the process, every toolCall in the batch becomes orphaned and the next model request sees synthetic failures.
+
+### Why our local guard still helps
+
+Our runtime guard (`wrapToolExecute` + `recordParallelCall`/`checkParallelStorm`) is a **client-side mitigation**, not a fix for #7053:
+
+- It limits the number of parallel calls per tool to 2 in a 1-second window.
+- The model learns from the thrown error and throttles its own parallel batches.
+- We avoid the `Promise.all` barrier risk entirely by not letting the batch get big enough to stall.
+- The TUI saturation case (many concurrent `requestRender()` calls) is also mitigated because we cap the burst.
+
+### TUI render architecture (corrects earlier diagnosis)
+
+For posterity: the pi TUI is **NOT built on React/Ink**. It's a custom terminal UI framework:
+
+- Differential rendering, overlay compositing, synchronized atomic updates via CSI 2026 when supported.
+- ~16 ms frame budget (60 fps target) with request coalescing.
+- Parallel tool execution is supported natively — `tool_execution_end` fires per-tool as each finishes.
+- `tool_execution_update` events may interleave across parallel tools.
+
+So the freeze mechanism is **custom-TUI `requestRender()` overload** from many concurrent tool events, not React/Ink render-loop saturation. (My earlier diagnosis based on initial Perplexity research was wrong on this point; corrected after a second research pass.)
+
+### Other open upstream TUI performance issues (filed but not yet fixed)
+
+- **#7113** — TUI freezes after entering an API key in `/login` when the pi.dev model catalog is unreachable.
+- **#6665** (in-progress, assigned to `@davidbrai`) — TUI pins a full core while streaming (uncached `Intl.Segmenter` + per-chunk Markdown rebuild).
+- **#7153** — `/scoped-models` appears to do nothing for ~5 minutes while awaiting stalled catalog refresh.
+- **#6702** (CLOSED, no-action) — pi-tui replays the entire transcript on every terminal width change (tmux zoom).
+- **#6789** (CLOSED, no-action) — TUI hangs on submit (and slow to start) on pi-coding-agent 0.80.10 on Linux Mint.
+- **#6478** (CLOSED, no-action) — TUI: per-frame render cost grows with transcript length.
+- **#6755** (CLOSED, no-action) — Agent loop retains every tool partial update; settle runs `Promise.all` over all of them.
+
+The `Promise.all`-over-tool-updates pattern in #6755 is structurally identical to the bug in #7053 — both unblock the TUI but block on the slowest sibling for persistence/memory cleanup.
 
 ## Local mitigation in `pi-loop`
 
