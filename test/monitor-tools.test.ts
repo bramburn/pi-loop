@@ -44,7 +44,7 @@ describe("MonitorCreate", () => {
     const h = setup();
     const out = await h.text("MonitorCreate", { command: "npm test" });
     expect(out).toContain("Monitor #1 started");
-    expect(out).toContain("Output stream: monitor:output");
+    expect(out).toContain("monitor:output is rate-limited");
     expect(h.manager.create).toHaveBeenCalledWith("npm test", undefined, undefined);
     expect(h.handleMonitorDoneLoop).not.toHaveBeenCalled();
     expect(h.toolMap.get("MonitorCreate")?.renderShell).toBe("self");
@@ -91,6 +91,16 @@ describe("MonitorList", () => {
     expect(out).toContain("#2 [completed]");
     expect(out).toContain("exit=0");
     expect(out).toContain("| line two");
+  });
+
+  it("includes the output tail for a running monitor", async () => {
+    const running = makeMonitor({
+      outputLines: 1,
+      outputBuffer: ["current experiment progress"],
+    });
+    const h = setup({ list: () => [running] });
+
+    expect(await h.text("MonitorList", {})).toContain("| current experiment progress");
   });
 });
 

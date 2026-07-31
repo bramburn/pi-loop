@@ -45,7 +45,7 @@ export function registerMonitorTools(options: MonitorToolsOptions): void {
     renderResult: hideToolTranscript,
     description: `Run a shell command in the background and get notified when it finishes. The core tool for async/parallel work.
 
-Fire off a build check, CI monitor, experiment, script, or any slow command — then keep working. Output streams back as "monitor:output" events. When the process exits, "monitor:done" fires (or "monitor:error" on failure).
+Fire off a build check, CI monitor, experiment, script, or any slow command — then keep working. Output streams back as rate-limited "monitor:output" progress events. Use MonitorList to inspect each monitor's live output tail. When the process exits, "monitor:done" fires (or "monitor:error" on failure).
 
 If you pass onDone with a prompt, the monitor auto-creates a one-shot completion loop — you get a completion wake with the exit code and output line count. No need to poll or create a separate loop.
 
@@ -57,7 +57,7 @@ Default to MonitorCreate for any long-running or background work:\n- Watch a CI/
 
 ## Events emitted
 
-- "monitor:output" — { monitorId, line, timestamp } for each output line\n- "monitor:done" — { monitorId, exitCode, outputLines } on clean exit\n- "monitor:error" — { monitorId, error } on failure
+- "monitor:output" — { monitorId, line, outputLines, droppedLines, timestamp } at most once per second per monitor; line is the latest output and droppedLines counts output since the previous progress event\n- "monitor:done" — { monitorId, exitCode, outputLines } on clean exit\n- "monitor:error" — { monitorId, error } on failure
 
 ## onDone — auto-notify on completion
 
@@ -102,7 +102,7 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
 
       return Promise.resolve(textResult(
         `Monitor #${entry.id} started: ${entry.command.slice(0, 60)}\n` +
-        `Output stream: monitor:output (monitorId: ${entry.id})\n` +
+        `Progress: MonitorList shows the live output tail; monitor:output is rate-limited (monitorId: ${entry.id})\n` +
         `Timeout: ${params.timeout ? `${params.timeout / 1000}s` : "none"}${onDoneMsg}`,
         {
           kind: "monitor",
@@ -144,7 +144,7 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
         if (m.exitCode !== undefined) line += ` exit=${m.exitCode}`;
         lines.push(line);
 
-        if (m.status !== "running" && m.outputBuffer.length > 0) {
+        if (m.outputBuffer.length > 0) {
           const tail = m.outputBuffer.slice(-5);
           for (const out of tail) {
             lines.push(`  | ${out.slice(0, 100)}`);

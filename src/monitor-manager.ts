@@ -10,6 +10,9 @@ import type { MonitorEntry, MonitorProcess } from "./types.js";
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
+const OUTPUT_EVENT_INTERVAL_MS = 1000;
+const MAX_OUTPUT_LINE_LENGTH = 4096;
+
 export class MonitorManager {
   private processes = new Map<string, MonitorProcess>();
   private nextId = 1;
@@ -111,49 +114,15 @@ export class MonitorManager {
       abortController,
       waiters: [],
       completionCallbacks: [],
+      lastOutputEventAt: 0,
+      pendingOutputLines: 0,
     };
 
-    child.stdout?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.length === 0) continue;
-        this.applyReducerEvent({
-          type: "MONITOR_OUTPUT",
-          at: Date.now(),
-          source: "monitor",
-          entityType: "monitor",
-          entityId: id,
-          payload: { id, line },
-        });
-        this.pi.events.emit("monitor:output", {
-          monitorId: id,
-          line,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.length === 0) continue;
-        this.applyReducerEvent({
-          type: "MONITOR_OUTPUT",
-          at: Date.now(),
-          source: "monitor",
-          entityType: "monitor",
-          entityId: id,
-          payload: { id, line },
-        });
-        this.pi.events.emit("monitor:output", {
-          monitorId: id,
-          line,
-          timestamp: Date.now(),
-        });
-      }
-    });
+    child.stdout?.on("data", (data: Buffer) => this.handleOutput(id, bp, data));
+    child.stderr?.on("data", (data: Buffer) => this.handleOutput(id, bp, data));
 
     const finish = (code: number | null, status: "completed" | "error") => {
+      this.emitOutputProgress(id, bp);
       this.applyReducerEvent({
         type: status === "completed" ? "MONITOR_COMPLETED" : "MONITOR_ERRORED",
         at: Date.now(),
@@ -192,6 +161,7 @@ export class MonitorManager {
 
     child.on("error", (err) => {
       if (bp.entry.status === "running") {
+        this.emitOutputProgress(id, bp);
         this.applyReducerEvent({
           type: "MONITOR_ERRORED",
           at: Date.now(),
@@ -255,6 +225,7 @@ export class MonitorManager {
     const bp = this.processes.get(id);
     if (!bp || bp.entry.status !== "running") return false;
 
+    this.emitOutputProgress(id, bp);
     this.applyReducerEvent({
       type: "MONITOR_STOPPED",
       at: Date.now(),
@@ -323,5 +294,41 @@ export class MonitorManager {
 
   getProcess(id: string): MonitorProcess | undefined {
     return this.processes.get(id);
+  }
+
+  private handleOutput(id: string, bp: MonitorProcess, data: Buffer): void {
+    const lines = data.toString().split(/\r?\n/).filter(Boolean)
+      .map(line => line.length <= MAX_OUTPUT_LINE_LENGTH ? line : `${line.slice(0, MAX_OUTPUT_LINE_LENGTH)}... [truncated]`);
+    if (lines.length === 0) return;
+
+    this.applyReducerEvent({
+      type: "MONITOR_OUTPUT",
+      at: Date.now(),
+      source: "monitor",
+      entityType: "monitor",
+      entityId: id,
+      payload: { id, lines },
+    });
+    bp.pendingOutputLines += lines.length;
+    bp.latestOutputLine = lines.at(-1);
+    if (Date.now() - bp.lastOutputEventAt >= OUTPUT_EVENT_INTERVAL_MS) {
+      this.emitOutputProgress(id, bp);
+    }
+  }
+
+  private emitOutputProgress(id: string, bp: MonitorProcess): void {
+    if (!bp.latestOutputLine || bp.pendingOutputLines === 0) return;
+    const current = this.get(id);
+    if (!current) return;
+    this.pi.events.emit("monitor:output", {
+      monitorId: id,
+      line: bp.latestOutputLine,
+      outputLines: current.outputLines,
+      droppedLines: bp.pendingOutputLines - 1,
+      timestamp: Date.now(),
+    });
+    bp.lastOutputEventAt = Date.now();
+    bp.pendingOutputLines = 0;
+    bp.latestOutputLine = undefined;
   }
 }

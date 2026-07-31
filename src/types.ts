@@ -130,4 +130,7 @@ export interface MonitorProcess {
   abortController: AbortController;
   waiters: Array<() => void>;
   completionCallbacks: Array<() => void>;
+  lastOutputEventAt: number;
+  pendingOutputLines: number;
+  latestOutputLine?: string;
 }

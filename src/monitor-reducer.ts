@@ -32,7 +32,7 @@ export type MonitorReducerEvent =
     entityId?: string;
     payload: {
       id: string;
-      line: string;
+      lines: string[];
     };
   }
   | {
@@ -133,8 +133,8 @@ export function reduceMonitorState(state: MonitorReducerState, event: MonitorRed
   const monitor: MonitorReducerEntry = { ...current };
 
   if (event.type === "MONITOR_OUTPUT") {
-    monitor.outputLines++;
-    if (monitor.outputBuffer.length < 200) monitor.outputBuffer = [...monitor.outputBuffer, event.payload.line];
+    monitor.outputLines += event.payload.lines.length;
+    monitor.outputBuffer = [...monitor.outputBuffer, ...event.payload.lines].slice(-200);
   }
 
   if (event.type === "MONITOR_COMPLETED") {

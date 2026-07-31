@@ -106,6 +106,32 @@ describe("MonitorManager", () => {
     });
   });
 
+  it("bounds buffered output and rate-limits high-volume progress events", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const events: any[] = [];
+    pi.events.on("monitor:output", (event: any) => events.push(event));
+    const entry = manager.create("noisy experiment");
+    const output = Array.from({ length: 1000 }, (_value, index) => `step ${index}`).join("\n");
+
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from(`${output}\n`));
+
+    const current = manager.get(entry.id)!;
+    expect(current.outputLines).toBe(1000);
+    expect(current.outputBuffer).toHaveLength(200);
+    expect(current.outputBuffer[0]).toBe("step 800");
+    expect(current.outputBuffer.at(-1)).toBe("step 999");
+    expect(events).toEqual([expect.objectContaining({
+      monitorId: entry.id,
+      line: "step 999",
+      outputLines: 1000,
+      droppedLines: 999,
+    })]);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
   it("emits monitor:done on clean exit", async () => {
     manager.create("echo done", "done test");
 
