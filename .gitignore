@@ -5,3 +5,4 @@ coverage/
 .pi/
 .env
 .env.local
+wt/
