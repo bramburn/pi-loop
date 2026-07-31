@@ -22,6 +22,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
+      # macOS runners ship with outdated npm 6.x pre-installed which rejects
+      # lockfileVersion 3 (introduced in npm 7). Upgrade before any npm commands.
+      - run: npm install -g npm@latest
+
       - run: npm ci
 
       - run: npm run typecheck
