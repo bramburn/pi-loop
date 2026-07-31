@@ -45,6 +45,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "bash test/e2e/reminder-injection.sh",
+    "hooks:install": "git config core.hooksPath .githooks",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --fix src/ test/"

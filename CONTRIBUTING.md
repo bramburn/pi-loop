@@ -8,6 +8,7 @@ Thanks for contributing! This document covers local dev setup, conventions, and 
 git clone https://github.com/trvon/pi-loop.git
 cd pi-loop
 npm install
+npm run hooks:install
 ```
 
 ## Scripts
@@ -22,6 +23,7 @@ npm install
 | `npm run test:coverage` | Run tests with coverage (used in CI) |
 | `npm run test:e2e` | Run `test/e2e/reminder-injection.sh` (self-skips without a local llama server) |
 | `npm run build` | Compile TypeScript |
+| `npm run hooks:install` | Configure the repository's versioned Git hooks |
 
 ## Architecture
 
@@ -73,6 +75,8 @@ npm run test:watch  # Watch mode
 3. Open PR against `main`
 
 CI (`.github/workflows/ci.yml`) runs the same validation in this order on Node 20.x and 22.x: `lint` → `typecheck` → `test:coverage` → `build`.
+
+The versioned pre-push hook runs `npm run lint` and `npm run test:coverage`, blocking pushes with lint errors or coverage below the configured thresholds. Run `npm run hooks:install` once after cloning to enable it.
 
 ## License
 

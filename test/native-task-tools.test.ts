@@ -3,6 +3,11 @@ import { TaskStore } from "../src/task-store.js";
 import { type NativeTaskToolsOptions, registerNativeTaskTools } from "../src/tools/native-task-tools.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
+const theme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as any;
+
 function setup(backlog: NativeTaskToolsOptions["evaluateTaskBacklog"] = vi.fn(async () => ({ created: false }))) {
   const { pi, toolMap, emittedEvents } = createMockPi();
   const taskStore = new TaskStore();
@@ -12,6 +17,19 @@ function setup(backlog: NativeTaskToolsOptions["evaluateTaskBacklog"] = vi.fn(as
   const text = async (name: string, args: any) => (await result(name, args)).content[0].text as string;
   return { taskStore, tool, text, result, emittedEvents };
 }
+
+describe("task tool call renderers", () => {
+  it("summarizes the action and task identifier", () => {
+    const { tool } = setup();
+    const render = (name: string, args: Record<string, unknown>) =>
+      (tool(name) as any).renderCall(args, theme).render(120).map((line: string) => line.trimEnd());
+
+    expect(render("TaskCreate", { subject: "Fix a failing check" })).toEqual(["Task create · Fix a failing check"]);
+    expect(render("TaskList", {})).toEqual(["Task status"]);
+    expect(render("TaskUpdate", { id: "7" })).toEqual(["Task update · #7"]);
+    expect(render("TaskDelete", { id: "7" })).toEqual(["Task delete · #7"]);
+  });
+});
 
 describe("TaskCreate", () => {
   it("creates a task and emits tasks:created", async () => {
