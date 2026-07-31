@@ -1,4 +1,4 @@
-export type TaskStatus = "pending" | "in_progress" | "completed";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "closed";
 
 export interface TaskWorkflowLink {
   loopId: string;
@@ -14,6 +14,7 @@ export interface TaskEntry {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  closedAt?: number;
   metadata?: Record<string, unknown>;
   workflow?: TaskWorkflowLink;
 }

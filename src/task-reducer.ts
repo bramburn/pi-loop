@@ -20,7 +20,7 @@ export type TaskReducerEvent =
     };
   }
   | {
-    type: "TASK_STARTED" | "TASK_COMPLETED" | "TASK_REOPENED" | "TASK_DELETED";
+    type: "TASK_STARTED" | "TASK_COMPLETED" | "TASK_CLOSED" | "TASK_REOPENED" | "TASK_DELETED";
     at: number;
     source: "tool" | "command" | "scheduler" | "eventbus" | "monitor" | "session" | "coordinator" | "system";
     entityType?: "task";
@@ -101,7 +101,7 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     const next = cloneState(state);
     const effects: TaskReducerEffect[] = [];
     for (const [id, task] of Object.entries(next.tasksById)) {
-      if (task.status !== "completed") continue;
+      if (task.status !== "completed" && task.status !== "closed") continue;
       delete next.tasksById[id];
       effects.push({ type: "DELETE_TASK", entityType: "task", entityId: id, payload: { id } });
     }
@@ -133,6 +133,12 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     task.status = "completed";
     task.updatedAt = event.at;
     task.completedAt = event.at;
+  }
+
+  if (event.type === "TASK_CLOSED") {
+    task.status = "closed";
+    task.updatedAt = event.at;
+    task.closedAt = event.at;
   }
 
   if (event.type === "TASK_REOPENED") {

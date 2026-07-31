@@ -62,6 +62,9 @@ export async function updateTask(
   } else if (status === "completed") {
     entry = ctx.taskStore.complete(id);
     if (entry) emitNativeTaskEvent(ctx.pi, "tasks:completed", entry, previousStatus);
+  } else if (status === "closed") {
+    entry = ctx.taskStore.close(id);
+    if (entry) emitNativeTaskEvent(ctx.pi, "tasks:closed", entry, previousStatus);
   } else if (status === "pending") {
     entry = ctx.taskStore.reopen(id);
     if (entry) emitNativeTaskEvent(ctx.pi, "tasks:reopened", entry, previousStatus);

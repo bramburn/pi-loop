@@ -36,6 +36,15 @@ describe("TaskStore (in-memory)", () => {
     expect(typeof entry?.completedAt).toBe("number");
   });
 
+  it("closes tasks without completing them", () => {
+    store.create("task", "desc");
+    const entry = store.close("1");
+
+    expect(entry?.status).toBe("closed");
+    expect(typeof entry?.closedAt).toBe("number");
+    expect(entry?.completedAt).toBeUndefined();
+  });
+
   it("reopens tasks explicitly and preserves completedAt", () => {
     store.create("task", "desc");
     store.start("1");
@@ -59,20 +68,24 @@ describe("TaskStore (in-memory)", () => {
   it("returns undefined for missing lifecycle/detail updates", () => {
     expect(store.start("999")).toBeUndefined();
     expect(store.complete("999")).toBeUndefined();
+    expect(store.close("999")).toBeUndefined();
     expect(store.reopen("999")).toBeUndefined();
     expect(store.updateDetails("999", { subject: "missing" })).toBeUndefined();
   });
 
-  it("prunes completed tasks only", () => {
+  it("prunes completed and closed tasks", () => {
     store.create("done", "d1");
-    store.create("active", "d2");
+    store.create("closed", "d2");
+    store.create("active", "d3");
     store.complete("1");
-    store.start("2");
+    store.close("2");
+    store.start("3");
 
-    expect(store.pruneCompleted()).toBe(1);
+    expect(store.pruneCompleted()).toBe(2);
     expect(store.list()).toHaveLength(1);
     expect(store.get("1")).toBeUndefined();
-    expect(store.get("2")?.status).toBe("in_progress");
+    expect(store.get("2")).toBeUndefined();
+    expect(store.get("3")?.status).toBe("in_progress");
   });
 });
 

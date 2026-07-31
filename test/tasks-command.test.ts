@@ -195,6 +195,32 @@ describe("registerTasksCommand", () => {
     expect(ui.notify).toHaveBeenCalledWith("Task #1 completed", "info");
   });
 
+  it("selecting a task and choosing Close without completing transitions it and emits tasks:closed", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+
+    const ui = {
+      select: vi.fn(async (title: string) => {
+        if (title === "Tasks") {
+          return h.taskStore.get("1")?.status === "pending" ? "* #1 [pending] subject" : "< Back";
+        }
+        if (title.startsWith("#1")) return "x Close without completing";
+        return "< Back";
+      }),
+      input: vi.fn(),
+      notify: vi.fn(),
+    };
+    const ctx = { ui } as any;
+
+    await h.command.handler!("", ctx);
+
+    expect(h.taskStore.get("1")?.status).toBe("closed");
+    const event = h.emittedEvents.find((e) => e.name === "tasks:closed" && e.payload.taskId === "1");
+    expect(event).toBeDefined();
+    expect(event?.payload.previousStatus).toBe("pending");
+    expect(ui.notify).toHaveBeenCalledWith("Task #1 closed without completing", "info");
+  });
+
   it("selecting a task and choosing Delete removes it and emits tasks:deleted", async () => {
     const h = setup();
     h.taskStore.create("subject", "desc");

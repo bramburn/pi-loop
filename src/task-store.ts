@@ -71,6 +71,22 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
+  close(id: string): TaskEntry | undefined {
+    return this.withLock(() => {
+      const entry = this.entries.get(id);
+      if (!entry) return undefined;
+      this.applyReducerEvent({
+        type: "TASK_CLOSED",
+        at: Date.now(),
+        source: "tool",
+        entityType: "task",
+        entityId: id,
+        payload: { id },
+      });
+      return this.entries.get(id);
+    });
+  }
+
   reopen(id: string): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);

@@ -54,7 +54,7 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
 
     const tasks = taskStore.list();
     const choices = tasks.map((task) => {
-      const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : "*";
+      const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : task.status === "closed" ? "x" : "*";
       return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60)}`;
     });
     choices.unshift("+ Create task");
@@ -75,9 +75,11 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
 
     const actions = ["x Delete"];
     if (task.status === "pending") {
+      actions.unshift("x Close without completing");
       actions.unshift("ok Complete");
       actions.unshift("> Start");
     } else if (task.status === "in_progress") {
+      actions.unshift("x Close without completing");
       actions.unshift("ok Complete");
       actions.unshift("* Return to pending");
     } else {
@@ -100,6 +102,10 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
       const next = taskStore.complete(task.id);
       if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status);
       ui.notify(`Task #${task.id} completed`, "info");
+    } else if (action === "x Close without completing") {
+      const next = taskStore.close(task.id);
+      if (next) emitNativeTaskEvent(pi, "tasks:closed", next, task.status);
+      ui.notify(`Task #${task.id} closed without completing`, "info");
     } else if (action === "* Return to pending" || action === "* Reopen") {
       const next = taskStore.reopen(task.id);
       if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status);

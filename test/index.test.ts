@@ -703,7 +703,7 @@ describe("native task fallback", () => {
     await Promise.resolve();
 
     let listResult = await taskList!.execute?.("7", {});
-    expect(listResult.content[0].text).toContain("1 tasks (0 pending, 1 in progress, 0 done)");
+    expect(listResult.content[0].text).toContain("1 tasks (0 pending, 1 in progress, 0 done, 0 closed)");
     expect(listResult.content[0].text).toContain("#3 [in_progress] Active 3");
     expect(listResult.content[0].text).not.toContain("#1 [completed]");
     expect(listResult.content[0].text).not.toContain("#2 [completed]");
@@ -758,7 +758,7 @@ describe("native task fallback", () => {
     await Promise.resolve();
 
     const listResult = await taskList!.execute?.("3", {});
-    expect(listResult.content[0].text).toContain("1 tasks (0 pending, 0 in progress, 1 done)");
+    expect(listResult.content[0].text).toContain("1 tasks (0 pending, 0 in progress, 1 done, 0 closed)");
     expect(listResult.content[0].text).toContain("#1 [completed] Done 1");
   });
 

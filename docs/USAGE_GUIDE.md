@@ -150,10 +150,11 @@ TaskCreate subject="Fix deploy polling" description="Replace polling with an eve
 TaskList
 TaskUpdate id="1" status="in_progress"
 TaskUpdate id="1" status="completed"
+TaskUpdate id="1" status="closed"  # abandon without completion
 TaskDelete id="1"
 ```
 
-The native provider is selected for the session and exposes `/tasks`, compact status-line tracking, persisted task state, lifecycle events, and task RPC replies.
+The native provider is selected for the session and exposes `/tasks`, compact status-line tracking, persisted task state, lifecycle events, and task RPC replies. `closed` is terminal like `completed`, is excluded from pending backlog work, and deliberately does not emit `tasks:completed`; use it when work is intentionally abandoned.
 
 Set `taskBacklog=true` on a loop that processes existing pending tasks. Backlog workers bootstrap when tasks already exist and delete themselves when the queue drains. `autoTask` serves a different purpose: it creates a new task on each loop fire.
 
@@ -170,6 +171,7 @@ Native task lifecycle events:
 - `tasks:created`
 - `tasks:started`
 - `tasks:completed`
+- `tasks:closed`
 - `tasks:reopened`
 - `tasks:updated`
 - `tasks:deleted`

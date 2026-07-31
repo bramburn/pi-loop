@@ -5,6 +5,7 @@ export type NativeTaskEventName =
   | "tasks:created"
   | "tasks:started"
   | "tasks:completed"
+  | "tasks:closed"
   | "tasks:reopened"
   | "tasks:updated"
   | "tasks:deleted";
@@ -18,6 +19,7 @@ export interface NativeTaskEventPayload {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  closedAt?: number;
   metadata?: Record<string, unknown>;
   workflow?: TaskWorkflowLink;
 }
@@ -37,6 +39,7 @@ export function emitNativeTaskEvent(
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     completedAt: entry.completedAt,
+    closedAt: entry.closedAt,
     metadata: entry.metadata,
     workflow: entry.workflow,
   } satisfies NativeTaskEventPayload);

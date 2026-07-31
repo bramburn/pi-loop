@@ -60,7 +60,7 @@ describe("TaskList", () => {
     const t2 = taskStore.create("b", "d");
     taskStore.start(t2.id);
     const out = await text("TaskList", {});
-    expect(out).toContain("2 tasks (1 pending, 1 in progress, 0 done)");
+    expect(out).toContain("2 tasks (1 pending, 1 in progress, 0 done, 0 closed)");
     expect(out).toContain("#1");
     expect(out).toContain("[in_progress]");
   });
@@ -91,11 +91,15 @@ describe("TaskUpdate", () => {
     expect(h.taskStore.get("1")?.status).toBe("in_progress");
     expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("→ completed");
     expect(h.taskStore.get("1")?.status).toBe("completed");
+    expect(await h.text("TaskUpdate", { id: "1", status: "closed" })).toContain("→ closed");
+    expect(h.taskStore.get("1")?.status).toBe("closed");
+    expect(h.taskStore.get("1")?.completedAt).toBeDefined();
     expect(await h.text("TaskUpdate", { id: "1", status: "pending" })).toContain("→ pending");
     expect(h.taskStore.get("1")?.status).toBe("pending");
 
     expect(h.emittedEvents.some((e) => e.name === "tasks:started" && e.payload.taskId === "1")).toBe(true);
     expect(h.emittedEvents.some((e) => e.name === "tasks:completed" && e.payload.taskId === "1")).toBe(true);
+    expect(h.emittedEvents.some((e) => e.name === "tasks:closed" && e.payload.taskId === "1")).toBe(true);
     expect(h.emittedEvents.some((e) => e.name === "tasks:reopened" && e.payload.taskId === "1")).toBe(true);
   });
 

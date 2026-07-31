@@ -1,6 +1,6 @@
 // VENDORED MODULE — canonical copy shared verbatim by pi-loop and pi-orca.
 // If you edit this file, copy it to the sibling repo and bump VENDOR_REV.
-// VENDOR_REV: 1
+// VENDOR_REV: 2
 
 /** Cross-extension RPC channels served by a tasks provider (pi-tasks or pi-loop native). */
 export const TASKS_RPC = {
@@ -24,6 +24,7 @@ export const TASK_EVENTS = {
   created: "tasks:created",
   started: "tasks:started",
   completed: "tasks:completed",
+  closed: "tasks:closed",
   reopened: "tasks:reopened",
   updated: "tasks:updated",
   deleted: "tasks:deleted",
@@ -37,7 +38,7 @@ export function replyChannel(channel: string, requestId: string): string {
 // Structural: pi-loop's TaskEntry satisfies TaskEntryWire; consumers on the
 // other side of the bus depend only on these shapes, never on store internals.
 
-export type TaskStatusWire = "pending" | "in_progress" | "completed";
+export type TaskStatusWire = "pending" | "in_progress" | "completed" | "closed";
 
 export interface TaskEntryWire {
   id: string;
@@ -47,6 +48,7 @@ export interface TaskEntryWire {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  closedAt?: number;
   metadata?: Record<string, unknown>;
 }
 

@@ -91,17 +91,18 @@ Fields:
       }
 
       const lines: string[] = [];
-      const statuses: Record<"pending" | "in_progress" | "completed", number> = {
+      const statuses: Record<TaskStatus, number> = {
         pending: 0,
         in_progress: 0,
         completed: 0,
+        closed: 0,
       };
       for (const t of tasks) {
         statuses[t.status]++;
-        const icon = t.status === "completed" ? "ok" : t.status === "in_progress" ? ">" : "*";
+        const icon = t.status === "completed" ? "ok" : t.status === "closed" ? "x" : t.status === "in_progress" ? ">" : "*";
         lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`);
       }
-      lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done)`);
+      lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done, ${statuses.closed} closed)`);
       return Promise.resolve(textResult(lines.join("\n"), {
         kind: "task",
         action: "list",
@@ -117,9 +118,9 @@ Fields:
     label: "TaskUpdate",
     renderCall: renderToolCall("Task", (args) => `update · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done.
+    description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done, or "closed" when work is intentionally abandoned without completion.
 
-Statuses: pending → in_progress → completed
+Statuses: pending → in_progress → completed | closed
 Parameters: id (required), status, subject, description`,
     promptGuidelines: [
       "TaskUpdate uses parameter `id`, not `taskId`.",
@@ -128,7 +129,7 @@ Parameters: id (required), status, subject, description`,
     ],
     parameters: Type.Object({
       id: Type.String({ description: "Task ID to update" }),
-      status: Type.Optional(Type.String({ description: "New status", enum: ["pending", "in_progress", "completed"] })),
+      status: Type.Optional(Type.String({ description: "New status", enum: ["pending", "in_progress", "completed", "closed"] })),
       subject: Type.Optional(Type.String({ description: "New title" })),
       description: Type.Optional(Type.String({ description: "New description" })),
     }),
