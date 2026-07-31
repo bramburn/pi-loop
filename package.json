@@ -37,6 +37,9 @@
   "dependencies": {
     "typebox": "^1.1.34"
   },
+  "overrides": {
+    "postcss": "^8.5.18"
+  },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
