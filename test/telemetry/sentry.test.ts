@@ -258,9 +258,11 @@ describe("parallel call storm guard", () => {
 	});
 
 	it("throws on the 3rd call within the window for the same tool", async () => {
-		const { wrapToolExecute, resetParallelGuard } = await import(
+		process.env.SENTRY_DSN = "https://publickey@o123.ingest.sentry.io/456";
+		const { initSentry, wrapToolExecute, resetParallelGuard } = await import(
 			"../../src/telemetry/sentry.js"
 		);
+		initSentry();
 		resetParallelGuard();
 		const fn = vi.fn().mockResolvedValue("ok");
 		const wrapped = wrapToolExecute("monitor_create", fn);
@@ -270,9 +272,11 @@ describe("parallel call storm guard", () => {
 	});
 
 	it("tracks per tool name independently", async () => {
-		const { wrapToolExecute, resetParallelGuard } = await import(
+		process.env.SENTRY_DSN = "https://publickey@o123.ingest.sentry.io/456";
+		const { initSentry, wrapToolExecute, resetParallelGuard } = await import(
 			"../../src/telemetry/sentry.js"
 		);
+		initSentry();
 		resetParallelGuard();
 		const fn = vi.fn().mockResolvedValue("ok");
 		const mon = wrapToolExecute("monitor_create", fn);

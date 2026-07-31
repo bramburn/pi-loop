@@ -270,7 +270,7 @@ export class MonitorManager {
 
   async stop(id: string): Promise<boolean> {
     const bp = this.processes.get(id);
-    if (!bp || bp.entry.status !== "running") return false;
+    if (bp?.entry.status !== "running") return false;
 
     this.applyReducerEvent({
       type: "MONITOR_STOPPED",
