@@ -121,6 +121,17 @@ export interface MonitorEntry {
   exitCode?: number;
   outputLines: number;
   outputBuffer: string[];
+  lastOutputAt?: number;
+  outputRatePerMinute?: number;
+  progress?: MonitorProgress;
+}
+
+export interface MonitorProgress {
+  current?: number;
+  total?: number;
+  message?: string;
+  source: "jsonl" | "agent";
+  updatedAt: number;
 }
 
 export interface MonitorProcess {
@@ -131,6 +142,13 @@ export interface MonitorProcess {
   waiters: Array<() => void>;
   completionCallbacks: Array<() => void>;
   lastOutputEventAt: number;
+  lastProgressChangeAt: number;
+  progressChangeTimer?: ReturnType<typeof setTimeout>;
   pendingOutputLines: number;
   latestOutputLine?: string;
+  outputBuckets: Array<{ second: number; count: number }>;
+  stdoutDecoder: import("node:string_decoder").StringDecoder;
+  stderrDecoder: import("node:string_decoder").StringDecoder;
+  stdoutRemainder: string;
+  stderrRemainder: string;
 }

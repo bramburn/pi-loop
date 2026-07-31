@@ -1,4 +1,4 @@
-import type { MonitorEntry } from "./types.js";
+import type { MonitorEntry, MonitorProgress } from "./types.js";
 
 type ReducerSource = "tool" | "command" | "scheduler" | "eventbus" | "monitor" | "session" | "coordinator" | "system";
 
@@ -33,6 +33,7 @@ export type MonitorReducerEvent =
     payload: {
       id: string;
       lines: string[];
+      ratePerMinute: number;
     };
   }
   | {
@@ -45,6 +46,17 @@ export type MonitorReducerEvent =
       id: string;
       exitCode?: number;
       error?: string;
+    };
+  }
+  | {
+    type: "MONITOR_PROGRESS_UPDATED";
+    at: number;
+    source: ReducerSource;
+    entityType?: "monitor";
+    entityId?: string;
+    payload: {
+      id: string;
+      progress: Omit<MonitorProgress, "updatedAt">;
     };
   }
   | {
@@ -135,6 +147,23 @@ export function reduceMonitorState(state: MonitorReducerState, event: MonitorRed
   if (event.type === "MONITOR_OUTPUT") {
     monitor.outputLines += event.payload.lines.length;
     monitor.outputBuffer = [...monitor.outputBuffer, ...event.payload.lines].slice(-200);
+    monitor.lastOutputAt = event.at;
+    monitor.outputRatePerMinute = event.payload.ratePerMinute;
+  }
+
+  if (event.type === "MONITOR_PROGRESS_UPDATED") {
+    monitor.progress = {
+      ...monitor.progress,
+      ...withoutUndefined(event.payload.progress),
+      source: event.payload.progress.source,
+      updatedAt: event.at,
+    };
+  }
+
+  function withoutUndefined<T extends object>(value: T): Partial<T> {
+    return Object.fromEntries(
+      Object.entries(value).filter(([, field]) => field !== undefined),
+    ) as Partial<T>;
   }
 
   if (event.type === "MONITOR_COMPLETED") {

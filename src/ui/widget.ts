@@ -49,6 +49,11 @@ export class LoopWidget {
     if (taskSummary.count > 0) parts.push(`□ ${formatCount(taskSummary.count, "task")}`);
 
     let line = parts.join(" · ");
+    const monitor = monitors[0];
+    if (monitors.length === 1 && monitor) {
+      const activity = formatMonitorActivity(monitor);
+      if (activity) line += ` | ${activity}`;
+    }
     if (taskSummary.focusText) line += ` | ${taskSummary.focusText}`;
     return line;
   }
@@ -56,6 +61,31 @@ export class LoopWidget {
   dispose() {
     this.uiCtx?.setStatus("loops", undefined);
   }
+}
+
+function formatMonitorProgress(monitor: { progress?: { current?: number; total?: number; message?: string } }): string {
+  const { progress } = monitor;
+  if (!progress) return "";
+  if (progress.current !== undefined && progress.total !== undefined && progress.total > 0) {
+    return `${Math.round((progress.current / progress.total) * 100)}%`;
+  }
+  return progress.message ?? "progress updated";
+}
+
+function formatMonitorActivity(monitor: {
+  progress?: { current?: number; total?: number; message?: string };
+  startedAt: number;
+  lastOutputAt?: number;
+  outputRatePerMinute?: number;
+}): string | undefined {
+  const progress = monitor.progress ? formatMonitorProgress(monitor) : undefined;
+  const silence = Date.now() - (monitor.lastOutputAt ?? monitor.startedAt);
+  const activity = silence >= 60000
+    ? `quiet ${Math.round(silence / 60000)}m`
+    : monitor.outputRatePerMinute !== undefined
+      ? `log ${monitor.outputRatePerMinute}/min`
+      : undefined;
+  return [progress, activity].filter(Boolean).join(" · ") || undefined;
 }
 
 function formatCount(count: number, noun: string): string {

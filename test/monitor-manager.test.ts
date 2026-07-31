@@ -123,12 +123,143 @@ describe("MonitorManager", () => {
     expect(current.outputBuffer).toHaveLength(200);
     expect(current.outputBuffer[0]).toBe("step 800");
     expect(current.outputBuffer.at(-1)).toBe("step 999");
+    expect(current.outputRatePerMinute).toBe(1000);
+    expect(current.lastOutputAt).toEqual(expect.any(Number));
     expect(events).toEqual([expect.objectContaining({
       monitorId: entry.id,
       line: "step 999",
       outputLines: 1000,
       droppedLines: 999,
     })]);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("extracts structured progress from JSON Lines without treating ordinary output as progress", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from([
+      "epoch 1 starting",
+      '{"progress":{"current":25,"total":100,"message":"training epoch 1"}}',
+      '{"progress":{"message":"waiting for validation"}}',
+      '{"progress":{"current":"not a number"}}',
+    ].join("\n") + "\n"));
+
+    expect(manager.get(entry.id)?.progress).toMatchObject({
+      current: 25,
+      total: 100,
+      message: "waiting for validation",
+      source: "jsonl",
+    });
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("allows agents to set an optional progress percentage or status message", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+
+    expect(manager.updateProgress(entry.id, { message: "waiting for remote worker" })?.progress).toMatchObject({
+      message: "waiting for remote worker",
+      source: "agent",
+    });
+    expect(manager.updateProgress(entry.id, { current: 3, total: 5, message: "epoch 3" })?.progress).toMatchObject({
+      current: 3,
+      total: 5,
+      message: "epoch 3",
+      source: "agent",
+    });
+    expect(manager.updateProgress("missing", { message: "nope" })).toBeUndefined();
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("frames split stream records before counting or parsing them", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    stdout.emit("data", Buffer.from('{"progress":{"current":'));
+    expect(manager.get(entry.id)?.outputLines).toBe(0);
+    expect(manager.get(entry.id)?.progress).toBeUndefined();
+
+    stdout.emit("data", Buffer.from('1,"total":2,"message":"halfway"}}\n'));
+    expect(manager.get(entry.id)?.outputLines).toBe(1);
+    expect(manager.get(entry.id)?.outputBuffer).toEqual(['{"progress":{"current":1,"total":2,"message":"halfway"}}']);
+    expect(manager.get(entry.id)?.progress).toMatchObject({ current: 1, total: 2, message: "halfway" });
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("retains an unterminated final output record on completion", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from("final result"));
+
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+
+    expect(manager.get(entry.id)?.outputBuffer).toContain("final result");
+  });
+
+  it("coalesces JSONL progress widget updates to once per second", () => {
+    vi.useFakeTimers();
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const onChange = vi.fn();
+    manager.setOnChange(onChange);
+    const entry = manager.create("experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    stdout.emit("data", Buffer.from('{"progress":{"message":"one"}}\n'));
+    stdout.emit("data", Buffer.from('{"progress":{"message":"two"}}\n'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+    vi.useRealTimers();
+  });
+
+  it("rejects agent progress updates after a monitor completes", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+
+    expect(manager.updateProgress(entry.id, { message: "late update" })).toBeUndefined();
+  });
+
+  it("coalesces log-rate accounting into bounded one-second buckets", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("noisy experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    for (let index = 0; index < 1000; index++) stdout.emit("data", Buffer.from("line\n"));
+
+    expect(manager.getProcess(entry.id)?.outputBuckets).toHaveLength(1);
+    expect(manager.get(entry.id)?.outputRatePerMinute).toBe(1000);
     manager.getProcess(entry.id)?.proc.emit("close", 0);
   });
 

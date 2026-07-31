@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { LoopEntry, MonitorEntry, Trigger } from "../types.js";
+import type { LoopEntry, MonitorEntry, MonitorProgress, Trigger } from "../types.js";
 import { hideToolTranscript } from "../ui/tool-renderer.js";
 import { displayRows, textResult } from "./tool-result.js";
 
@@ -8,6 +8,7 @@ interface MonitorManagerLike {
   list(): MonitorEntry[];
   create(command: string, description?: string, timeout?: number): MonitorEntry;
   stop(id: string): Promise<boolean>;
+  updateProgress(id: string, progress: Omit<MonitorProgress, "source" | "updatedAt">): MonitorEntry | undefined;
 }
 
 interface LoopStoreLike {
@@ -34,6 +35,14 @@ function formatRemaining(ms: number): string {
   return `${Math.round(ms / 3600000)}h`;
 }
 
+function formatActivity(monitor: MonitorEntry): string | undefined {
+  const lastActivityAt = monitor.lastOutputAt ?? monitor.startedAt;
+  const silence = Date.now() - lastActivityAt;
+  if (silence >= 60000) return `quiet ${formatRemaining(silence)}`;
+  if (monitor.outputRatePerMinute !== undefined) return `log ${monitor.outputRatePerMinute}/min`;
+  return undefined;
+}
+
 export function registerMonitorTools(options: MonitorToolsOptions): void {
   const { pi, getStore, getMonitorManager, updateWidget, handleMonitorDoneLoop } = options;
 
@@ -57,7 +66,11 @@ Default to MonitorCreate for any long-running or background work:\n- Watch a CI/
 
 ## Events emitted
 
-- "monitor:output" — { monitorId, line, outputLines, droppedLines, timestamp } at most once per second per monitor; line is the latest output and droppedLines counts output since the previous progress event\n- "monitor:done" — { monitorId, exitCode, outputLines } on clean exit\n- "monitor:error" — { monitorId, error } on failure
+- "monitor:output" — { monitorId, line, outputLines, droppedLines, timestamp } at most once per second per monitor; line is the latest activity and droppedLines counts output since the previous progress event\n- "monitor:done" — { monitorId, exitCode, outputLines } on clean exit\n- "monitor:error" — { monitorId, error } on failure
+
+## Structured progress
+
+For reliable progress, emit JSON Lines in this shape: \`{"progress":{"current":42,"total":100,"message":"training epoch 3"}}\`. A percentage is shown only when both current and total are supplied; it is never inferred from time or log output. A message alone shows the latest known status. Agents can use MonitorUpdate when the command cannot emit JSON Lines.
 
 ## onDone — auto-notify on completion
 
@@ -142,6 +155,9 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
         const ageStr = formatRemaining(age);
         let line = `${icon} #${m.id} [${m.status}] ${m.command.slice(0, 60)} — ${m.outputLines} lines (${ageStr})`;
         if (m.exitCode !== undefined) line += ` exit=${m.exitCode}`;
+        if (m.progress) line += ` · ${formatProgress(m.progress)}`;
+        const activity = m.status === "running" ? formatActivity(m) : undefined;
+        if (activity) line += ` · ${activity}`;
         lines.push(line);
 
         if (m.outputBuffer.length > 0) {
@@ -159,6 +175,45 @@ Pass onDone with a prompt and the monitor auto-creates a one-shot loop that fire
         tone: "info",
         summary: `${monitors.length} monitor${monitors.length === 1 ? "" : "s"} · ${running} running`,
         expanded: displayRows(lines),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "MonitorUpdate",
+    label: "MonitorUpdate",
+    renderShell: "self",
+    renderCall: hideToolTranscript,
+    renderResult: hideToolTranscript,
+    description: `Update a running monitor's structured progress when its command cannot emit JSON Lines.
+
+## When to Use
+
+Use after observing a monitor's output and extracting a trustworthy current/total count or status message. Percentages are only rendered when both values are supplied; use message alone when progress cannot be calculated. Prefer the monitored command emitting JSON Lines itself when possible.
+
+## When NOT to Use
+
+Do not use for raw output lines or to poll a monitor. Use MonitorList for current status and output.`,
+    parameters: Type.Object({
+      monitorId: Type.String({ description: "Monitor ID to update" }),
+      current: Type.Optional(Type.Number({ description: "Completed work units" })),
+      total: Type.Optional(Type.Number({ description: "Total work units" })),
+      message: Type.Optional(Type.String({ description: "Short progress status" })),
+    }, { additionalProperties: false, minProperties: 2 }),
+    execute(_toolCallId, params) {
+      const entry = getMonitorManager().updateProgress(params.monitorId, {
+        current: params.current,
+        total: params.total,
+        message: params.message,
+      });
+      if (!entry) {
+        return Promise.resolve(textResult(`Monitor #${params.monitorId} not found or not running`, {
+          kind: "monitor", action: "update", tone: "error", summary: `Monitor #${params.monitorId} unavailable`, expanded: [],
+        }));
+      }
+      updateWidget();
+      return Promise.resolve(textResult(`Monitor #${entry.id} progress updated: ${formatProgress(entry.progress!)}`, {
+        kind: "monitor", action: "update", tone: "success", summary: `Monitor #${entry.id} · ${formatProgress(entry.progress!)}`, expanded: [],
       }));
     },
   });
@@ -183,9 +238,19 @@ Use MonitorList to find the monitor ID, then stop it with this tool.`,
           kind: "monitor", action: "stop", tone: "success", summary: `Monitor #${params.monitorId} stopped`, expanded: [],
         });
       }
+
       return textResult(`Monitor #${params.monitorId} not found or not running`, {
         kind: "monitor", action: "stop", tone: "error", summary: `Monitor #${params.monitorId} unavailable`, expanded: ["Use MonitorList to find running monitor IDs."],
       });
     },
   });
+}
+
+function formatProgress(progress: MonitorProgress): string {
+  const ratio = progress.current !== undefined && progress.total !== undefined && progress.total > 0
+    ? `${Math.round((progress.current / progress.total) * 100)}% (${progress.current}/${progress.total})`
+    : progress.current !== undefined
+      ? String(progress.current)
+      : "";
+  return [ratio, progress.message].filter(Boolean).join(" · ") || "updated";
 }

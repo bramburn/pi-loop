@@ -1,3 +1,4 @@
+import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
 import { registerMonitorTools } from "../src/tools/monitor-tools.js";
@@ -17,7 +18,11 @@ function makeMonitor(overrides: Partial<MonitorEntry> = {}): MonitorEntry {
   };
 }
 
-function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id: string) => Promise<boolean> }> = {}) {
+function setup(managerOverrides: Partial<{
+  list: () => MonitorEntry[];
+  stop: (id: string) => Promise<boolean>;
+  updateProgress: (id: string, progress: any) => MonitorEntry | undefined;
+}> = {}) {
   const { pi, toolMap } = createMockPi();
   const store = new LoopStore();
   let nextId = 1;
@@ -25,6 +30,9 @@ function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id
     list: managerOverrides.list ?? (() => []),
     create: vi.fn((command: string) => makeMonitor({ id: String(nextId++), command })),
     stop: managerOverrides.stop ?? vi.fn(async () => true),
+    updateProgress: managerOverrides.updateProgress ?? vi.fn((_id: string, progress: any) => makeMonitor({
+      progress: { ...progress, source: "agent", updatedAt: Date.now() },
+    })),
   };
   const handleMonitorDoneLoop = vi.fn();
   registerMonitorTools({
@@ -34,6 +42,7 @@ function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id
     updateWidget: vi.fn(),
     handleMonitorDoneLoop,
   });
+
   const text = async (name: string, args: any) =>
     (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
   return { store, manager, handleMonitorDoneLoop, text, toolMap };
@@ -101,6 +110,71 @@ describe("MonitorList", () => {
     const h = setup({ list: () => [running] });
 
     expect(await h.text("MonitorList", {})).toContain("| current experiment progress");
+  });
+
+  it("shows a percentage only when current and total are supplied", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      progress: { current: 25, total: 100, message: "training", source: "jsonl", updatedAt: Date.now() },
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("25% (25/100) · training");
+  });
+
+  it("shows a progress message without inferring a percentage", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      progress: { message: "waiting for validation", source: "jsonl", updatedAt: Date.now() },
+    })] });
+    const out = await h.text("MonitorList", {});
+    expect(out).toContain("waiting for validation");
+    expect(out).not.toContain("%");
+  });
+
+  it("shows observed log velocity for active monitors", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      lastOutputAt: Date.now(),
+      outputRatePerMinute: 24,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("log 24/min");
+  });
+
+  it("shows quiet time without claiming the monitor has failed", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      lastOutputAt: Date.now() - 120000,
+      outputRatePerMinute: 24,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("quiet 2m");
+  });
+
+  it("shows quiet time for a monitor that has not produced output", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      startedAt: Date.now() - 120000,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("quiet 2m");
+  });
+});
+
+describe("MonitorUpdate", () => {
+  it("updates an agent-provided progress message", async () => {
+    const updateProgress = vi.fn((_id: string, progress: any) => makeMonitor({
+      progress: { ...progress, source: "agent", updatedAt: Date.now() },
+    }));
+    const h = setup({ updateProgress });
+
+    expect(await h.text("MonitorUpdate", { monitorId: "1", message: "waiting for worker" }))
+      .toContain("waiting for worker");
+    expect(updateProgress).toHaveBeenCalledWith("1", {
+      current: undefined,
+      total: undefined,
+      message: "waiting for worker",
+    });
+  });
+
+  it("requires at least one recognized progress field", () => {
+    const h = setup();
+    const schema = h.toolMap.get("MonitorUpdate")?.parameters;
+
+    expect(Check(schema as any, { monitorId: "1" })).toBe(false);
+    expect(Check(schema as any, { monitorId: "1", ignored: true })).toBe(false);
+    expect(Check(schema as any, { monitorId: "1", message: "working" })).toBe(true);
   });
 });
 

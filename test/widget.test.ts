@@ -63,6 +63,63 @@ describe("LoopWidget status rendering", () => {
     expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor"]);
   });
 
+  it("shows an explicit monitor percentage but does not infer one from output", () => {
+    monitorManager._add({
+      id: "1",
+      command: "python train.py",
+      status: "running",
+      startedAt: Date.now(),
+      outputLines: 42,
+      progress: { current: 25, total: 100, source: "jsonl", updatedAt: Date.now() },
+    });
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | 25%"]);
+  });
+
+  it("shows a monitor status message when no percentage is available", () => {
+    monitorManager._add({
+      id: "1",
+      command: "python train.py",
+      status: "running",
+      startedAt: Date.now(),
+      outputLines: 42,
+      progress: { message: "waiting for validation", source: "jsonl", updatedAt: Date.now() },
+    });
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | waiting for validation"]);
+  });
+
+  it("shows stale output alongside structured progress", () => {
+    monitorManager._add({
+      id: "1",
+      command: "python train.py",
+      status: "running",
+      startedAt: Date.now() - 120000,
+      outputLines: 42,
+      progress: { current: 25, total: 100, source: "jsonl", updatedAt: Date.now() - 120000 },
+    });
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | 25% · quiet 2m"]);
+  });
+
+  it("shows observed log velocity when a monitor has no structured progress", () => {
+    monitorManager._add({
+      id: "1",
+      command: "python train.py",
+      status: "running",
+      startedAt: Date.now(),
+      outputLines: 42,
+      lastOutputAt: Date.now(),
+      outputRatePerMinute: 24,
+    });
+
+    widget.update();
+    expect(latestStatusCall()).toEqual(["loops", "▶ 1 monitor | log 24/min"]);
+  });
+
   it("shows compact loop and monitor counts in status", () => {
     store.create(
       { type: "cron", schedule: "*/5 * * * *" },
