@@ -63,6 +63,39 @@ describe("LoopCreate", () => {
     expect(h.store.get("1")?.trigger.type).toBe("hybrid");
   });
 
+  it("creates an idle-driven loop without a timer and activates its first wake immediately", async () => {
+    const out = await h.text("LoopCreate", {
+      trigger: "idle",
+      prompt: "continue investigating the harness failure",
+      triggerType: "idle",
+    });
+
+    const entry = h.store.get("1");
+    expect(entry?.trigger).toEqual({ type: "dynamic" });
+    expect(entry?.recurring).toBe(true);
+    expect(entry?.dynamic).toMatchObject({
+      goal: "continue investigating the harness failure",
+      iteration: 0,
+    });
+    expect(entry?.dynamic?.nextWakeAt).toBeUndefined();
+    expect(h.triggerSystem.add).toHaveBeenCalledWith(entry);
+    expect(h.onDynamicLoopActivated).toHaveBeenCalledWith(entry);
+    expect(out).toContain("when idle");
+  });
+
+  it("does not parse a timer when creating an idle-driven loop", async () => {
+    const out = await h.text("LoopCreate", {
+      trigger: "5m",
+      prompt: "continue investigating the harness failure",
+      triggerType: "idle",
+    });
+
+    expect(h.store.list()).toHaveLength(0);
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(h.onDynamicLoopActivated).not.toHaveBeenCalled();
+    expect(out).toContain('Idle loops require trigger "idle"');
+  });
+
   it("rejects an empty event source with a validation message", async () => {
     const out = await h.text("LoopCreate", { trigger: "", prompt: "go", triggerType: "event" });
     expect(out).toContain("Invalid event trigger");

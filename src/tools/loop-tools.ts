@@ -253,7 +253,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     label: "LoopCreate",
     renderCall: renderToolCall("Loop", (args) => `create · ${String(toolArg(args, "prompt") ?? "scheduled work").slice(0, 56)}`),
     renderResult: renderToolResult,
-    description: `Create a scheduled repeating task (loop) that runs a prompt on a timer or when an event fires.
+    description: `    Create a scheduled repeating task (loop) that runs a prompt on a timer, when an event fires, or when the harness becomes idle.
 
 Use this tool whenever the user asks to:
 - "create a loop" to check something periodically
@@ -275,6 +275,7 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
 - **cron**: time-based. "30s" (rounded to 1m), "5m", "2h", "1d", or full cron like "0 9 * * 1-5"
 - **event**: fires on pi events like "tool_execution_start", "before_agent_start"
 - **hybrid**: both cron + event with debounce
+- **idle**: timer-free dynamic loop; use triggerType="idle" and trigger="idle"
 
 ## Parameters
 
@@ -294,6 +295,7 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
       "## Choosing trigger type",
       "Prefer event triggers over cron when possible — they fire exactly when needed instead of polling.",
       "Use event triggers for: tool completion ('tool_execution_end'), task creation ('tasks:created'), monitor completion ('monitor:done').",
+      "Use triggerType: 'idle' with trigger: 'idle' for agent-driven continuation work that should wake only when the harness is idle. Idle loops fire their first wake immediately, then require LoopUpdate to continue, pause, or complete.",
       "Use cron triggers only when: the user explicitly asks for a time interval, or there's no relevant pi event to subscribe to.",
       "Hybrid triggers (cron + event) give you both: event-driven responsiveness with a cron safety-net fallback.",
       "## Choosing an interval",
@@ -311,12 +313,12 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
       "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
     ],
     parameters: Type.Object({
-      trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), or JSON hybrid spec" }),
+      trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), hybrid spec, or literal 'idle' with triggerType='idle'" }),
       prompt: Type.String({ description: "Prompt to run when the loop fires" }),
       recurring: Type.Optional(Type.Boolean({ description: "Whether loop repeats (default: true)", default: true })),
       autoTask: Type.Optional(Type.Boolean({ description: "Auto-create pi-tasks task on fire", default: false })),
       taskBacklog: Type.Optional(Type.Boolean({ description: "Mark as a task-backlog worker loop that auto-deletes when pending tasks reach zero", default: false })),
-      triggerType: Type.Optional(Type.String({ description: "cron, event, or hybrid (inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid"] })),
+      triggerType: Type.Optional(Type.String({ description: "cron, event, hybrid, or idle (cron/event inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid", "idle"] })),
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
       maxFires: Type.Optional(Type.Number({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops." })),
@@ -327,7 +329,19 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
 
-      if (inferred === "cron") {
+      if (inferred === "idle") {
+        if (triggerInput.trim().toLowerCase() !== "idle") {
+          const message = 'Idle loops require trigger "idle" with triggerType "idle".';
+          return Promise.resolve(textResult(message, {
+            kind: "loop",
+            action: "create",
+            tone: "error",
+            summary: "Idle loop was not created",
+            expanded: [message],
+          }));
+        }
+        trigger = { type: "dynamic" };
+      } else if (inferred === "cron") {
         const parsed = parseInterval(triggerInput);
         trigger = { type: "cron", schedule: parsed.cron };
       } else if (inferred === "event") {
@@ -361,9 +375,13 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
         taskBacklog,
         readOnly,
         maxFires,
+        dynamic: trigger.type === "dynamic"
+          ? { goal: prompt, iteration: 0 }
+          : undefined,
       });
 
       getTriggerSystem().add(entry);
+      if (trigger.type === "dynamic") onDynamicLoopActivated?.(entry);
 
       if (trigger.type === "event" && trigger.source === "monitor:done" && trigger.filter) {
         try {
@@ -384,12 +402,13 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
       const bootstrapped = await maybeBootstrapTaskLoop(entry);
       updateWidget();
 
-      const triggerDesc = formatTrigger(trigger, "create");
+      const triggerDesc = trigger.type === "dynamic" ? "idle-driven" : formatTrigger(trigger, "create");
 
       return Promise.resolve(textResult(
         `Loop #${entry.id} created: ${entry.prompt.slice(0, 60)}\n` +
         `Trigger: ${triggerDesc}\n` +
         `Recurring: ${entry.recurring}\n` +
+        (trigger.type === "dynamic" ? "Wake: when idle (first wake queued now)\n" : "") +
         (entry.autoTask ? "Auto-create task: enabled\n" : "") +
         (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
         (bootstrapped ? "Backlog: initial wake queued for existing pending tasks\n" : "") +
