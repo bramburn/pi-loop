@@ -157,7 +157,7 @@ describe("LoopList", () => {
     expect(out).toContain("cron:");
   });
 
-  it("shows elapsed running time for active loops", async () => {
+  it("shows wall-clock age for active loops", async () => {
     const h = setup();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
@@ -165,19 +165,42 @@ describe("LoopList", () => {
       await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
       vi.setSystemTime(new Date("2026-01-01T00:03:00Z"));
       const out = await h.text("LoopList", {});
-      expect(out).toContain("elapsed: 3m");
+      expect(out).toContain("age: 3m");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("omits elapsed time for paused loops", async () => {
+  it("labels wall-clock duration as age after pause and resume", async () => {
+    const h = setup();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    try {
+      await h.text("LoopCreate", {
+        trigger: "5m",
+        prompt: "build check",
+        triggerType: "cron",
+      });
+      vi.setSystemTime(new Date("2026-01-01T00:01:00Z"));
+      await h.text("LoopDelete", { id: "1", action: "pause" });
+      vi.setSystemTime(new Date("2026-01-01T01:00:00Z"));
+      h.store.resume("1");
+
+      const out = await h.text("LoopList", {});
+      expect(out).toContain("age: 1h");
+      expect(out).not.toContain("elapsed:");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits age for paused loops", async () => {
     const h = setup();
     await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
     await h.text("LoopDelete", { id: "1", action: "pause" });
     const out = await h.text("LoopList", {});
     expect(out).toContain("[paused]");
-    expect(out).not.toContain("elapsed:");
+    expect(out).not.toContain("age:");
   });
 });
 

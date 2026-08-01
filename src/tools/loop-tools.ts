@@ -686,7 +686,7 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           line += ` next: ${formatRemaining(remaining)}`;
         }
         if (entry.status === "active") {
-          line += ` elapsed: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
+          line += ` age: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
         }
         if (entry.autoTask) line += " [auto-task]";
         if (entry.taskBacklog) line += " [backlog-worker]";

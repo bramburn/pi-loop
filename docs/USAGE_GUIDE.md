@@ -226,6 +226,6 @@ Session files live under `.pi/loops/` and `.pi/tasks/`. Keep `session` as the no
 
 ## Status line and limits
 
-The TUI status line summarizes active loops, monitors, and native tasks. Use `LoopList`, `MonitorList`, and `/tasks` for detail. The status clears when no work is active.
+The TUI status line summarizes active loops, monitors, and native tasks. Use `LoopList`, `MonitorList`, and `/tasks` for detail. `LoopList` reports active-loop `age` as wall-clock time since creation, including pause and process downtime; paused loops omit the field. The status clears when no work is active.
 
 The runtime allows at most 25 active loops and 25 running monitors.
