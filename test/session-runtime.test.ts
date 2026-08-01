@@ -95,6 +95,15 @@ describe("session-runtime heartbeat lifecycle", () => {
     expect(widget.update).toHaveBeenCalledTimes(1);
   });
 
+  it("binds the destination session during session_switch", async () => {
+    const setSessionId = vi.fn();
+    const { drive } = setup({ setSessionId });
+
+    await drive("session_switch");
+
+    expect(setSessionId.mock.calls).toEqual([[undefined], ["test-session"]]);
+  });
+
   it("repaints the widget on heartbeat to recover an externally cleared status", async () => {
     vi.useFakeTimers();
     const widget = { setUICtx: vi.fn(), update: vi.fn() };

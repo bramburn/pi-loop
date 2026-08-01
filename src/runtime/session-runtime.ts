@@ -186,6 +186,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       clearAllLoops();
     }
 
+    setSessionId(ctx.sessionManager.getSessionId());
     upgradeStoreIfNeeded(ctx);
     showPersistedLoops(isResume);
     widget.update();
