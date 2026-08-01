@@ -37,6 +37,7 @@ import { TaskStore } from "./task-store.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
 import { registerMonitorTools } from "./tools/monitor-tools.js";
 import { registerNativeTaskTools } from "./tools/native-task-tools.js";
+import { registerWorkflowTools } from "./tools/workflow-tools.js";
 import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry, Trigger } from "./types.js";
 import { LoopWidget } from "./ui/widget.js";
@@ -377,6 +378,18 @@ export default function (pi: ExtensionAPI) {
     },
     maybeBootstrapTaskLoop,
     isTaskSystemReady: () => tasksAvailable || nativeTasksRegistered,
+    onDynamicLoopActivated: (entry) => {
+      onLoopFire(entry);
+    },
+  });
+
+  registerWorkflowTools({
+    pi,
+    getStore: () => store,
+    getTriggerSystem: () => triggerSystem,
+    updateWidget: () => {
+      widget.update();
+    },
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
     },

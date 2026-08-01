@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
 import { registerLoopTools } from "../src/tools/loop-tools.js";
+import { registerWorkflowTools } from "../src/tools/workflow-tools.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
 function setup() {
@@ -21,6 +22,13 @@ function setup() {
     updateWidget: vi.fn(),
     maybeBootstrapTaskLoop: vi.fn(async () => false),
     isTaskSystemReady: () => true,
+    onDynamicLoopActivated,
+  });
+  registerWorkflowTools({
+    pi,
+    getStore: () => store,
+    getTriggerSystem: () => triggerSystem,
+    updateWidget: vi.fn(),
     onDynamicLoopActivated,
     createWorkflowTask,
     completeWorkflowTask,
@@ -350,17 +358,16 @@ describe("Workflow tools", () => {
     expect(h.store.get("1")?.workflow?.activeTaskId).toBe("12");
   });
 
-  it("lists workflow state, active task, and next outcomes without mixing in ordinary loops", async () => {
+  it("lists ordinary loops and full workflow state through LoopList", async () => {
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
     await h.text("LoopCreate", { trigger: "5m", prompt: "ordinary loop", triggerType: "cron" });
 
-    const out = await h.text("WorkflowList", {});
+    const out = await h.text("LoopList", {});
 
-    expect(out).toContain("1 workflow configured");
-    expect(out).toContain("Workflow #1 — active");
+    expect(out).toContain("#1 [active] Fix the regression");
     expect(out).toContain("Current state: investigate");
     expect(out).toContain("Choose outcome: found");
-    expect(out).not.toContain("ordinary loop");
+    expect(out).toContain("#2 [active] ordinary loop");
   });
 
   it("transitions only along declared outcomes and re-arms the loop", async () => {
@@ -503,18 +510,16 @@ describe("Workflow tools", () => {
     expect(out).toContain("Next: correct the JSON and call WorkflowCreate again.");
   });
 
-  it("guides users when no workflows exist", async () => {
-    const out = await h.text("WorkflowList", {});
-
-    expect(out).toContain("No workflow loops configured.");
-    expect(out).toContain("use WorkflowCreate for explicit state-and-outcome work");
+  it("guides users when no loops or workflows exist without registering WorkflowList", async () => {
+    expect(h.toolMap.has("WorkflowList")).toBe(false);
+    expect(await h.text("LoopList", {})).toBe("No loops configured. Use LoopCreate to set up a schedule.");
   });
 
   it("shows the last transition and its evidence in workflow listings", async () => {
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
     await h.text("WorkflowTransition", { id: "1", outcome: "found", evidence: "Reproduced locally." });
 
-    const out = await h.text("WorkflowList", {});
+    const out = await h.text("LoopList", {});
     expect(out).toContain("Last transition: investigate → fix via found");
     expect(out).toContain("Evidence: Reproduced locally.");
   });
