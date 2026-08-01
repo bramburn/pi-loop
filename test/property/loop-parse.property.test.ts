@@ -50,6 +50,32 @@ describe("cron properties", () => {
     );
   });
 
+  it("anchors generated day-of-month wildcard steps at day one", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 2, max: 27 }), (step) => {
+        const year = 2026;
+        const from = new Date(year, 0, 1, 0, 1, 0, 0);
+        const next = cronToNextFire(`0 0 */${step} * *`, from);
+
+        expect(next).toEqual(new Date(year, 0, step + 1, 0, 0, 0, 0));
+      }),
+      propertyOptions(20, 100),
+    );
+  });
+
+  it("anchors generated month wildcard steps at January", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 2, max: 11 }), (step) => {
+        const year = 2026;
+        const from = new Date(year, 0, 1, 0, 1, 0, 0);
+        const next = cronToNextFire(`0 0 1 */${step} *`, from);
+
+        expect(next).toEqual(new Date(year, step, 1, 0, 0, 0, 0));
+      }),
+      propertyOptions(10, 50),
+    );
+  });
+
   it("rejects generated out-of-range fields", () => {
     const invalidField = fc.oneof(
       fc.integer({ min: -100, max: -1 }).map((value) => `${value} * * * *`),

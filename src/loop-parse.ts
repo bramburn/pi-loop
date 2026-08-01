@@ -5,6 +5,8 @@ const UNIT_TO_CRON: Record<string, number> = {
   d: 86400,
 };
 
+const MAX_CRON_SEARCH_MINUTES = 366 * 24 * 60;
+
 const COMMON_INTERVALS: Record<number, string> = {
   60: "*/1 * * * *",
   120: "*/2 * * * *",
@@ -138,14 +140,14 @@ export function cronToNextFire(cronExpr: string, fromDate: Date = new Date()): D
   const now = new Date(fromDate);
   now.setSeconds(0, 0);
 
-  for (let minutesAdvanced = 1; minutesAdvanced < 525600; minutesAdvanced++) {
+  for (let minutesAdvanced = 1; minutesAdvanced <= MAX_CRON_SEARCH_MINUTES; minutesAdvanced++) {
     now.setMinutes(now.getMinutes() + 1);
 
-    if (!cronFieldMatches(minF, now.getMinutes())) continue;
-    if (!cronFieldMatches(hourF, now.getHours())) continue;
-    if (!cronFieldMatches(dayF, now.getDate())) continue;
-    if (!cronFieldMatches(monthF, now.getMonth() + 1)) continue;
-    if (!cronFieldMatches(dowF, now.getDay())) continue;
+    if (!cronFieldMatches(minF, now.getMinutes(), 0, 59)) continue;
+    if (!cronFieldMatches(hourF, now.getHours(), 0, 23)) continue;
+    if (!cronFieldMatches(dayF, now.getDate(), 1, 31)) continue;
+    if (!cronFieldMatches(monthF, now.getMonth() + 1, 1, 12)) continue;
+    if (!cronFieldMatches(dowF, now.getDay(), 0, 6)) continue;
 
     return new Date(now);
   }
@@ -153,7 +155,7 @@ export function cronToNextFire(cronExpr: string, fromDate: Date = new Date()): D
   throw new Error(`No matching time found for cron expression: ${cronExpr}`);
 }
 
-function cronFieldMatches(field: string, value: number): boolean {
+function cronFieldMatches(field: string, value: number, fieldMin: number, fieldMax: number): boolean {
   if (field === "*") return true;
 
   const parts = field.split(",");
@@ -167,8 +169,8 @@ function cronFieldMatches(field: string, value: number): boolean {
       let rangeMax: number;
 
       if (range === "*") {
-        rangeMin = 0;
-        rangeMax = 59;
+        rangeMin = fieldMin;
+        rangeMax = fieldMax;
       } else if (range.includes("-")) {
         const [minS = "", maxS = ""] = range.split("-");
         rangeMin = parseInt(minS, 10);

@@ -168,6 +168,27 @@ describe("cronToNextFire", () => {
     expect(next.getHours()).toBeLessThanOrEqual(17);
   });
 
+  it("anchors day-of-month wildcard steps at day one", () => {
+    const from = new Date(2026, 0, 1, 0, 1, 0, 0);
+    expect(cronToNextFire("0 0 */2 * *", from)).toEqual(
+      new Date(2026, 0, 3, 0, 0, 0, 0),
+    );
+  });
+
+  it("anchors month wildcard steps at January", () => {
+    const from = new Date(2026, 0, 1, 0, 1, 0, 0);
+    expect(cronToNextFire("0 0 1 */2 *", from)).toEqual(
+      new Date(2026, 2, 1, 0, 0, 0, 0),
+    );
+  });
+
+  it("finds an annual schedule exactly one leap year later", () => {
+    const from = new Date(2024, 0, 1, 0, 0, 0, 0);
+    expect(cronToNextFire("0 0 1 1 *", from)).toEqual(
+      new Date(2025, 0, 1, 0, 0, 0, 0),
+    );
+  });
+
   it("returns a Date object", () => {
     const next = cronToNextFire("0 0 * * *");
     expect(next).toBeInstanceOf(Date);
