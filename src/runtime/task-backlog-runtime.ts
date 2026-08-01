@@ -119,27 +119,29 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
     return backlogLoops.length;
   }
 
-  let taskBacklogCoordinatorCleanupCount = 0;
+  type TaskBacklogDispatchResult = {
+    kind: "cleanup";
+    cleaned: number;
+  };
 
   const taskBacklogReducerHandler: ReducerHandler = (incoming: ReducerEvent) => {
     if (incoming.type !== "TASK_BACKLOG_EVALUATED") return [];
     return reduceTaskBacklogEvent(incoming as TaskBacklogEvent);
   };
 
-  const taskBacklogCoordinator = createCoordinator({
+  const taskBacklogCoordinator = createCoordinator<TaskBacklogDispatchResult>({
     reducers: [taskBacklogReducerHandler],
     effectHandlers: {
-      CLEANUP_TASK_BACKLOG_LOOPS: async () => {
-        taskBacklogCoordinatorCleanupCount = await cleanupTaskBacklogLoops();
-      },
+      CLEANUP_TASK_BACKLOG_LOOPS: async () => ({
+        kind: "cleanup",
+        cleaned: await cleanupTaskBacklogLoops(),
+      }),
     },
   });
 
   async function evaluateTaskBacklog(taskStore?: TaskStore, pendingCount?: number): Promise<{ entry?: LoopEntry; created: boolean; cleaned: number }> {
     const resolvedPending = pendingCount ?? (taskStore ? taskStore.pendingCount() : await hasPendingTasks());
-    taskBacklogCoordinatorCleanupCount = 0;
-
-    await taskBacklogCoordinator.dispatch({
+    const results = await taskBacklogCoordinator.dispatch({
       type: "TASK_BACKLOG_EVALUATED",
       at: Date.now(),
       source: "system",
@@ -149,7 +151,7 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
 
     return {
       created: false,
-      cleaned: taskBacklogCoordinatorCleanupCount,
+      cleaned: results.find((result) => result.kind === "cleanup")?.cleaned ?? 0,
     };
   }
 

@@ -87,6 +87,22 @@ describe("coordinator", () => {
     ]);
   });
 
+  it("returns typed handler outcomes in effect order, including derived dispatches", async () => {
+    const reducer: ReducerHandler = (incoming) => incoming.type === "ROOT"
+      ? [
+          { type: "FIRST", payload: {} },
+          { type: "DISPATCH_EVENT", payload: { event: event("CHILD") } },
+          { type: "LAST", payload: {} },
+        ]
+      : [{ type: "CHILD", payload: {} }];
+    const coordinator = createCoordinator<string>({
+      reducers: [reducer],
+      effectExecutor: (effect) => effect.type.toLowerCase(),
+    });
+
+    await expect(coordinator.dispatch(event("ROOT"))).resolves.toEqual(["first", "child", "last"]);
+  });
+
   it("supports async reducers and async effect handlers", async () => {
     const reducerA = vi.fn(async () => {
       await Promise.resolve();

@@ -32,13 +32,13 @@ export type AnyReducerEffect = ReducerEffect | DispatchEventEffect;
 export type ReducerHandler =
   (event: ReducerEvent) => undefined | AnyReducerEffect[] | Promise<undefined | AnyReducerEffect[]>;
 
-export type EffectHandler =
-  (effect: ReducerEffect) => void | Promise<void>;
+export type EffectHandler<TResult = void> =
+  (effect: ReducerEffect) => TResult | undefined | Promise<TResult | undefined>;
 
-export interface CoordinatorOptions {
+export interface CoordinatorOptions<TResult = void> {
   reducers: ReducerHandler[];
-  effectHandlers?: Partial<Record<string, EffectHandler>>;
-  effectExecutor?: EffectHandler;
+  effectHandlers?: Partial<Record<string, EffectHandler<TResult>>>;
+  effectExecutor?: EffectHandler<TResult>;
   maxDispatchDepth?: number;
 }
 
@@ -49,11 +49,11 @@ export class CoordinatorError extends Error {
   }
 }
 
-export interface Coordinator {
-  dispatch(event: ReducerEvent): Promise<void>;
+export interface Coordinator<TResult = void> {
+  dispatch(event: ReducerEvent): Promise<TResult[]>;
 }
 
-export function createCoordinator(options: CoordinatorOptions): Coordinator {
+export function createCoordinator<TResult = void>(options: CoordinatorOptions<TResult>): Coordinator<TResult> {
   const {
     reducers,
     effectHandlers = {},
@@ -65,31 +65,32 @@ export function createCoordinator(options: CoordinatorOptions): Coordinator {
     return typeof value === "object" && value !== null && "then" in value;
   }
 
-  async function executeEffect(effect: AnyReducerEffect, depth: number): Promise<void> {
+  async function executeEffect(effect: AnyReducerEffect, depth: number): Promise<TResult[]> {
     if (effect.type === "DISPATCH_EVENT") {
       const dispatchEffect = effect as DispatchEventEffect;
       const derivedEvent = dispatchEffect.payload.event;
       if (!derivedEvent) {
         throw new CoordinatorError("DISPATCH_EVENT effect missing payload.event");
       }
-      await dispatchAtDepth(derivedEvent, depth + 1);
-      return;
+      return dispatchAtDepth(derivedEvent, depth + 1);
     }
 
     const specificHandler = effectHandlers[effect.type];
     if (specificHandler) {
       const handled = specificHandler(effect);
-      if (isPromiseLike(handled)) await handled;
-      return;
+      const result = isPromiseLike(handled) ? await handled : handled;
+      return result === undefined ? [] : [result];
     }
 
     if (effectExecutor) {
       const handled = effectExecutor(effect);
-      if (isPromiseLike(handled)) await handled;
+      const result = isPromiseLike(handled) ? await handled : handled;
+      return result === undefined ? [] : [result];
     }
+    return [];
   }
 
-  async function dispatchAtDepth(event: ReducerEvent, depth: number): Promise<void> {
+  async function dispatchAtDepth(event: ReducerEvent, depth: number): Promise<TResult[]> {
     if (depth > maxDispatchDepth) {
       throw new CoordinatorError(`Maximum dispatch depth exceeded (${maxDispatchDepth})`);
     }
@@ -102,14 +103,16 @@ export function createCoordinator(options: CoordinatorOptions): Coordinator {
       effects.push(...resolved);
     }
 
+    const results: TResult[] = [];
     for (const effect of effects) {
-      await executeEffect(effect, depth);
+      results.push(...await executeEffect(effect, depth));
     }
+    return results;
   }
 
   return {
-    async dispatch(event: ReducerEvent): Promise<void> {
-      await dispatchAtDepth(event, 1);
+    dispatch(event: ReducerEvent): Promise<TResult[]> {
+      return dispatchAtDepth(event, 1);
     },
   };
 }

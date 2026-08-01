@@ -175,7 +175,7 @@ describe("notification coordinator slice", () => {
     expect(state.notificationsByKey).toEqual({});
   });
 
-  it("mirrors the index slice pattern of queue then explicit flush with stateful delivery flags", async () => {
+  it("returns the delivery outcome without shared mutable flags", async () => {
     let state: NotificationReducerState = {
       notificationsByKey: {},
       agentRunning: false,
@@ -188,16 +188,11 @@ describe("notification coordinator slice", () => {
       return result.effects;
     };
 
-    let delivered = false;
-    let deliveredSuccessfully = false;
-    const coordinator = createCoordinator({
+    const coordinator = createCoordinator<{ kind: "delivery"; delivered: boolean }>({
       reducers: [reducer],
       effectHandlers: {
         REQUEST_NOTIFICATION_FLUSH: async () => {},
-        DELIVER_NOTIFICATION: async () => {
-          delivered = true;
-          deliveredSuccessfully = true;
-        },
+        DELIVER_NOTIFICATION: async () => ({ kind: "delivery", delivered: true }),
       },
     });
 
@@ -210,9 +205,7 @@ describe("notification coordinator slice", () => {
       payload: { notification: notification() },
     });
 
-    delivered = false;
-    deliveredSuccessfully = false;
-    await coordinator.dispatch({
+    const results = await coordinator.dispatch({
       type: "NOTIFICATION_FLUSH_REQUESTED",
       at: 120,
       source: "system",
@@ -220,8 +213,7 @@ describe("notification coordinator slice", () => {
       payload: {},
     });
 
-    expect(delivered).toBe(true);
-    expect(deliveredSuccessfully).toBe(true);
+    expect(results).toEqual([{ kind: "delivery", delivered: true }]);
     expect(state.notificationsByKey).toEqual({});
   });
 });

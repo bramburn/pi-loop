@@ -66,8 +66,11 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     hasPendingMessages: false,
   };
   let flushPromise: Promise<void> | undefined;
-  let notificationCoordinatorDelivered = false;
-  let notificationCoordinatorDeliveredSuccessfully = false;
+
+  type NotificationDispatchResult = {
+    kind: "delivery";
+    delivered: boolean;
+  };
 
   const notificationReducerHandler: ReducerHandler = (incoming: ReducerEvent) => {
     const result = reduceNotificationState(notificationState, incoming as NotificationReducerEvent);
@@ -75,16 +78,16 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     return result.effects;
   };
 
-  const notificationCoordinator = createCoordinator({
+  const notificationCoordinator = createCoordinator<NotificationDispatchResult>({
     reducers: [notificationReducerHandler],
     effectHandlers: {
       REQUEST_NOTIFICATION_FLUSH: () => {},
-      DELIVER_NOTIFICATION: async (effect: ReducerEffect) => {
-        notificationCoordinatorDelivered = true;
-        notificationCoordinatorDeliveredSuccessfully = await deliverNotification(
+      DELIVER_NOTIFICATION: async (effect: ReducerEffect) => ({
+        kind: "delivery",
+        delivered: await deliverNotification(
           (effect.payload as { notification: ReducerNotification }).notification,
-        );
-      },
+        ),
+      }),
     },
   });
 
@@ -236,17 +239,15 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       syncRuntimeState({ hasPendingMessages: getHasPendingMessages() });
 
       while (true) {
-        notificationCoordinatorDelivered = false;
-        notificationCoordinatorDeliveredSuccessfully = false;
-        await notificationCoordinator.dispatch({
+        const results = await notificationCoordinator.dispatch({
           type: "NOTIFICATION_FLUSH_REQUESTED",
           at: Date.now(),
           source: "system",
           entityType: "notification",
           payload: { ignorePendingMessages: options?.ignorePendingMessages },
         });
-        if (!notificationCoordinatorDelivered) return;
-        if (notificationCoordinatorDeliveredSuccessfully) return;
+        const delivery = results.find((result) => result.kind === "delivery");
+        if (!delivery || delivery.delivered) return;
       }
     })().finally(() => {
       flushPromise = undefined;
