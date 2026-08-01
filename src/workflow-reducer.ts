@@ -19,9 +19,16 @@ export interface WorkflowTransitionInput {
   activeTaskId?: string;
 }
 
+export interface WorkflowTransitionFailure {
+  code: "target_exhausted";
+  outcome: string;
+  targetState: string;
+  maxAttempts: number;
+}
+
 export type WorkflowTransitionResult =
   | { applied: true; run: WorkflowRunState; terminal?: WorkflowTerminalStatus }
-  | { applied: false; error: string };
+  | { applied: false; error: string; failure?: WorkflowTransitionFailure };
 
 export function validateWorkflowDefinition(definition: WorkflowDefinition): string | undefined {
   if (!definition || definition.version !== 1) return "Workflow version must be 1";
@@ -88,7 +95,16 @@ export function transitionWorkflowRun(
 
   const nextAttempt = (run.attemptsByState[target] ?? 0) + 1;
   if (targetState.maxAttempts !== undefined && nextAttempt > targetState.maxAttempts) {
-    return { applied: false, error: `State "${target}" has exhausted its ${targetState.maxAttempts} attempt limit` };
+    return {
+      applied: false,
+      error: `State "${target}" has exhausted its ${targetState.maxAttempts} attempt limit`,
+      failure: {
+        code: "target_exhausted",
+        outcome: input.outcome,
+        targetState: target,
+        maxAttempts: targetState.maxAttempts,
+      },
+    };
   }
 
   const sequence = run.transitionSeq + 1;

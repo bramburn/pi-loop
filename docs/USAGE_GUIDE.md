@@ -93,7 +93,7 @@ WorkflowTransition id="1" outcome="root_cause_found" evidence="A null config rea
 WorkflowTransition id="1" outcome="tests_pass" evidence="Targeted and full test suites pass."
 ```
 
-`WorkflowTransition` validates the branch, records evidence, creates the next state's optional task, and queues the next wake. Reaching a `completed` terminal state deletes the workflow loop; reaching a `paused` terminal state preserves it in paused state for inspection or deletion. Terminal workflow states cannot be resumed. Task completion does not guess an outcome—the model selects one explicitly.
+`WorkflowTransition` validates the branch, records evidence, creates the next state's optional task, and queues the next wake. When a target reaches `maxAttempts`, only outcomes leading to that target become unavailable; other declared outcomes remain selectable. Reaching a `completed` terminal state deletes the workflow loop; reaching a `paused` terminal state preserves it in paused state for inspection or deletion. Terminal workflow states cannot be resumed. Task completion does not guess an outcome—the model selects one explicitly.
 
 ```text
 WorkflowList

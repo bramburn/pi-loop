@@ -66,6 +66,41 @@ describe("workflow reducer", () => {
     });
   });
 
+  it("returns structured target exhaustion without hiding unrelated outcomes", () => {
+    const limited: WorkflowDefinition = {
+      version: 1,
+      initialState: "investigate",
+      states: {
+        investigate: {
+          prompt: "Find the cause.",
+          on: { found: "fix" },
+          maxAttempts: 1,
+        },
+        fix: {
+          prompt: "Fix it.",
+          on: { regression_found: "investigate", tests_pass: "done" },
+        },
+        done: { prompt: "Report.", terminal: "completed" },
+      },
+    };
+    const run = createWorkflowRun(limited, 100);
+    const fixed = transitionWorkflowRun(run, { outcome: "found" }, 200);
+    if (!fixed.applied) throw new Error("expected transition to apply");
+
+    expect(
+      transitionWorkflowRun(fixed.run, { outcome: "regression_found" }, 300),
+    ).toEqual({
+      applied: false,
+      error: 'State "investigate" has exhausted its 1 attempt limit',
+      failure: {
+        code: "target_exhausted",
+        outcome: "regression_found",
+        targetState: "investigate",
+        maxAttempts: 1,
+      },
+    });
+  });
+
   it("reports terminal workflow states", () => {
     const run = createWorkflowRun(definition, 100);
     const fixed = transitionWorkflowRun(run, { outcome: "root_cause_found" }, 200);

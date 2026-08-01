@@ -496,7 +496,7 @@ describe("Workflow tools", () => {
     expect(out).toContain("Evidence: Reproduced locally.");
   });
 
-  it("guides escape when a state exhausts its attempt limit instead of repeating the failing transition", async () => {
+  it("keeps valid outcomes available when another target exhausts its attempt limit", async () => {
     const limited = JSON.stringify({
       version: 1,
       initialState: "investigate",
@@ -511,6 +511,31 @@ describe("Workflow tools", () => {
 
     const out = await h.text("WorkflowTransition", { id: "1", outcome: "regression_found" });
     expect(out).toContain("exhausted its 1 attempt limit");
+    expect(out).toContain("Unavailable outcome: regression_found");
+    expect(out).toContain("Choose outcome: passing");
+    expect(out).toContain('WorkflowTransition({ id: "1", outcome: "passing"');
+    expect(out).not.toContain("Choose outcome: regression_found");
+    expect(out).not.toContain("LoopDelete");
+  });
+
+  it("guides pause or deletion when all outcomes target exhausted states", async () => {
+    const limited = JSON.stringify({
+      version: 1,
+      initialState: "investigate",
+      states: {
+        investigate: { prompt: "Find the cause.", on: { found: "fix" }, maxAttempts: 1 },
+        fix: { prompt: "Fix it.", on: { regression_found: "investigate" } },
+      },
+    });
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition: limited });
+    await h.text("WorkflowTransition", { id: "1", outcome: "found" });
+
+    const out = await h.text("WorkflowTransition", {
+      id: "1",
+      outcome: "regression_found",
+    });
+
+    expect(out).toContain("all declared outcomes are unavailable");
     expect(out).toContain("LoopDelete");
     expect(out).not.toContain("Next: WorkflowTransition");
   });

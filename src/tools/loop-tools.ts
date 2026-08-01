@@ -4,7 +4,7 @@ import { formatLastTransitionLines, formatTrigger } from "../loop-format.js";
 import { parseInterval } from "../loop-parse.js";
 import type { LoopEntry, Trigger, WorkflowDefinition } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
-import { validateWorkflowDefinition } from "../workflow-reducer.js";
+import { validateWorkflowDefinition, type WorkflowTransitionFailure } from "../workflow-reducer.js";
 import { displayRows, textResult } from "./tool-result.js";
 
 interface LoopStoreLike {
@@ -25,6 +25,7 @@ interface LoopStoreLike {
     entry?: LoopEntry;
     applied: boolean;
     error?: string;
+    failure?: WorkflowTransitionFailure;
     terminal?: "completed" | "paused";
   };
   setWorkflowActiveTask(id: string, taskId?: string): LoopEntry | undefined;
@@ -149,10 +150,16 @@ function formatWorkflowDefinitionError(error: string | undefined): string {
     "Next: correct the JSON and call WorkflowCreate again.";
 }
 
-function formatWorkflowSummary(entry: LoopEntry, heading: string, suppressed?: boolean): string {
+function formatWorkflowSummary(entry: LoopEntry, heading: string, failure?: WorkflowTransitionFailure): string {
   const workflow = entry.workflow!;
   const state = workflow.definition.states[workflow.currentState];
-  const outcomes = Object.keys(state?.on ?? {});
+  const outcomeEntries = Object.entries(state?.on ?? {});
+  const unavailableOutcomes = failure?.code === "target_exhausted"
+    ? outcomeEntries.filter(([, target]) => target === failure.targetState).map(([outcome]) => outcome)
+    : [];
+  const outcomes = outcomeEntries
+    .filter(([outcome]) => !unavailableOutcomes.includes(outcome))
+    .map(([outcome]) => outcome);
   let message = `${heading}\nGoal: ${entry.prompt}\nCurrent state: ${workflow.currentState}`;
   if (workflow.lastTransition) {
     message += `\n${formatLastTransitionLines(workflow.lastTransition).join("\n")}`;
@@ -166,15 +173,18 @@ function formatWorkflowSummary(entry: LoopEntry, heading: string, suppressed?: b
     message += "\nTask: none configured for this state";
   }
 
+  if (failure?.code === "target_exhausted") {
+    message += `\nUnavailable outcome${unavailableOutcomes.length === 1 ? "" : "s"}: ${unavailableOutcomes.join(", ")} — target state "${failure.targetState}" exhausted its ${failure.maxAttempts} attempt limit.`;
+  }
   if (state?.terminal) {
     message += `\nTerminal: ${state.terminal}`;
     return message;
   }
-  if (outcomes.length === 0) {
+  if (outcomeEntries.length === 0) {
     return `${message}\nNeeds attention: this state has no declared outcomes, so it cannot advance.`;
   }
-  if (suppressed) {
-    return `${message}\nBlocked: the transition was rejected. Pause this workflow with LoopDelete action="pause", or abandon it with LoopDelete, rather than retrying the same failing transition.`;
+  if (outcomes.length === 0) {
+    return `${message}\nBlocked: all declared outcomes are unavailable. Pause this workflow with LoopDelete action="pause", or abandon it with LoopDelete.`;
   }
 
   message += `\nChoose outcome: ${outcomes.join(", ")}`;
@@ -533,11 +543,10 @@ Use exactly once after completing the current workflow state. The outcome must b
         const current = store.get(params.id);
         if (current?.workflow) {
           const error = result.error ?? "unknown transition error";
-          const suppressed = error.includes("exhausted");
           return textResult(
             `Workflow #${params.id} did not transition\n` +
             `Reason: ${error}\n` +
-            formatWorkflowSummary(current, `Workflow #${params.id} remains — ${current.status}`, suppressed),
+            formatWorkflowSummary(current, `Workflow #${params.id} remains — ${current.status}`, result.failure),
             {
               kind: "workflow",
               action: "transition",

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type LoopReducerEvent, type LoopReducerState, reduceLoopState } from "./loop-reducer.js";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
 import type { DynamicLoopState, LoopDeletionTombstone, LoopDeletionTombstoneInput, LoopEntry, LoopStoreData, Trigger, WorkflowDefinition, WorkflowTerminalStatus } from "./types.js";
-import { isTerminalWorkflowRun, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionInput } from "./workflow-reducer.js";
+import { isTerminalWorkflowRun, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure, type WorkflowTransitionInput } from "./workflow-reducer.js";
 
 const LOOPS_DIR = join(homedir(), ".pi", "loops");
 const MAX_LOOPS = 25;
@@ -161,14 +161,16 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  transitionWorkflow(id: string, input: WorkflowTransitionInput): { entry?: LoopEntry; applied: boolean; error?: string; terminal?: WorkflowTerminalStatus } {
+  transitionWorkflow(id: string, input: WorkflowTransitionInput): { entry?: LoopEntry; applied: boolean; error?: string; failure?: WorkflowTransitionFailure; terminal?: WorkflowTerminalStatus } {
     return this.withLock(() => {
       const entry = this.entries.get(id);
       if (!entry) return { applied: false, error: `Loop #${id} not found` };
       if (!entry.workflow) return { applied: false, error: `Loop #${id} is not a workflow loop` };
 
       const result = transitionWorkflowRun(entry.workflow, input, Date.now());
-      if (!result.applied) return { applied: false, error: result.error };
+      if (!result.applied) {
+        return { applied: false, error: result.error, failure: result.failure };
+      }
 
       this.applyReducerEvent({
         type: "LOOP_WORKFLOW_TRANSITION",
