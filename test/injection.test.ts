@@ -140,6 +140,53 @@ describe("loop:fire custom message delivery", () => {
     expect(content).not.toContain("call LoopUpdate exactly once");
   });
 
+  it("replays the last transition and its evidence in the next workflow state wake", async () => {
+    const { pi, sentMessages, emitExtension } = createMockPi();
+    const extension = await import("../src/index.js");
+    extension.default(pi);
+
+    const ctx = createCtx(false);
+    await emitExtension("turn_start", null, ctx);
+
+    pi.events.emit("loop:fire", {
+      loopId: "9",
+      prompt: "Fix the regression",
+      trigger: { type: "dynamic" },
+      timestamp: Date.now(),
+      recurring: true,
+      workflow: {
+        definition: {
+          version: 1,
+          initialState: "investigate",
+          states: {
+            investigate: { prompt: "Find the cause.", on: { found: "fix" } },
+            fix: { prompt: "Implement the fix.", on: { passing: "done" } },
+            done: { prompt: "Report.", terminal: "completed" },
+          },
+        },
+        currentState: "fix",
+        transitionSeq: 1,
+        stateEnteredAt: Date.now(),
+        attemptsByState: { investigate: 1, fix: 1 },
+        activeTaskId: "13",
+        lastTransition: {
+          from: "investigate",
+          to: "fix",
+          outcome: "found",
+          evidence: "A null config reaches the parser.",
+          at: Date.now(),
+          sequence: 1,
+        },
+      },
+    });
+    await flushAsync();
+
+    const content = sentMessages[0].message.content;
+    expect(content).toContain("State: fix");
+    expect(content).toContain("Last transition: investigate → fix via found");
+    expect(content).toContain("Evidence: A null config reaches the parser.");
+  });
+
   it("keeps backlog cleanup under pi-loop control", async () => {
     const { pi, sentMessages, emitExtension } = createMockPi();
     const extension = await import("../src/index.js");

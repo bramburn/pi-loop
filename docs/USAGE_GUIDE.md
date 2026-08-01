@@ -86,7 +86,7 @@ WorkflowCreate goal="Fix the regression" definition='{
 }'
 ```
 
-Each wake presents the current state, state instructions, active task, and allowed outcomes. The agent finishes the state by selecting one declared outcome:
+Each wake presents the current state, state instructions, active task, allowed outcomes, and — after the first transition — the last transition and its recorded evidence, so the next state can act on what the previous one found. The agent finishes the state by selecting one declared outcome:
 
 ```text
 WorkflowTransition id="1" outcome="root_cause_found" evidence="A null config reaches the parser."

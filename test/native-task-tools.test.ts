@@ -75,7 +75,31 @@ describe("TaskList", () => {
     expect(output.content[0].text).toContain("#200");
     expect(details.summary).toBe("200 tasks · 200 pending · 0 active");
     expect(details.expanded).toHaveLength(9);
-    expect(details.expanded.at(-1)).toBe("… 192 more");
+    expect(details.expanded.at(-1)).toBe("… 392 more");
+  });
+
+  it("surfaces descriptions and workflow links so a fresh agent can reconstruct context", async () => {
+    const { taskStore, result } = setup();
+    taskStore.create(
+      "Investigate regression",
+      "Find the root cause; next: implement fix (task #2).",
+      undefined,
+      { loopId: "3", stateId: "investigate", transitionSeq: 0 },
+    );
+
+    const output = await result("TaskList", {});
+    const details = output.details as { summary: string; expanded: string[] };
+    const expanded = details.expanded.join("\n");
+    expect(expanded).toContain("Investigate regression");
+    expect(expanded).toContain("Find the root cause; next: implement fix (task #2).");
+    expect(expanded).toContain("workflow #3");
+  });
+
+  it("guides state-based task flows with goal-state and next-step conventions", () => {
+    const guidelines = (setup().tool("TaskCreate") as any).promptGuidelines as string[];
+    expect(guidelines.some((g) => g.includes("goal state"))).toBe(true);
+    expect(guidelines.some((g) => g.includes("next task"))).toBe(true);
+    expect(guidelines.some((g) => g.toLowerCase().includes("workflowcreate"))).toBe(true);
   });
 });
 

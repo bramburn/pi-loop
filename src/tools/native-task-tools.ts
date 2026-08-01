@@ -48,9 +48,11 @@ Fields:
       "If several tasks share one goal, keep subjects short and put the shared goal in the first sentence of each description or as an equivalent explicit framing.",
       "Prefer 2-5 tasks that separate investigation, implementation, validation, and reporting or commit-prep when those phases are distinct.",
       "When the user asks to break work into tasks, create the backlog directly and do not pivot to loops, monitors, or other automation unless the user also asked for ongoing automation.",
+      "For work that must increment toward a goal state across turns (not a single do-and-close), prefer WorkflowCreate (named phases/outcomes) or an idle dynamic LoopCreate (increment-until-goal). Use TaskCreate for independently completable units.",
+      "When a task is part of a chain, write the description as: the goal state, the increment this task delivers, the done condition, and the next task (by id or name) or the tool that follows.",
       "Make each `subject` a short verb-object action.",
       "Make each `description` include the expected artifact, outcome, or done condition so another turn can pick the task up cleanly.",
-      "Break work into small, independently completable tasks. A task should be finishable in one focused session — if a task would take multiple turns, split it further.",
+      "Break work into small, independently completable tasks when possible. A task may span multiple sessions: describe the goal state and the increment expected per session instead of splitting it into throwaway units.",
       "TaskCreate accepts `subject` and `description` parameters only — do not invent extra fields unless the schema explicitly adds them.",
     ],
     parameters: Type.Object({
@@ -91,6 +93,7 @@ Fields:
       }
 
       const lines: string[] = [];
+      const expanded: string[] = [];
       const statuses: Record<TaskStatus, number> = {
         pending: 0,
         in_progress: 0,
@@ -100,7 +103,11 @@ Fields:
       for (const t of tasks) {
         statuses[t.status]++;
         const icon = t.status === "completed" ? "ok" : t.status === "closed" ? "x" : t.status === "in_progress" ? ">" : "*";
-        lines.push(`${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`);
+        const row = `${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`;
+        lines.push(row);
+        expanded.push(row);
+        if (t.description) expanded.push(`    ${t.description.slice(0, 120)}`);
+        if (t.workflow) expanded.push(`    workflow #${t.workflow.loopId} · state ${t.workflow.stateId}`);
       }
       lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done, ${statuses.closed} closed)`);
       return Promise.resolve(textResult(lines.join("\n"), {
@@ -108,7 +115,7 @@ Fields:
         action: "list",
         tone: "info",
         summary: `${tasks.length} task${tasks.length === 1 ? "" : "s"} · ${statuses.pending} pending · ${statuses.in_progress} active`,
-        expanded: displayRows(lines.slice(1)),
+        expanded: displayRows(expanded),
       }));
     },
   });

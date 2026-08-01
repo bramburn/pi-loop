@@ -149,11 +149,16 @@ function formatWorkflowDefinitionError(error: string | undefined): string {
     "Next: correct the JSON and call WorkflowCreate again.";
 }
 
-function formatWorkflowSummary(entry: LoopEntry, heading: string): string {
+function formatWorkflowSummary(entry: LoopEntry, heading: string, suppressed?: boolean): string {
   const workflow = entry.workflow!;
   const state = workflow.definition.states[workflow.currentState];
   const outcomes = Object.keys(state?.on ?? {});
   let message = `${heading}\nGoal: ${entry.prompt}\nCurrent state: ${workflow.currentState}`;
+  if (workflow.lastTransition) {
+    const { from, to, outcome, evidence } = workflow.lastTransition;
+    message += `\nLast transition: ${from} → ${to} via ${outcome}`;
+    if (evidence) message += `\nEvidence: ${evidence}`;
+  }
   if (state?.prompt) message += `\nInstruction: ${state.prompt}`;
   if (workflow.activeTaskId) {
     message += `\nActive task: #${workflow.activeTaskId}`;
@@ -169,6 +174,9 @@ function formatWorkflowSummary(entry: LoopEntry, heading: string): string {
   }
   if (outcomes.length === 0) {
     return `${message}\nNeeds attention: this state has no declared outcomes, so it cannot advance.`;
+  }
+  if (suppressed) {
+    return `${message}\nBlocked: the transition was rejected. Pause this workflow with LoopDelete action="pause", or abandon it with LoopDelete, rather than retrying the same failing transition.`;
   }
 
   message += `\nChoose outcome: ${outcomes.join(", ")}`;
@@ -438,10 +446,14 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
 
 Use this when work has named phases and explicit outcomes, such as investigate → fix → validate. Use LoopCreate for ordinary scheduled/event work and TaskCreate for a normal flat backlog.
 
-The definition requires version: 1, initialState, and states. Each state has a prompt, optional on outcome-to-state map, optional maxAttempts, and an optional terminal value of completed or paused.`,
+The definition requires version: 1, initialState, and states. Each state has a prompt, optional task: {subject, description} (a tracked task created when the state is entered and completed on transition), an optional on outcome-to-state map, optional maxAttempts, and an optional terminal value of completed or paused.`,
     promptGuidelines: [
       "Use WorkflowCreate only for explicit multi-phase work with stable named outcomes; ordinary reminders, polling, and task backlogs should remain loops or tasks.",
       "Pass `definition` as valid JSON. Give each non-terminal state a concise prompt and explicit outcome names, for example `root_cause_found` or `tests_pass`.",
+      "Each non-terminal state may declare `task: {subject, description}`; the runtime creates a tracked task when the state is entered and completes it when you transition out.",
+      "Write state prompts to be self-contained: describe the deliverable of this phase. The previous phase's finding is replayed as transition evidence in the next wake, so the next state can rely on it.",
+      "Express rework as cycles in the outcome map (e.g. `regression_found → investigate`); `maxAttempts` bounds how many times a state may be re-entered so rework cannot loop forever.",
+      "Use stable verb-past outcome names (`root_cause_found`, `tests_pass`) so branches stay legible across wakes.",
       "After each workflow wake, call WorkflowTransition with the workflow `id` and one declared `outcome`; include concise `evidence` whenever a branch is chosen.",
     ],
     parameters: Type.Object({
@@ -522,16 +534,18 @@ Use exactly once after completing the current workflow state. The outcome must b
       if (!result.applied || !result.entry) {
         const current = store.get(params.id);
         if (current?.workflow) {
+          const error = result.error ?? "unknown transition error";
+          const suppressed = error.includes("exhausted");
           return textResult(
             `Workflow #${params.id} did not transition\n` +
-            `Reason: ${result.error ?? "unknown transition error"}\n` +
-            formatWorkflowSummary(current, `Workflow #${params.id} remains — ${current.status}`),
+            `Reason: ${error}\n` +
+            formatWorkflowSummary(current, `Workflow #${params.id} remains — ${current.status}`, suppressed),
             {
               kind: "workflow",
               action: "transition",
               tone: "error",
               summary: `Workflow #${params.id} remains in ${current.workflow.currentState}`,
-              expanded: [result.error ?? "unknown transition error"],
+              expanded: [error],
             },
           );
         }

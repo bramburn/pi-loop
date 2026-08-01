@@ -124,6 +124,11 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
         `Goal: ${data.prompt || data.workflow.definition.initialState}`,
         `State: ${data.workflow.currentState}`,
       ];
+      if (data.workflow.lastTransition) {
+        const { from, to, outcome, evidence } = data.workflow.lastTransition;
+        lines.push(`Last transition: ${from} → ${to} via ${outcome}`);
+        if (evidence) lines.push(`Evidence: ${evidence}`);
+      }
       if (state?.prompt) lines.push(`State instructions: ${state.prompt}`);
       if (data.workflow.activeTaskId) lines.push(`Active task: #${data.workflow.activeTaskId}`);
       if (outcomes.length > 0) lines.push(`Allowed outcomes: ${outcomes.join(", ")}`);

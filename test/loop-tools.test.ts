@@ -10,8 +10,8 @@ function setup() {
   const scheduler = { nextFire: vi.fn(() => undefined) };
   const monitorManager = { get: vi.fn(() => undefined) };
   const onDynamicLoopActivated = vi.fn();
-  const createWorkflowTask = vi.fn(async () => undefined);
-  const completeWorkflowTask = vi.fn(async () => true);
+  const createWorkflowTask = vi.fn(async (_entry: unknown) => undefined as string | undefined);
+  const completeWorkflowTask = vi.fn(async (_taskId: string) => true);
   registerLoopTools({
     pi,
     getStore: () => store as any,
@@ -46,7 +46,7 @@ describe("LoopCreate", () => {
     expect(h.toolMap.get("LoopCreate")?.renderCall).toBeTypeOf("function");
     expect(h.toolMap.get("LoopCreate")?.renderResult).toBeTypeOf("function");
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
-    expect(h.toolMap.get("LoopCreate")!.renderCall!({ prompt: "check build" }, theme).render(120).map((line) => line.trimEnd()))
+    expect((h.toolMap.get("LoopCreate") as any).renderCall({ prompt: "check build" }, theme).render(120).map((line: string) => line.trimEnd()))
       .toEqual(["Loop create · check build"]);
   });
 
@@ -416,6 +416,45 @@ describe("Workflow tools", () => {
 
     expect(out).toContain("No workflow loops configured.");
     expect(out).toContain("use WorkflowCreate for explicit state-and-outcome work");
+  });
+
+  it("shows the last transition and its evidence in workflow listings", async () => {
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+    await h.text("WorkflowTransition", { id: "1", outcome: "found", evidence: "Reproduced locally." });
+
+    const out = await h.text("WorkflowList", {});
+    expect(out).toContain("Last transition: investigate → fix via found");
+    expect(out).toContain("Evidence: Reproduced locally.");
+  });
+
+  it("guides escape when a state exhausts its attempt limit instead of repeating the failing transition", async () => {
+    const limited = JSON.stringify({
+      version: 1,
+      initialState: "investigate",
+      states: {
+        investigate: { prompt: "Find the cause.", on: { found: "fix" }, maxAttempts: 1 },
+        fix: { prompt: "Fix it.", on: { regression_found: "investigate", passing: "done" } },
+        done: { prompt: "Report.", terminal: "completed" },
+      },
+    });
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition: limited });
+    await h.text("WorkflowTransition", { id: "1", outcome: "found" });
+
+    const out = await h.text("WorkflowTransition", { id: "1", outcome: "regression_found" });
+    expect(out).toContain("exhausted its 1 attempt limit");
+    expect(out).toContain("LoopDelete");
+    expect(out).not.toContain("Next: WorkflowTransition");
+  });
+
+  it("documents per-state tasks and state-prompt authoring in WorkflowCreate guidance", () => {
+    const tool = h.toolMap.get("WorkflowCreate") as any;
+    const description = tool.description as string;
+    const guidelines = tool.promptGuidelines as string[];
+
+    expect(description).toContain("task: {subject, description}");
+    expect(guidelines.some((g) => g.includes("evidence"))).toBe(true);
+    expect(guidelines.some((g) => g.includes("rework"))).toBe(true);
+    expect(guidelines.some((g) => g.includes("maxAttempts"))).toBe(true);
   });
 });
 
