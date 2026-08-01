@@ -191,64 +191,18 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     label: "LoopCreate",
     renderCall: renderToolCall("Loop", (args) => `create · ${String(toolArg(args, "prompt") ?? "scheduled work").slice(0, 56)}`),
     renderResult: renderToolResult,
-    description: `    Create a scheduled repeating task (loop) that runs a prompt on a timer, when an event fires, or when the harness becomes idle.
+    description: `Create a persistent cron, event, hybrid, or idle-driven loop. Use it for recurring checks, reminders, event reactions, or explicit task-backlog processing; never use shell sleep/while loops.
 
-Use this tool whenever the user asks to:
-- "create a loop" to check something periodically
-- "run every X seconds/minutes/hours"
-- "remind me to check..."
-- "watch for..." or "when X happens, do Y"
-- "schedule a recurring check"
-- set up a periodic monitor or poller
-- has a task list with open items — create a loop to work through tasks automatically
+Set triggerType to cron, event, hybrid, or idle. Polling loops need maxFires; observation-only loops should set readOnly. Use taskBacklog for an existing queue and autoTask only to create a new task per fire.
 
-DO NOT use raw Bash loops (for/sleep/while). Use LoopCreate instead — it integrates with the session lifecycle, survives across turns, and the scheduler handles timing.
-
-## When NOT to Use
-
-Skip this tool when the task is a one-off check (just do it directly) or when the user wants a purely reactive hook.
-
-## Trigger Types
-
-- **cron**: time-based. "30s" (rounded to 1m), "5m", "2h", "1d", or full cron like "0 9 * * 1-5"
-- **event**: fires on pi events like "tool_execution_start", "before_agent_start"
-- **hybrid**: both cron + event with debounce
-- **idle**: timer-free dynamic loop; use triggerType="idle" and trigger="idle"
-
-## Parameters
-
-- **trigger**: interval like "30s", "5m", "2h", event source, or hybrid spec
-- **prompt**: what to do when the loop fires (e.g., "check if the build passed")
-- **recurring**: repeat or fire once (default: true)
-- **autoTask**: when pi-tasks is loaded or native task fallback is active, auto-create a task on each fire
-- **taskBacklog**: mark this as a task-backlog worker loop so it auto-deletes when pending tasks reach zero
-- **readOnly**: restrict the agent to read-only tools when this loop fires (default: false)
-- **maxFires**: auto-stop after N fires — prevents infinite token burn on polling loops
-
-## Loop Lifecycle
-
-Recurring loops persist across fires. A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Delete only when the user explicitly cancels it or its stated stop condition is satisfied. Dynamic loops must be advanced with LoopUpdate, not LoopDelete.`,
+A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Recurring loops persist; dynamic loops advance through LoopUpdate.`,
     promptGuidelines: [
-      "Use LoopCreate when the user asks for a repeating task, periodic check, scheduled reminder, or 'every X' — never use raw Bash for/sleep/while.",
-      "## Choosing trigger type",
-      "Prefer event triggers over cron when possible — they fire exactly when needed instead of polling.",
-      "Use event triggers for: tool completion ('tool_execution_end'), task creation ('tasks:created'), monitor completion ('monitor:done').",
-      "Use triggerType: 'idle' with trigger: 'idle' for agent-driven continuation work that should wake only when the harness is idle. Idle loops fire their first wake immediately, then require LoopUpdate to continue, pause, or complete.",
-      "Use cron triggers only when: the user explicitly asks for a time interval, or there's no relevant pi event to subscribe to.",
-      "Hybrid triggers (cron + event) give you both: event-driven responsiveness with a cron safety-net fallback.",
-      "## Choosing an interval",
-      "Default to 5m unless the user specifies differently. Use shorter intervals only when time-sensitive.",
-      "## maxFires — prevent infinite token burn",
-      "Always set maxFires on polling loops so they don't run forever. For task-continuation loops, use maxFires: 20-50.",
+      "Prefer event triggers over cron; use triggerType `idle` with trigger `idle` for agent-paced continuation.",
+      "Always set maxFires on polling loops and readOnly for observation-only work.",
+      "For taskBacklog use triggerType `event`, trigger `tasks:created`, recurring true, and bounded maxFires; existing work bootstraps immediately. Do not use autoTask.",
       "Recurring loops are persistent controllers. Do not call LoopDelete after a normal fire, an unchanged check, or one completed iteration; only delete when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
-      "## readOnly mode",
-      "Set readOnly: true for loops that only observe and report (checks, status polls). This prevents unintended changes.",
-      "## Task-driven workflows",
-      "Do not rely on a past 'tasks:created' event to replay. If tasks already exist, bootstrap the first pass in the current turn or use a hybrid/event loop that can catch future task creation and a cron safety-net.",
-      "Use autoTask only when you want the loop itself to create a task on each fire. For processing an existing task backlog, leave autoTask off and have the loop run TaskList to pick the next pending task.",
-      "Set taskBacklog: true for backlog worker loops that process the existing pending queue. Backlog worker loops bootstrap against existing pending tasks and auto-delete when the queue reaches zero.",
       "For taskBacklog loops, do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.",
-      "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
+      "Report the created loop ID to the user.",
     ],
     parameters: Type.Object({
       trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), hybrid spec, or literal 'idle' with triggerType='idle'" }),

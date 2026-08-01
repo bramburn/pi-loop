@@ -39,24 +39,13 @@ export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
     label: "TaskCreate",
     renderCall: renderToolCall("Task", (args) => `create · ${String(toolArg(args, "subject") ?? "task").slice(0, 56)}`),
     renderResult: renderToolResult,
-    description: `Create a task for tracking work across turns. Use when you need to track progress on complex multi-step tasks or turn a broad user goal into a concrete backlog.
-
-Fields:
-- subject: brief actionable title
-- description: detailed requirements and done condition`,
+    description: "Create an independently completable task across turns, or decompose a broad user goal into a concrete backlog. Creating tasks does not start autonomous work. Use subject and description only.",
     promptGuidelines: [
-      "Use TaskCreate to track complex multi-step work across turns.",
       "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
       "If the user supplies a shared goal or meta-goal, preserve it explicitly using the user's wording and tie each created task back to that goal in its description.",
-      "If several tasks share one goal, keep subjects short and put the shared goal in the first sentence of each description or as an equivalent explicit framing.",
-      "Prefer 2-5 tasks that separate investigation, implementation, validation, and reporting or commit-prep when those phases are distinct.",
       "When the user asks to break work into tasks, create the backlog directly and do not pivot to loops, monitors, or other automation unless the user also asked for ongoing automation.",
-      "For work that must increment toward a goal state across turns (not a single do-and-close), prefer WorkflowCreate (named phases/outcomes) or an idle dynamic LoopCreate (increment-until-goal). Use TaskCreate for independently completable units.",
-      "When a task is part of a chain, write the description as: the goal state, the increment this task delivers, the done condition, and the next task (by id or name) or the tool that follows.",
-      "Make each `subject` a short verb-object action.",
-      "Make each `description` include the expected artifact, outcome, or done condition so another turn can pick the task up cleanly.",
-      "Break work into small, independently completable tasks when possible. A task may span multiple sessions: describe the goal state and the increment expected per session instead of splitting it into throwaway units.",
-      "TaskCreate accepts `subject` and `description` parameters only — do not invent extra fields unless the schema explicitly adds them.",
+      "Use short verb-object subjects; descriptions state the artifact, done condition, dependencies, and next task when chained.",
+      "Use WorkflowCreate for named phases/outcomes and LoopCreate taskBacklog=true only when autonomous backlog processing was explicitly requested.",
     ],
     parameters: Type.Object({
       subject: Type.String({ description: "Brief actionable title for the task" }),
