@@ -21,6 +21,7 @@
     "src/",
     "dist/",
     "docs/USAGE_GUIDE.md",
+    "docs/PROFILING_AND_FUZZING.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { mkdirSync, writeFileSync } from "node:fs";
 import { arch } from "node:os";
 import { resolve } from "node:path";

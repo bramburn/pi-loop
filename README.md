@@ -66,7 +66,7 @@ npm test
 npm run build
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
 
 ## License
 
