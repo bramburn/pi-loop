@@ -1,6 +1,6 @@
 // VENDORED MODULE — canonical copy shared verbatim by pi-loop and pi-orca.
 // If you edit this file, copy it to the sibling repo and bump VENDOR_REV.
-// VENDOR_REV: 2
+// VENDOR_REV: 3
 
 /** Cross-extension RPC channels served by a tasks provider (pi-tasks or pi-loop native). */
 export const TASKS_RPC = {
