@@ -215,16 +215,12 @@ export default function (pi: ExtensionAPI) {
 
   const taskBacklogRuntime = createTaskBacklogRuntime({
     getLoops: () => store.list(),
-    createLoop: (trigger, prompt, options) => store.create(trigger, prompt, options),
     deleteLoop: (id) => {
       store.delete(id);
     },
     updateLoopPrompt: (id, prompt) => store.updateMetadata(id, { prompt }).entry,
     recordDeletionTombstone: (id, tombstone) => {
       store.recordDeletionTombstone(id, tombstone);
-    },
-    addTrigger: (entry) => {
-      triggerSystem.add(entry);
     },
     removeTrigger: (id) => {
       triggerSystem.remove(id);
@@ -233,7 +229,6 @@ export default function (pi: ExtensionAPI) {
       widget.update();
     },
     hasPendingTasks: () => hasPendingTasks(),
-    bootstrapTaskLoop: (entry) => maybeBootstrapTaskLoop(entry),
     triggerHasEventSource,
     emitLoopAutodeleted: (payload) => {
       pi.events.emit("loops:autodeleted", payload);

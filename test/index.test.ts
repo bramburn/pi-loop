@@ -429,7 +429,7 @@ describe("native task fallback", () => {
     expect(data.tasks[0].completedAt).toBe(completedAt);
   });
 
-  it("auto-creates a worker loop when pending native tasks reach five", async () => {
+  it("keeps five native tasks passive until a backlog worker is explicitly created", async () => {
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);
@@ -466,14 +466,13 @@ describe("native task fallback", () => {
       subject: "Task 5",
       description: "Desc 5",
     });
-    expect(fifth.content[0].text).toContain("Backlog worker loop #1 created");
+    expect(fifth.content[0].text).toBe("Task #5 created: Task 5");
 
     listResult = await loopList!.execute?.("12", {});
-    expect(listResult.content[0].text).toContain("hybrid:");
-    expect(listResult.content[0].text).toContain("tasks:created");
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
   });
 
-  it("does not create duplicate worker loops above the task threshold", async () => {
+  it("keeps larger native backlogs passive", async () => {
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);
@@ -507,12 +506,10 @@ describe("native task fallback", () => {
     expect(sixth.content[0].text).not.toContain("auto-created");
 
     const listResult = await loopList!.execute?.("7", {});
-    const lines = listResult.content[0].text.split("\n");
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("#1");
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
   });
 
-  it("re-creates a worker loop when TaskUpdate raises pending work back to the threshold", async () => {
+  it("does not create a worker when completed tasks are reopened", async () => {
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);
@@ -558,14 +555,13 @@ describe("native task fallback", () => {
     expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
 
     const thresholdResult = await taskUpdate!.execute?.("50", { id: "5", status: "pending" });
-    expect(thresholdResult.content[0].text).toContain("Backlog worker loop #");
+    expect(thresholdResult.content[0].text).toBe("Task #5 updated → pending");
 
     listResult = await loopList!.execute?.("60", {});
-    expect(listResult.content[0].text).toContain("tasks:created");
-    expect(listResult.content[0].text).toContain("inspect every in_progress task");
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
   });
 
-  it("flushes the auto-created worker wake on agent_end even if pending messages are reported", async () => {
+  it("does not queue a hidden worker wake for an ordinary backlog", async () => {
     const { pi, toolMap, extensionHandlers, sentMessages: sentCustomMessages } = createMockPi();
 
     extension(pi as any);
@@ -605,15 +601,10 @@ describe("native task fallback", () => {
     }
     await Promise.resolve();
 
-    expect(sentCustomMessages).toHaveLength(1);
-    expect(sentCustomMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
-    expect((sentCustomMessages[0].message as { content: string }).content).toContain("inspect every in_progress task");
-    expect((sentCustomMessages[0].message as { content: string }).content).toContain("complete A before B");
-    expect((sentCustomMessages[0].message as { content: string }).content).toContain("managed automatically");
-    expect((sentCustomMessages[0].message as { content: string }).content).not.toContain("one-shot wake");
+    expect(sentCustomMessages).toHaveLength(0);
   });
 
-  it("auto-deletes the worker loop after all native tasks are completed", async () => {
+  it("does not synthesize a worker lifecycle around ordinary task completion", async () => {
     const { pi, toolMap, extensionHandlers } = createMockPi();
 
     extension(pi as any);
@@ -645,7 +636,7 @@ describe("native task fallback", () => {
     }
 
     let listResult = await loopList!.execute?.("20", {});
-    expect(listResult.content[0].text).toContain("#1");
+    expect(listResult.content[0].text).toBe("No loops configured. Use LoopCreate to set up a schedule.");
 
     for (let i = 1; i <= 5; i++) {
       await taskUpdate!.execute?.(`${20 + i}`, { id: `${i}`, status: "completed" });

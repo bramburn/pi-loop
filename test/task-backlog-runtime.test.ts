@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AUTO_TASK_WORKER_LEGACY_PROMPTS,
   AUTO_TASK_WORKER_PROMPT,
@@ -43,19 +43,12 @@ function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
 
 function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
   const loops: LoopEntry[] = [];
-  let nextId = 1;
-  const createLoop = vi.fn((trigger: Trigger, prompt: string, o: { recurring: boolean; taskBacklog?: boolean; maxFires?: number }) => {
-    const entry = makeLoop({ id: String(nextId++), trigger, prompt, taskBacklog: o.taskBacklog, maxFires: o.maxFires });
-    loops.push(entry);
-    return entry;
-  });
   const deleteLoop = vi.fn((id: string) => {
     const i = loops.findIndex((l) => l.id === id);
     if (i >= 0) loops.splice(i, 1);
   });
   const opts: TaskBacklogRuntimeOptions = {
     getLoops: () => loops,
-    createLoop,
     deleteLoop,
     updateLoopPrompt: vi.fn((id: string, prompt: string) => {
       const entry = loops.find((loop) => loop.id === id);
@@ -64,11 +57,9 @@ function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
       return entry;
     }),
     recordDeletionTombstone: vi.fn(),
-    addTrigger: vi.fn(),
     removeTrigger: vi.fn(),
     updateWidget: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
-    bootstrapTaskLoop: vi.fn(async () => true),
     triggerHasEventSource,
     emitLoopAutodeleted: vi.fn(),
     emitTaskBacklogEmpty: vi.fn(),
@@ -162,44 +153,16 @@ describe("task-backlog-runtime predicates", () => {
   });
 });
 
-describe("ensureAutoTaskWorkerLoop", () => {
-  let taskStore: TaskStore;
-  beforeEach(() => {
-    taskStore = new TaskStore();
-  });
-
-  it("does nothing below the threshold", async () => {
-    const { runtime, opts } = setup();
-    for (let i = 0; i < 4; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result).toEqual({ created: false });
-    expect(opts.createLoop).not.toHaveBeenCalled();
-  });
-
-  it("creates a hybrid worker loop at/above the threshold", async () => {
-    const { runtime, opts } = setup();
+describe("explicit backlog policy", () => {
+  it("does not create an autonomous worker when five tasks are pending", async () => {
+    const taskStore = new TaskStore();
+    const { runtime, loops } = setup();
     for (let i = 0; i < 5; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result.created).toBe(true);
-    expect(result.entry?.trigger).toEqual({
-      type: "hybrid",
-      cron: "*/3 * * * *",
-      event: { source: "tasks:created" },
-      debounceMs: 30000,
-    });
-    expect(result.entry?.maxFires).toBe(30);
-    expect(opts.addTrigger).toHaveBeenCalledTimes(1);
-    expect(opts.bootstrapTaskLoop).toHaveBeenCalledTimes(1);
-    expect(opts.updateWidget).toHaveBeenCalled();
-  });
 
-  it("dedups — does not create a second worker loop when one exists", async () => {
-    const { runtime, opts, loops } = setup();
-    loops.push(makeLoop({ id: "9" }));
-    for (let i = 0; i < 6; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result).toEqual({ entry: loops[0], created: false });
-    expect(opts.createLoop).not.toHaveBeenCalled();
+    const result = await runtime.evaluateTaskBacklog(taskStore, 5);
+
+    expect(result).toEqual({ created: false, cleaned: 0 });
+    expect(loops).toHaveLength(0);
   });
 });
 
@@ -255,13 +218,11 @@ describe("cleanupTaskBacklogLoops", () => {
 });
 
 describe("evaluateTaskBacklog", () => {
-  it("creates a worker loop when pendingCount is at/above threshold", async () => {
+  it("leaves a non-empty backlog for an explicitly created worker", async () => {
     const taskStore = new TaskStore();
     for (let i = 0; i < 5; i++) taskStore.create(`t${i}`, "d");
     const { runtime } = setup();
-    const result = await runtime.evaluateTaskBacklog(taskStore, 5);
-    expect(result.created).toBe(true);
-    expect(result.entry).toBeDefined();
+    expect(await runtime.evaluateTaskBacklog(taskStore, 5)).toEqual({ created: false, cleaned: 0 });
   });
 
   it("cleans up worker loops when pendingCount is zero", async () => {

@@ -5,25 +5,19 @@ import {
   type TaskBacklogEvent,
 } from "../src/task-backlog-coordinator.js";
 
-function event(pendingCount: number, threshold = 5): TaskBacklogEvent {
+function event(pendingCount: number): TaskBacklogEvent {
   return {
     type: "TASK_BACKLOG_EVALUATED",
     at: 100,
     source: "system",
     entityType: "task",
-    payload: { pendingCount, threshold },
+    payload: { pendingCount },
   };
 }
 
 describe("task backlog coordinator", () => {
-  it("emits worker-ensure effect when pending count reaches the threshold", () => {
-    expect(reduceTaskBacklogEvent(event(5))).toEqual([
-      {
-        type: "ENSURE_AUTO_TASK_WORKER",
-        entityType: "task",
-        payload: { pendingCount: 5, threshold: 5 },
-      },
-    ]);
+  it("does not create a worker for a non-empty backlog", () => {
+    expect(reduceTaskBacklogEvent(event(5))).toEqual([]);
   });
 
   it("emits cleanup effect when the pending count drops to zero", () => {
@@ -46,14 +40,14 @@ describe("task backlog coordinator", () => {
     const coordinator = createCoordinator({
       reducers: [reducer],
       effectHandlers: {
-        ENSURE_AUTO_TASK_WORKER: (effect: ReducerEffect) => {
+        CLEANUP_TASK_BACKLOG_LOOPS: (effect: ReducerEffect) => {
           handled.push(`${effect.type}:${(effect.payload as { pendingCount: number }).pendingCount}`);
         },
       },
     });
 
-    await coordinator.dispatch(event(6));
+    await coordinator.dispatch(event(0));
 
-    expect(handled).toEqual(["ENSURE_AUTO_TASK_WORKER:6"]);
+    expect(handled).toEqual(["CLEANUP_TASK_BACKLOG_LOOPS:0"]);
   });
 });

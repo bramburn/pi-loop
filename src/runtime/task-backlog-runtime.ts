@@ -16,7 +16,6 @@ import {
   type TaskBacklogEmptyPayload,
 } from "./loop-events.js";
 
-export const AUTO_TASK_WORKER_THRESHOLD = 5;
 export const AUTO_TASK_WORKER_PROMPT = "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Follow each prerequisite chain to the earliest unfinished task. Use TaskClaim for that task whether it is pending or in_progress; an expired claim can be taken over, but a live foreign claim must not be duplicated. Resume claimed in_progress work before claiming unrelated pending work. Keep the returned claimId, call TaskHeartbeat before its lease expires during long work, and pass claimId to TaskUpdate when completing or closing the task. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: claim and resume it, verify evidence and complete it, or report its live owner/blocker and required recovery. Implement the claimed task, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 // Worker loops persist their prompt in the loop store. Changing the prompt text
@@ -36,19 +35,12 @@ export function isAutoTaskWorkerPrompt(prompt: string): boolean {
 
 export interface TaskBacklogRuntimeOptions {
   getLoops: () => LoopEntry[];
-  createLoop: (trigger: Trigger, prompt: string, options: {
-    recurring: boolean;
-    taskBacklog?: boolean;
-    maxFires?: number;
-  }) => LoopEntry;
   deleteLoop: (id: string) => void;
   updateLoopPrompt: (id: string, prompt: string) => LoopEntry | undefined;
   recordDeletionTombstone?: (id: string, tombstone: LoopDeletionTombstoneInput) => void;
-  addTrigger: (entry: LoopEntry) => void;
   removeTrigger: (id: string) => void;
   updateWidget: () => void;
   hasPendingTasks: () => Promise<number>;
-  bootstrapTaskLoop: (entry: LoopEntry) => Promise<boolean>;
   triggerHasEventSource: (trigger: Trigger | string, source: string) => boolean;
   emitLoopAutodeleted?: (payload: LoopAutodeletedPayload) => void;
   emitTaskBacklogEmpty?: (payload: TaskBacklogEmptyPayload) => void;
@@ -57,7 +49,6 @@ export interface TaskBacklogRuntimeOptions {
 
 export interface TaskBacklogRuntime {
   cleanupTaskBacklogLoops(): Promise<number>;
-  ensureAutoTaskWorkerLoop(taskStore: TaskStore): Promise<{ entry?: LoopEntry; created: boolean }>;
   evaluateTaskBacklog(taskStore?: TaskStore, pendingCount?: number): Promise<{ entry?: LoopEntry; created: boolean; cleaned: number }>;
   isAutoTaskWorkerLoop(entry: LoopEntry): boolean;
   isTaskBacklogLoop(entry: LoopEntry): boolean;
@@ -68,15 +59,12 @@ export interface TaskBacklogRuntime {
 export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): TaskBacklogRuntime {
   const {
     getLoops,
-    createLoop,
     deleteLoop,
     updateLoopPrompt,
     recordDeletionTombstone,
-    addTrigger,
     removeTrigger,
     updateWidget,
     hasPendingTasks,
-    bootstrapTaskLoop,
     triggerHasEventSource,
     emitLoopAutodeleted,
     emitTaskBacklogEmpty,
@@ -131,31 +119,6 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
     return backlogLoops.length;
   }
 
-  async function ensureAutoTaskWorkerLoop(taskStore: TaskStore): Promise<{ entry?: LoopEntry; created: boolean }> {
-    if (taskStore.pendingCount() < AUTO_TASK_WORKER_THRESHOLD) return { created: false };
-
-    const existing = findAutoTaskWorkerLoop();
-    if (existing) return { entry: existing, created: false };
-
-    const trigger: Trigger = {
-      type: "hybrid",
-      cron: "*/3 * * * *",
-      event: { source: "tasks:created" },
-      debounceMs: 30000,
-    };
-    const entry = createLoop(trigger, AUTO_TASK_WORKER_PROMPT, {
-      recurring: true,
-      taskBacklog: true,
-      maxFires: 30,
-    });
-    addTrigger(entry);
-    await bootstrapTaskLoop(entry);
-    updateWidget();
-    return { entry, created: true };
-  }
-
-  let taskBacklogCoordinatorStore: TaskStore | undefined;
-  let taskBacklogCoordinatorWorker: { entry?: LoopEntry; created: boolean } = { created: false };
   let taskBacklogCoordinatorCleanupCount = 0;
 
   const taskBacklogReducerHandler: ReducerHandler = (incoming: ReducerEvent) => {
@@ -166,10 +129,6 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
   const taskBacklogCoordinator = createCoordinator({
     reducers: [taskBacklogReducerHandler],
     effectHandlers: {
-      ENSURE_AUTO_TASK_WORKER: async () => {
-        if (!taskBacklogCoordinatorStore) return;
-        taskBacklogCoordinatorWorker = await ensureAutoTaskWorkerLoop(taskBacklogCoordinatorStore);
-      },
       CLEANUP_TASK_BACKLOG_LOOPS: async () => {
         taskBacklogCoordinatorCleanupCount = await cleanupTaskBacklogLoops();
       },
@@ -178,8 +137,6 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
 
   async function evaluateTaskBacklog(taskStore?: TaskStore, pendingCount?: number): Promise<{ entry?: LoopEntry; created: boolean; cleaned: number }> {
     const resolvedPending = pendingCount ?? (taskStore ? taskStore.pendingCount() : await hasPendingTasks());
-    taskBacklogCoordinatorStore = taskStore;
-    taskBacklogCoordinatorWorker = { created: false };
     taskBacklogCoordinatorCleanupCount = 0;
 
     await taskBacklogCoordinator.dispatch({
@@ -187,20 +144,17 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
       at: Date.now(),
       source: "system",
       entityType: "task",
-      payload: { pendingCount: resolvedPending, threshold: AUTO_TASK_WORKER_THRESHOLD },
+      payload: { pendingCount: resolvedPending },
     });
 
-    taskBacklogCoordinatorStore = undefined;
     return {
-      entry: taskBacklogCoordinatorWorker.entry,
-      created: taskBacklogCoordinatorWorker.created,
+      created: false,
       cleaned: taskBacklogCoordinatorCleanupCount,
     };
   }
 
   return {
     cleanupTaskBacklogLoops,
-    ensureAutoTaskWorkerLoop,
     evaluateTaskBacklog,
     isAutoTaskWorkerLoop,
     isTaskBacklogLoop,
