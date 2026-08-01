@@ -103,6 +103,35 @@ describe("TaskList", () => {
   });
 });
 
+describe("TaskGet", () => {
+  it("returns full untruncated context for a known task", async () => {
+    const { taskStore, result } = setup();
+    const description =
+      "Goal state: tests pass. Increment: apply the fix found in task #1 and run targeted validation. Next: task #3 validate the full suite.";
+    taskStore.create("Implement fix", description, { loopId: "9" }, { loopId: "9", stateId: "fix", transitionSeq: 1 });
+
+    const output = await result("TaskGet", { id: "1" });
+    const text = output.content[0].text;
+    expect(text).toContain("Task #1");
+    expect(text).toContain("Implement fix");
+    expect(text).toContain("[pending]");
+    expect(text).toContain(description);
+
+    const details = output.details as { summary: string; expanded: string[] };
+    expect(details.expanded.join("\n")).toContain("workflow #9 · state fix");
+  });
+
+  it("reports not found for an unknown id", async () => {
+    const { text } = setup();
+    expect(await text("TaskGet", { id: "99" })).toBe("Task #99 not found");
+  });
+
+  it("documents the id parameter convention in its guidelines", () => {
+    const guidelines = (setup().tool("TaskGet") as any).promptGuidelines as string[];
+    expect(guidelines.some((g) => g.includes("`id`, not `taskId`"))).toBe(true);
+  });
+});
+
 describe("TaskUpdate", () => {
   let h: ReturnType<typeof setup>;
   beforeEach(() => {

@@ -148,6 +148,7 @@ If `pi-tasks` does not answer during startup detection, `pi-loop` registers:
 ```text
 TaskCreate subject="Fix deploy polling" description="Replace polling with an event-driven loop"
 TaskList
+TaskGet id="1"
 TaskUpdate id="1" status="in_progress"
 TaskUpdate id="1" status="completed"
 TaskUpdate id="1" status="closed"  # abandon without completion
@@ -156,7 +157,9 @@ TaskDelete id="1"
 
 The native provider is selected for the session and exposes `/tasks`, compact status-line tracking, persisted task state, lifecycle events, and task RPC replies. `closed` is terminal like `completed`, is excluded from pending backlog work, and deliberately does not emit `tasks:completed`; use it when work is intentionally abandoned.
 
-Set `taskBacklog=true` on a loop that processes existing pending tasks. Backlog workers bootstrap when tasks already exist and delete themselves when the queue drains. `autoTask` serves a different purpose: it creates a new task on each loop fire.
+TaskList shows each task with a short description excerpt and its workflow link (loop/state) when one exists. TaskGet reads the full untruncated description, timestamps, metadata, and workflow link — use it before starting a chained task whose goal-state and next-step text exceeds the excerpt.
+
+Set `taskBacklog=true` on a loop that processes existing pending tasks. Backlog workers bootstrap when tasks already exist and delete themselves when the queue drains. Workers pick the next pending task by reading each description and preferring a task whose description names a next task or successor, so chain-created backlogs are processed in dependency order. `autoTask` serves a different purpose: it creates a new task on each loop fire.
 
 ## Events
 

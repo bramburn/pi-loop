@@ -121,6 +121,51 @@ Fields:
   });
 
   pi.registerTool({
+    name: "TaskGet",
+    label: "TaskGet",
+    renderCall: renderToolCall("Task", (args) => `get · #${String(toolArg(args, "id") ?? "?")}`),
+    renderResult: renderToolResult,
+    description: `Read full task context by ID: subject, untruncated description, status, timestamps, metadata, and workflow link.
+
+Use when TaskList's excerpt is truncated or you need the complete goal-state and next-step text before starting a chained task. Read-only — does not change task state.`,
+    promptGuidelines: [
+      "TaskGet uses parameter `id`, not `taskId`.",
+      "Read the full description before starting a task picked from a chain — it carries the goal state and the next task.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "Task ID to read" }),
+    }),
+    execute(_toolCallId, params) {
+      const t = taskStore.get(params.id);
+      if (!t) {
+        return Promise.resolve(textResult(`Task #${params.id} not found`, {
+          kind: "task", action: "get", tone: "error", summary: `Task #${params.id} not found`, expanded: ["Use TaskList to find valid task IDs."],
+        }));
+      }
+      const lines = [
+        `Task #${t.id} [${t.status}] ${t.subject}`,
+        `Description: ${t.description}`,
+        `Created: ${new Date(t.createdAt).toISOString()}`,
+      ];
+      if (t.completedAt) lines.push(`Completed: ${new Date(t.completedAt).toISOString()}`);
+      if (t.closedAt) lines.push(`Closed: ${new Date(t.closedAt).toISOString()}`);
+      if (t.workflow) {
+        lines.push(`workflow #${t.workflow.loopId} · state ${t.workflow.stateId} · transition ${t.workflow.transitionSeq}`);
+      }
+      if (t.metadata && Object.keys(t.metadata).length > 0) {
+        lines.push(`Metadata: ${JSON.stringify(t.metadata)}`);
+      }
+      return Promise.resolve(textResult(lines.join("\n"), {
+        kind: "task",
+        action: "get",
+        tone: "info",
+        summary: `Task #${t.id} · ${t.status} · ${t.subject.slice(0, 40)}`,
+        expanded: lines.slice(1),
+      }));
+    },
+  });
+
+  pi.registerTool({
     name: "TaskUpdate",
     label: "TaskUpdate",
     renderCall: renderToolCall("Task", (args) => `update · #${String(toolArg(args, "id") ?? "?")}`),
