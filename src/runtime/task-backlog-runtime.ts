@@ -19,6 +19,17 @@ import {
 export const AUTO_TASK_WORKER_THRESHOLD = 5;
 export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, read each pending task's description, and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
+// Worker loops persist their prompt in the loop store. Changing the prompt text
+// must append the previous version here, or persisted workers orphan after an
+// extension reload and never auto-delete.
+export const AUTO_TASK_WORKER_LEGACY_PROMPTS: readonly string[] = [
+  "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
+];
+
+export function isAutoTaskWorkerPrompt(prompt: string): boolean {
+  return prompt === AUTO_TASK_WORKER_PROMPT || AUTO_TASK_WORKER_LEGACY_PROMPTS.includes(prompt);
+}
+
 export interface TaskBacklogRuntimeOptions {
   getLoops: () => LoopEntry[];
   createLoop: (trigger: Trigger, prompt: string, options: {
@@ -67,7 +78,7 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
 
   function isAutoTaskWorkerLoop(entry: LoopEntry): boolean {
     return entry.status === "active"
-      && entry.prompt === AUTO_TASK_WORKER_PROMPT
+      && isAutoTaskWorkerPrompt(entry.prompt)
       && triggerHasEventSource(entry.trigger, "tasks:created");
   }
 

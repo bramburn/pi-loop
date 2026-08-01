@@ -19,6 +19,9 @@ function triggerHasEventSource(trigger: Trigger | string, source: string): boole
 
 const tasksCreatedTrigger: Trigger = { type: "event", source: "tasks:created" };
 
+const LEGACY_WORKER_PROMPT =
+  "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+
 function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
   return {
     id: "1",
@@ -91,6 +94,23 @@ describe("task-backlog-runtime predicates", () => {
     loops.push(makeLoop({ id: "7", prompt: "unrelated", trigger: { type: "cron", schedule: "*/5 * * * *" } }));
     loops.push(makeLoop({ id: "8" }));
     expect(runtime.findAutoTaskWorkerLoop()?.id).toBe("8");
+  });
+
+  it("still recognizes a worker loop persisted with the legacy prompt", () => {
+    const { runtime, loops } = setup();
+    loops.push(makeLoop({ id: "7", prompt: LEGACY_WORKER_PROMPT }));
+    expect(runtime.isAutoTaskWorkerLoop(loops[0]!)).toBe(true);
+    expect(runtime.findAutoTaskWorkerLoop()?.id).toBe("7");
+  });
+
+  it("auto-deletes a legacy-prompt worker loop when the queue drains", async () => {
+    const { runtime, opts, loops } = setup();
+    loops.push(makeLoop({ id: "7", prompt: LEGACY_WORKER_PROMPT }));
+    opts.hasPendingTasks = vi.fn(async () => 0);
+
+    await runtime.cleanupTaskBacklogLoops();
+
+    expect(loops).toHaveLength(0);
   });
 });
 
