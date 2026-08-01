@@ -1,9 +1,28 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { AnyReducerEffect } from "./coordinator.js";
 
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100;
+
+export class StoreCorruptionError extends Error {
+  constructor(filePath: string, cause?: unknown) {
+    super(`Corrupt store ${filePath}; no valid previous snapshot`, { cause });
+    this.name = "StoreCorruptionError";
+  }
+}
 
 function acquireLock(lockPath: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -97,26 +116,103 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
     return `${stat.mtimeMs}:${stat.size}`;
   }
 
-  private load(force = false): void {
+  private parseSnapshot(filePath: string): { nextId: number; entries: Map<string, TEntry>; raw: string } {
+    const raw = readFileSync(filePath, "utf-8");
+    try {
+      const data: TData = JSON.parse(raw);
+      const { nextId, entries } = this.config.deserialize(data);
+      return { nextId, entries, raw };
+    } catch (error) {
+      throw new StoreCorruptionError(filePath, error);
+    }
+  }
+
+  private syncDirectory(): void {
+    if (!this.filePath) return;
+    const fd = openSync(dirname(this.filePath), "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private writeSnapshot(filePath: string, raw: string): void {
+    const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    let fd: number | undefined;
+    try {
+      fd = openSync(tmpPath, "wx", 0o600);
+      writeFileSync(fd, raw);
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      renameSync(tmpPath, filePath);
+      this.syncDirectory();
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      try { unlinkSync(tmpPath); } catch { /* already renamed or never created */ }
+    }
+  }
+
+  private recoverPrevious(cause: unknown): void {
+    if (!this.filePath) return;
+    const previousPath = `${this.filePath}.prev`;
+    let previous: { nextId: number; entries: Map<string, TEntry>; raw: string };
+    try {
+      previous = this.parseSnapshot(previousPath);
+    } catch (previousError) {
+      throw new StoreCorruptionError(this.filePath, { current: cause, previous: previousError });
+    }
+
+    const quarantinePath = `${this.filePath}.corrupt-${Date.now()}-${process.pid}`;
+    renameSync(this.filePath, quarantinePath);
+    try {
+      this.writeSnapshot(this.filePath, previous.raw);
+    } catch (recoveryError) {
+      try { renameSync(quarantinePath, this.filePath); } catch { /* preserve quarantine when restore fails */ }
+      throw new StoreCorruptionError(this.filePath, recoveryError);
+    }
+
+    this.nextId = previous.nextId;
+    this.entries = previous.entries;
+    this.lastLoadedSignature = this.getFileSignature();
+  }
+
+  private load(force = false, lockHeld = false): void {
     if (!this.filePath) return;
     const signature = this.getFileSignature();
     if (!signature) return;
     if (!force && signature === this.lastLoadedSignature) return;
     try {
-      const data: TData = JSON.parse(readFileSync(this.filePath, "utf-8"));
-      const { nextId, entries } = this.config.deserialize(data);
+      const { nextId, entries } = this.parseSnapshot(this.filePath);
       this.nextId = nextId;
       this.entries = entries;
       this.lastLoadedSignature = signature;
-    } catch { /* corrupt file — start fresh */ }
+    } catch (error) {
+      if (lockHeld || !this.lockPath) {
+        this.recoverPrevious(error);
+        return;
+      }
+      acquireLock(this.lockPath);
+      try {
+        this.load(true, true);
+      } finally {
+        releaseLock(this.lockPath);
+      }
+    }
   }
 
   private save(): void {
     if (!this.filePath) return;
+    const previousPath = `${this.filePath}.prev`;
+    if (existsSync(this.filePath)) {
+      const current = this.parseSnapshot(this.filePath);
+      this.writeSnapshot(previousPath, current.raw);
+    } else {
+      try { unlinkSync(previousPath); } catch { /* remove stale backup for a new store */ }
+    }
     const data = this.config.serialize(this.nextId, this.entries);
-    const tmpPath = `${this.filePath}.tmp`;
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-    renameSync(tmpPath, this.filePath);
+    this.writeSnapshot(this.filePath, JSON.stringify(data, null, 2));
     this.lastLoadedSignature = this.getFileSignature();
   }
 
@@ -124,7 +220,7 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
     if (!this.lockPath) return fn();
     acquireLock(this.lockPath);
     try {
-      this.load(true);
+      this.load(true, true);
       const result = fn();
       this.save();
       return result;
@@ -163,6 +259,7 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
   deleteFileIfEmpty(): boolean {
     if (!this.filePath || this.entries.size > 0) return false;
     try { unlinkSync(this.filePath); } catch { /* ignore */ }
+    try { unlinkSync(`${this.filePath}.prev`); } catch { /* ignore */ }
     return true;
   }
 }
