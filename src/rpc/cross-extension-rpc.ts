@@ -1,6 +1,6 @@
 // VENDORED MODULE — canonical copy shared verbatim by pi-loop and pi-orca.
 // If you edit this file, copy it to the sibling repo and bump VENDOR_REV.
-// VENDOR_REV: 3
+// VENDOR_REV: 4
 
 import { randomUUID } from "node:crypto";
 import { type PingReply, replyChannel } from "./channels.js";
@@ -12,7 +12,7 @@ import { type PingReply, replyChannel } from "./channels.js";
  *   request:  emit(channel, { requestId, ...params })
  *   reply:    emit(`${channel}:reply:${requestId}`, RpcReply)
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type RpcReply<T = void> =
   | { success: true; data?: T }

@@ -56,6 +56,95 @@ describe("TaskStore (in-memory)", () => {
     expect(entry?.completedAt).toBe(completedAt);
   });
 
+  it("claims pending work and rejects a live foreign owner", () => {
+    store.create("task", "desc");
+    const claimed = store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 5_000,
+    });
+
+    expect(claimed).toMatchObject({
+      takenOver: false,
+      renewed: false,
+      entry: {
+        status: "in_progress",
+        claim: {
+          claimId: "claim-1",
+          ownerSessionId: "session-a",
+          ownerRuntimeId: "runtime-a",
+          claimedAt: 1_000,
+          heartbeatAt: 1_000,
+          leaseExpiresAt: 6_000,
+          attempt: 1,
+        },
+      },
+    });
+    expect(store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-b",
+      ownerRuntimeId: "runtime-b",
+      now: 2_000,
+      leaseMs: 5_000,
+    })).toBeUndefined();
+  });
+
+  it("renews the same owner and permits takeover only after expiry", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    const renewed = store.claim("1", {
+      claimId: "ignored-new-id",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_500,
+      leaseMs: 1_000,
+    });
+    expect(renewed).toMatchObject({
+      takenOver: false,
+      renewed: true,
+      entry: { claim: { claimId: "claim-1", heartbeatAt: 1_500, leaseExpiresAt: 2_500, attempt: 1 } },
+    });
+
+    const takeover = store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-b",
+      ownerRuntimeId: "runtime-b",
+      now: 2_501,
+      leaseMs: 1_000,
+    });
+    expect(takeover).toMatchObject({
+      takenOver: true,
+      entry: { claim: { claimId: "claim-2", attempt: 2, leaseExpiresAt: 3_501 } },
+    });
+  });
+
+  it("requires the claim token for heartbeat and completion", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    expect(store.heartbeat("1", "wrong", 1_500, 1_000)).toBeUndefined();
+    expect(store.heartbeat("1", "claim-1", 1_500, 1_000)?.claim?.leaseExpiresAt).toBe(2_500);
+    expect(store.heartbeat("1", "claim-1", 2_501, 1_000)).toBeUndefined();
+    expect(store.complete("1", "wrong", 2_000)).toBeUndefined();
+    expect(store.complete("1", "claim-1", 2_000)?.status).toBe("completed");
+    expect(store.get("1")?.claim).toBeUndefined();
+  });
+
   it("updates task details explicitly", () => {
     store.create("old", "old desc");
     const entry = store.updateDetails("1", { subject: "new", description: "new desc" });

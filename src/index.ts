@@ -15,6 +15,7 @@
  *   /tasks   — View or manage native fallback tasks when pi-tasks is absent
  */
 
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
 import { registerTasksCommand } from "./commands/tasks-command.js";
@@ -50,6 +51,7 @@ function isStaleExtensionContextError(error: unknown): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+  const runtimeId = randomUUID();
   const piLoopEnv = process.env.PI_LOOP;
   const piLoopScope = process.env.PI_LOOP_SCOPE as "memory" | "session" | "project" | undefined;
   let loopScope: "memory" | "session" | "project" = piLoopScope ?? "session";
@@ -436,6 +438,10 @@ export default function (pi: ExtensionAPI) {
         pi,
         taskStore,
         evaluateTaskBacklog,
+        getTaskOwner: () => ({
+          sessionId: _sessionId ?? "unbound",
+          runtimeId,
+        }),
         updateWidget: () => {
           widget.update();
         },

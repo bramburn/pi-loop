@@ -87,6 +87,7 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
       status: "pending",
       createdAt: event.at,
       updatedAt: event.at,
+      revision: 0,
       metadata: event.payload.metadata,
       workflow: event.payload.workflow,
     };
@@ -121,6 +122,17 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     };
   }
 
+  if (event.type === "TASK_STARTED" && (current.status === "completed" || current.status === "closed")) {
+    return { state, effects: [] };
+  }
+  if ((event.type === "TASK_COMPLETED" || event.type === "TASK_CLOSED")
+    && (current.status === "completed" || current.status === "closed")) {
+    return { state, effects: [] };
+  }
+  if (event.type === "TASK_REOPENED" && current.status !== "completed" && current.status !== "closed") {
+    return { state, effects: [] };
+  }
+
   const next = cloneState(state);
   const task: TaskEntry = { ...current };
 
@@ -133,17 +145,21 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     task.status = "completed";
     task.updatedAt = event.at;
     task.completedAt = event.at;
+    task.claim = undefined;
   }
 
   if (event.type === "TASK_CLOSED") {
     task.status = "closed";
     task.updatedAt = event.at;
     task.closedAt = event.at;
+    task.claim = undefined;
   }
 
   if (event.type === "TASK_REOPENED") {
     task.status = "pending";
     task.updatedAt = event.at;
+    task.reopenedAt = event.at;
+    task.claim = undefined;
     // `completedAt` is intentionally retained: it records the most recent
     // completion, not "is currently complete" (use `status` for that). A
     // reopened task keeps the timestamp of when it was last completed.
@@ -155,6 +171,7 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     task.updatedAt = event.at;
   }
 
+  task.revision = (current.revision ?? 0) + 1;
   next.tasksById[id] = task;
   return {
     state: next,

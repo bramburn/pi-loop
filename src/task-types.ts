@@ -6,6 +6,16 @@ export interface TaskWorkflowLink {
   transitionSeq: number;
 }
 
+export interface TaskClaim {
+  claimId: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  claimedAt: number;
+  heartbeatAt: number;
+  leaseExpiresAt: number;
+  attempt: number;
+}
+
 export interface TaskEntry {
   id: string;
   subject: string;
@@ -13,7 +23,10 @@ export interface TaskEntry {
   status: TaskStatus;
   createdAt: number;
   updatedAt: number;
+  revision?: number;
+  claim?: TaskClaim;
   completedAt?: number;
+  reopenedAt?: number;
   closedAt?: number;
   metadata?: Record<string, unknown>;
   workflow?: TaskWorkflowLink;

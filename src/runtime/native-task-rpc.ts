@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  type ClaimTaskReply,
   type CleanReply,
   type CreateTaskReply,
+  type HeartbeatTaskReply,
   type PendingReply,
   type PingReply,
   TASKS_RPC,
@@ -11,8 +13,10 @@ import { handleRpc, PROTOCOL_VERSION } from "../rpc/cross-extension-rpc.js";
 import type { TaskStore } from "../task-store.js";
 import type { TaskStatus } from "../task-types.js";
 import {
+  claimTask,
   cleanTasks,
   createTask,
+  heartbeatTask,
   type TaskBacklogResult,
   type TaskMutationContext,
   updateTask,
@@ -34,6 +38,23 @@ interface UpdateTaskRequest {
   status?: TaskStatus;
   subject?: string;
   description?: string;
+  claimId?: string;
+}
+
+interface ClaimTaskRequest {
+  requestId: string;
+  id?: string;
+  ownerSessionId?: string;
+  ownerRuntimeId?: string;
+  leaseMs?: number;
+  claimId?: string;
+}
+
+interface HeartbeatTaskRequest {
+  requestId: string;
+  id?: string;
+  claimId?: string;
+  leaseMs?: number;
 }
 
 export interface NativeTaskRpcOptions {
@@ -130,9 +151,55 @@ export function registerNativeTaskRpc(options: NativeTaskRpcOptions): void {
         status: request.status,
         subject: request.subject,
         description: request.description,
+        claimId: request.claimId,
       });
       if (!result) throw new Error(`Task #${request.id} not found`);
       return { task: result.entry };
+    },
+    settledRpcOpts,
+  );
+
+  handleRpc<ClaimTaskRequest, ClaimTaskReply>(
+    pi.events,
+    TASKS_RPC.claim,
+    async (request) => {
+      if (!request.id || !request.ownerSessionId || !request.ownerRuntimeId || !request.leaseMs) {
+        throw new Error("id, ownerSessionId, ownerRuntimeId, and leaseMs are required");
+      }
+      const claimed = await claimTask(requireMutationContext(), {
+        id: request.id,
+        claim: {
+          claimId: request.claimId,
+          ownerSessionId: request.ownerSessionId,
+          ownerRuntimeId: request.ownerRuntimeId,
+          leaseMs: request.leaseMs,
+        },
+      });
+      if (!claimed) throw new Error(`Task #${request.id} is not claimable`);
+      return {
+        task: claimed.result.entry,
+        claim: claimed.result.claim,
+        takenOver: claimed.result.takenOver,
+        renewed: claimed.result.renewed,
+      };
+    },
+    settledRpcOpts,
+  );
+
+  handleRpc<HeartbeatTaskRequest, HeartbeatTaskReply>(
+    pi.events,
+    TASKS_RPC.heartbeat,
+    (request) => {
+      if (!request.id || !request.claimId || !request.leaseMs) {
+        throw new Error("id, claimId, and leaseMs are required");
+      }
+      const task = heartbeatTask(requireMutationContext(), {
+        id: request.id,
+        claimId: request.claimId,
+        leaseMs: request.leaseMs,
+      });
+      if (!task) throw new Error(`Task #${request.id} heartbeat rejected`);
+      return { task };
     },
     settledRpcOpts,
   );

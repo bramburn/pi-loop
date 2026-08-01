@@ -24,7 +24,7 @@ const LEGACY_WORKER_PROMPT =
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 const PREVIOUS_WORKER_PROMPT =
-  "Run TaskList and read each pending task's description; use TaskGet whenever an excerpt is truncated. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Mark the chosen task in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+  "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Resume an eligible in_progress task before claiming new work. If a dependent task is blocked, follow its prerequisite chain to the earliest unfinished task and resume it when it is in_progress. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: resume it, verify evidence and complete it, or report why it is actively owned or blocked and what recovery is required. Mark newly claimed work in_progress, implement it, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
   return {
@@ -99,6 +99,9 @@ describe("task-backlog-runtime predicates", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/resume.*in_progress/i);
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/follow.*prerequisite.*chain/i);
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never report.*no eligible.*in_progress/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("TaskClaim");
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("TaskHeartbeat");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/pass claimId to TaskUpdate/i);
   });
 
   it("retains the immediately previous worker prompt for persisted loops", () => {

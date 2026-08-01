@@ -62,18 +62,26 @@ describe("task store properties", () => {
               const taskId = String(current.id);
               const existing = model.get(taskId);
               switch (current.kind) {
-                case "start":
-                  expect(store.start(taskId) === undefined).toBe(existing === undefined);
-                  if (existing) existing.status = "in_progress";
+                case "start": {
+                  const allowed = existing !== undefined
+                    && (existing.status === "pending" || existing.status === "in_progress");
+                  expect(store.start(taskId) === undefined).toBe(!allowed);
+                  if (allowed) existing.status = "in_progress";
                   break;
-                case "complete":
-                  expect(store.complete(taskId) === undefined).toBe(existing === undefined);
-                  if (existing) existing.status = "completed";
+                }
+                case "complete": {
+                  const allowed = existing !== undefined
+                    && (existing.status === "pending" || existing.status === "in_progress");
+                  expect(store.complete(taskId) === undefined).toBe(!allowed);
+                  if (allowed) existing.status = "completed";
                   break;
-                case "reopen":
-                  expect(store.reopen(taskId) === undefined).toBe(existing === undefined);
-                  if (existing) existing.status = "pending";
+                }
+                case "reopen": {
+                  const allowed = existing?.status === "completed";
+                  expect(store.reopen(taskId) === undefined).toBe(!allowed);
+                  if (allowed) existing.status = "pending";
                   break;
+                }
                 case "delete":
                   expect(store.delete(taskId)).toBe(existing !== undefined);
                   model.delete(taskId);

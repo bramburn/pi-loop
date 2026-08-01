@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { TaskStore } from "../task-store.js";
+import type { TaskClaimInput, TaskClaimResult, TaskStore } from "../task-store.js";
 import type { TaskEntry, TaskStatus } from "../task-types.js";
 import { emitNativeTaskEvent } from "./task-events.js";
 
@@ -24,6 +24,7 @@ export interface UpdateTaskFields {
   status?: TaskStatus;
   subject?: string;
   description?: string;
+  claimId?: string;
 }
 
 /**
@@ -47,11 +48,33 @@ export async function createTask(
   return { entry, backlog };
 }
 
+export async function claimTask(
+  ctx: TaskMutationContext,
+  params: { id: string; claim: TaskClaimInput },
+): Promise<{ result: TaskClaimResult; backlog: TaskBacklogResult } | undefined> {
+  const previous = ctx.taskStore.get(params.id);
+  if (!previous) return undefined;
+  const result = ctx.taskStore.claim(params.id, params.claim);
+  if (!result) return undefined;
+  if (!result.renewed) emitNativeTaskEvent(ctx.pi, "tasks:started", result.entry, previous.status);
+  const backlog = await settle(ctx);
+  return { result, backlog };
+}
+
+export function heartbeatTask(
+  ctx: TaskMutationContext,
+  params: { id: string; claimId: string; leaseMs: number },
+): TaskEntry | undefined {
+  const entry = ctx.taskStore.heartbeat(params.id, params.claimId, Date.now(), params.leaseMs);
+  if (entry) ctx.updateWidget();
+  return entry;
+}
+
 export async function updateTask(
   ctx: TaskMutationContext,
   params: UpdateTaskFields,
 ): Promise<{ entry: TaskEntry; backlog: TaskBacklogResult } | undefined> {
-  const { id, status, subject, description } = params;
+  const { id, status, subject, description, claimId } = params;
   let entry = ctx.taskStore.get(id);
   if (!entry) return undefined;
 
@@ -60,10 +83,10 @@ export async function updateTask(
     entry = ctx.taskStore.start(id);
     if (entry) emitNativeTaskEvent(ctx.pi, "tasks:started", entry, previousStatus);
   } else if (status === "completed") {
-    entry = ctx.taskStore.complete(id);
+    entry = ctx.taskStore.complete(id, claimId);
     if (entry) emitNativeTaskEvent(ctx.pi, "tasks:completed", entry, previousStatus);
   } else if (status === "closed") {
-    entry = ctx.taskStore.close(id);
+    entry = ctx.taskStore.close(id, claimId);
     if (entry) emitNativeTaskEvent(ctx.pi, "tasks:closed", entry, previousStatus);
   } else if (status === "pending") {
     entry = ctx.taskStore.reopen(id);

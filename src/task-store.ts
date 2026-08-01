@@ -1,11 +1,27 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
 import { reduceTaskState, type TaskReducerEvent, type TaskReducerState } from "./task-reducer.js";
-import type { TaskEntry, TaskStoreData, TaskWorkflowLink } from "./task-types.js";
+import type { TaskClaim, TaskEntry, TaskStoreData, TaskWorkflowLink } from "./task-types.js";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const MAX_TASKS = 200;
+
+export interface TaskClaimInput {
+  claimId?: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  now?: number;
+  leaseMs: number;
+}
+
+export interface TaskClaimResult {
+  entry: TaskEntry;
+  claim: TaskClaim;
+  takenOver: boolean;
+  renewed: boolean;
+}
 
 export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, TaskReducerEvent, TaskStoreData> {
   constructor(listIdOrPath?: string) {
@@ -39,10 +55,75 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
+  claim(id: string, input: TaskClaimInput): TaskClaimResult | undefined {
+    if (!input.ownerSessionId || !input.ownerRuntimeId || !Number.isFinite(input.leaseMs) || input.leaseMs <= 0) {
+      return undefined;
+    }
+    return this.withLock(() => {
+      const current = this.entries.get(id);
+      if (!current || current.status === "completed" || current.status === "closed") return undefined;
+      const now = input.now ?? Date.now();
+      const existing = current.claim;
+      const sameOwner = existing?.ownerSessionId === input.ownerSessionId
+        && existing.ownerRuntimeId === input.ownerRuntimeId;
+      if (existing && existing.leaseExpiresAt > now && !sameOwner) return undefined;
+
+      const takenOver = current.status === "in_progress" && !sameOwner;
+      const claim: TaskClaim = sameOwner && existing
+        ? {
+            ...existing,
+            heartbeatAt: now,
+            leaseExpiresAt: now + input.leaseMs,
+          }
+        : {
+            claimId: input.claimId ?? randomUUID(),
+            ownerSessionId: input.ownerSessionId,
+            ownerRuntimeId: input.ownerRuntimeId,
+            claimedAt: now,
+            heartbeatAt: now,
+            leaseExpiresAt: now + input.leaseMs,
+            attempt: (existing?.attempt ?? 0) + 1,
+          };
+      const entry: TaskEntry = {
+        ...current,
+        status: "in_progress",
+        updatedAt: now,
+        revision: (current.revision ?? 0) + 1,
+        claim,
+      };
+      this.entries.set(id, entry);
+      return { entry, claim, takenOver, renewed: sameOwner && existing !== undefined };
+    });
+  }
+
+  heartbeat(id: string, claimId: string, now = Date.now(), leaseMs = 30 * 60 * 1000): TaskEntry | undefined {
+    return this.withLock(() => {
+      const current = this.entries.get(id);
+      if (!current?.claim
+        || current.claim.claimId !== claimId
+        || current.claim.leaseExpiresAt <= now
+        || current.status !== "in_progress") {
+        return undefined;
+      }
+      const entry: TaskEntry = {
+        ...current,
+        updatedAt: now,
+        revision: (current.revision ?? 0) + 1,
+        claim: {
+          ...current.claim,
+          heartbeatAt: now,
+          leaseExpiresAt: now + leaseMs,
+        },
+      };
+      this.entries.set(id, entry);
+      return entry;
+    });
+  }
+
   start(id: string): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry || entry.status === "completed" || entry.status === "closed" || entry.claim) return undefined;
       this.applyReducerEvent({
         type: "TASK_STARTED",
         at: Date.now(),
@@ -55,13 +136,17 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
-  complete(id: string): TaskEntry | undefined {
+  complete(id: string, claimId?: string, now = Date.now()): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry
+        || (entry.status !== "pending" && entry.status !== "in_progress")
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return undefined;
+      }
       this.applyReducerEvent({
         type: "TASK_COMPLETED",
-        at: Date.now(),
+        at: now,
         source: "tool",
         entityType: "task",
         entityId: id,
@@ -71,13 +156,17 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
-  close(id: string): TaskEntry | undefined {
+  close(id: string, claimId?: string, now = Date.now()): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry
+        || (entry.status !== "pending" && entry.status !== "in_progress")
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return undefined;
+      }
       this.applyReducerEvent({
         type: "TASK_CLOSED",
-        at: Date.now(),
+        at: now,
         source: "tool",
         entityType: "task",
         entityId: id,
@@ -90,7 +179,7 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
   reopen(id: string): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry || (entry.status !== "completed" && entry.status !== "closed")) return undefined;
       this.applyReducerEvent({
         type: "TASK_REOPENED",
         at: Date.now(),

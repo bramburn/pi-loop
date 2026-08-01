@@ -11,7 +11,13 @@ const theme = {
 function setup(backlog: NativeTaskToolsOptions["evaluateTaskBacklog"] = vi.fn(async () => ({ created: false }))) {
   const { pi, toolMap, emittedEvents } = createMockPi();
   const taskStore = new TaskStore();
-  registerNativeTaskTools({ pi, taskStore, evaluateTaskBacklog: backlog, updateWidget: vi.fn() });
+  registerNativeTaskTools({
+    pi,
+    taskStore,
+    evaluateTaskBacklog: backlog,
+    getTaskOwner: () => ({ sessionId: "session-a", runtimeId: "runtime-a" }),
+    updateWidget: vi.fn(),
+  });
   const tool = (name: string) => toolMap.get(name)!;
   const result = async (name: string, args: any) => await tool(name).execute!("t", args);
   const text = async (name: string, args: any) => (await result(name, args)).content[0].text as string;
@@ -26,6 +32,8 @@ describe("task tool call renderers", () => {
 
     expect(render("TaskCreate", { subject: "Fix a failing check" })).toEqual(["Task create · Fix a failing check"]);
     expect(render("TaskList", {})).toEqual(["Task status"]);
+    expect(render("TaskClaim", { id: "7" })).toEqual(["Task claim · #7"]);
+    expect(render("TaskHeartbeat", { id: "7" })).toEqual(["Task heartbeat · #7"]);
     expect(render("TaskUpdate", { id: "7" })).toEqual(["Task update · #7"]);
     expect(render("TaskDelete", { id: "7" })).toEqual(["Task delete · #7"]);
   });
@@ -136,6 +144,34 @@ describe("TaskGet", () => {
   });
 });
 
+describe("TaskClaim and TaskHeartbeat", () => {
+  it("claims work, exposes ownership, and renews the lease", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+
+    const claimOutput = await h.text("TaskClaim", { id: "1", leaseSeconds: 60 });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+    expect(claimOutput).toContain("Task #1 claimed");
+    expect(claimId).toBeTruthy();
+    expect(await h.text("TaskList", {})).toContain(`claim ${claimId}`);
+    expect(await h.text("TaskGet", { id: "1" })).toContain(`Claim: ${claimId}`);
+
+    const heartbeat = await h.text("TaskHeartbeat", { id: "1", claimId, leaseSeconds: 120 });
+    expect(heartbeat).toContain("lease renewed");
+  });
+
+  it("rejects a wrong heartbeat and requires claimId at completion", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+    await h.text("TaskClaim", { id: "1" });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+
+    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "wrong" })).toContain("rejected");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("Claim token does not match");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId })).toContain("→ completed");
+  });
+});
+
 describe("TaskUpdate", () => {
   let h: ReturnType<typeof setup>;
   beforeEach(() => {
@@ -148,6 +184,7 @@ describe("TaskUpdate", () => {
     expect(h.taskStore.get("1")?.status).toBe("in_progress");
     expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("→ completed");
     expect(h.taskStore.get("1")?.status).toBe("completed");
+    expect(await h.text("TaskUpdate", { id: "1", status: "pending" })).toContain("→ pending");
     expect(await h.text("TaskUpdate", { id: "1", status: "closed" })).toContain("→ closed");
     expect(h.taskStore.get("1")?.status).toBe("closed");
     expect(h.taskStore.get("1")?.completedAt).toBeDefined();

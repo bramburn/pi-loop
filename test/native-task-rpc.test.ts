@@ -376,6 +376,93 @@ describe("tasks:rpc:update", () => {
   });
 });
 
+describe("tasks:rpc:claim and heartbeat", () => {
+  it("claims, renews, and completes work with the claim token", async () => {
+    const { mock, store } = setup();
+    store!.create("subject", "desc");
+
+    mock.pi.events.emit("tasks:rpc:claim", {
+      requestId: "claim-1",
+      id: "1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+      claimId: "token-a",
+    });
+    await flushAsync();
+    let reply = replyOf(mock, "tasks:rpc:claim", "claim-1");
+    expect(reply).toMatchObject({
+      success: true,
+      data: { claim: { claimId: "token-a", attempt: 1 }, takenOver: false, renewed: false },
+    });
+
+    mock.pi.events.emit("tasks:rpc:claim", {
+      requestId: "claim-renew",
+      id: "1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+      claimId: "ignored-token",
+    });
+    await flushAsync();
+    reply = replyOf(mock, "tasks:rpc:claim", "claim-renew");
+    expect(reply).toMatchObject({
+      success: true,
+      data: { claim: { claimId: "token-a", attempt: 1 }, renewed: true },
+    });
+    expect(mock.emittedEvents.filter((event) => event.name === "tasks:started")).toHaveLength(1);
+
+    mock.pi.events.emit("tasks:rpc:heartbeat", {
+      requestId: "heartbeat-1",
+      id: "1",
+      claimId: "token-a",
+      leaseMs: 120_000,
+    });
+    await flushAsync();
+    reply = replyOf(mock, "tasks:rpc:heartbeat", "heartbeat-1");
+    expect(reply.success).toBe(true);
+    expect(reply.data.task.claim.claimId).toBe("token-a");
+
+    mock.pi.events.emit("tasks:rpc:update", {
+      requestId: "complete-1",
+      id: "1",
+      status: "completed",
+      claimId: "token-a",
+    });
+    await flushAsync();
+    reply = replyOf(mock, "tasks:rpc:update", "complete-1");
+    expect(reply.data.task.status).toBe("completed");
+    expect(reply.data.task.claim).toBeUndefined();
+  });
+
+  it("rejects a concurrent live owner", async () => {
+    const { mock, store } = setup();
+    store!.create("subject", "desc");
+    mock.pi.events.emit("tasks:rpc:claim", {
+      requestId: "claim-a",
+      id: "1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+    });
+    await flushAsync();
+
+    mock.pi.events.emit("tasks:rpc:claim", {
+      requestId: "claim-b",
+      id: "1",
+      ownerSessionId: "session-b",
+      ownerRuntimeId: "runtime-b",
+      leaseMs: 60_000,
+    });
+    await flushAsync();
+
+    expect(replyOf(mock, "tasks:rpc:claim", "claim-b")).toEqual({
+      success: false,
+      error: "Task #1 is not claimable",
+    });
+  });
+});
+
 describe("native-task-rpc detection-window gate", () => {
   it("answers ping but keeps mutating verbs silent until detection settles", async () => {
     const { mock, setSettled } = setup({ detectionSettled: false });

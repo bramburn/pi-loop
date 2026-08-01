@@ -1,12 +1,14 @@
 // VENDORED MODULE — canonical copy shared verbatim by pi-loop and pi-orca.
 // If you edit this file, copy it to the sibling repo and bump VENDOR_REV.
-// VENDOR_REV: 3
+// VENDOR_REV: 4
 
 /** Cross-extension RPC channels served by a tasks provider (pi-tasks or pi-loop native). */
 export const TASKS_RPC = {
   ping: "tasks:rpc:ping",
   create: "tasks:rpc:create",
   update: "tasks:rpc:update",
+  claim: "tasks:rpc:claim",
+  heartbeat: "tasks:rpc:heartbeat",
   pending: "tasks:rpc:pending",
   clean: "tasks:rpc:clean",
 } as const;
@@ -47,9 +49,22 @@ export interface TaskEntryWire {
   status: TaskStatusWire;
   createdAt: number;
   updatedAt: number;
+  revision?: number;
+  claim?: TaskClaimWire;
   completedAt?: number;
+  reopenedAt?: number;
   closedAt?: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface TaskClaimWire {
+  claimId: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  claimedAt: number;
+  heartbeatAt: number;
+  leaseExpiresAt: number;
+  attempt: number;
 }
 
 export interface CreateTaskParams {
@@ -68,6 +83,32 @@ export interface UpdateTaskParams {
   status?: TaskStatusWire;
   subject?: string;
   description?: string;
+  claimId?: string;
+}
+
+export interface ClaimTaskParams {
+  id: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  leaseMs: number;
+  claimId?: string;
+}
+
+export interface ClaimTaskReply {
+  task: TaskEntryWire;
+  claim: TaskClaimWire;
+  takenOver: boolean;
+  renewed: boolean;
+}
+
+export interface HeartbeatTaskParams {
+  id: string;
+  claimId: string;
+  leaseMs: number;
+}
+
+export interface HeartbeatTaskReply {
+  task: TaskEntryWire;
 }
 
 export interface UpdateTaskReply {
