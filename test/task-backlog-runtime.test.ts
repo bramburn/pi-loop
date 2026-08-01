@@ -65,6 +65,12 @@ function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
 }
 
 describe("task-backlog-runtime predicates", () => {
+  it("teaches the worker to honor task descriptions and next-task sequencing", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("read each pending task's description");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/next task/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/prefer/i);
+  });
+
   it("identifies an auto-task worker loop", () => {
     const { runtime } = setup();
     expect(runtime.isAutoTaskWorkerLoop(makeLoop())).toBe(true);

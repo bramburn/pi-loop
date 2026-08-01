@@ -17,7 +17,7 @@ import {
 } from "./loop-events.js";
 
 export const AUTO_TASK_WORKER_THRESHOLD = 5;
-export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, read each pending task's description, and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 export interface TaskBacklogRuntimeOptions {
   getLoops: () => LoopEntry[];
