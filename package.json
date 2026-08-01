@@ -4,6 +4,7 @@
   "description": "A pi extension for cron/event-based agent re-wake loops and background process monitoring.",
   "author": "trevonistrevon",
   "license": "MIT",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/trvon/pi-loop.git"
@@ -18,7 +19,6 @@
     "scheduler"
   ],
   "files": [
-    "src/",
     "dist/",
     "docs/USAGE_GUIDE.md",
     "docs/PROFILING_AND_FUZZING.md",
@@ -27,8 +27,16 @@
     "LICENSE"
   ],
   "exports": {
-    ".": "./src/index.ts",
-    "./api": "./src/api.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js",
+      "default": "./dist/api.js"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
@@ -42,7 +50,8 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:package",
+    "test:package": "node scripts/package-smoke.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -73,7 +82,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ]
   }
 }
