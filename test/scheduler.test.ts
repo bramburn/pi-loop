@@ -33,6 +33,21 @@ describe("CronScheduler", () => {
     expect(fired).toContain("1");
   });
 
+  it("deletes a fired cron one-shot so restart cannot re-arm it", () => {
+    const entry = store.create(cronTrigger, "one shot", { recurring: false });
+    scheduler.add(entry);
+
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    scheduler.pump(Date.now());
+
+    expect(fired).toEqual([entry.id]);
+    expect(store.get(entry.id)).toBeUndefined();
+    scheduler.stop();
+    scheduler = new CronScheduler(store, (loop) => fired.push(loop.id));
+    scheduler.start();
+    expect(scheduler.nextFire(entry.id)).toBeUndefined();
+  });
+
   it("does not fire paused loops", () => {
     const entry = store.create(cronTrigger, "paused test", { recurring: false });
     store.pause(entry.id);

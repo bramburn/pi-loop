@@ -2,8 +2,6 @@ import { computeJitter, cronToNextFire } from "./loop-parse.js";
 import type { LoopStore } from "./store.js";
 import type { LoopEntry } from "./types.js";
 
-const _MAX_EXPIRY_DAYS = 7;
-
 function computeNextFire(entry: LoopEntry): Date {
   if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
     return cronToNextFire(entry.trigger.type === "hybrid" ? entry.trigger.cron : entry.trigger.schedule);
@@ -106,17 +104,19 @@ export class CronScheduler {
         continue;
       }
 
-      if (fresh.recurring && fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+      if (!fresh.recurring) {
         this.store.delete(id);
         this.fireTimes.delete(id);
         continue;
       }
 
-      if (fresh.recurring) {
-        this.armTimer(fresh);
-      } else {
+      if (fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+        this.store.delete(id);
         this.fireTimes.delete(id);
+        continue;
       }
+
+      this.armTimer(fresh);
     }
   }
 }
