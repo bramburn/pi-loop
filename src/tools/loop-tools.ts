@@ -678,6 +678,7 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           const remaining = Math.max(0, nextFire - Date.now());
           line += ` next: ${formatRemaining(remaining)}`;
         }
+        line += ` elapsed: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
         if (entry.autoTask) line += " [auto-task]";
         if (entry.taskBacklog) line += " [backlog-worker]";
         if (entry.workflow) line += ` [workflow:${entry.workflow.currentState}]`;

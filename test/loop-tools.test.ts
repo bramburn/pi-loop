@@ -156,6 +156,20 @@ describe("LoopList", () => {
     expect(out).toContain("[active]");
     expect(out).toContain("cron:");
   });
+
+  it("shows elapsed running time for active loops", async () => {
+    const h = setup();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    try {
+      await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
+      vi.setSystemTime(new Date("2026-01-01T00:03:00Z"));
+      const out = await h.text("LoopList", {});
+      expect(out).toContain("elapsed: 3m");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("LoopUpdate", () => {
