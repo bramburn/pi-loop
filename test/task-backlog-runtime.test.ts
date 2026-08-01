@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTO_TASK_WORKER_LEGACY_PROMPTS,
   AUTO_TASK_WORKER_PROMPT,
   createTaskBacklogRuntime,
   type TaskBacklogRuntimeOptions,
@@ -21,6 +22,9 @@ const tasksCreatedTrigger: Trigger = { type: "event", source: "tasks:created" };
 
 const LEGACY_WORKER_PROMPT =
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+
+const PREVIOUS_WORKER_PROMPT =
+  "Run TaskList, read each pending task's description (use TaskGet when the excerpt truncates it), and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
   return {
@@ -76,6 +80,16 @@ describe("task-backlog-runtime predicates", () => {
 
   it("teaches the worker to use TaskGet for full descriptions", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/TaskGet/i);
+  });
+
+  it("orders a prerequisite A before its dependent B", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("no unresolved prerequisite");
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("complete A before B");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never.*dependent.*prerequisite/i);
+  });
+
+  it("retains the immediately previous worker prompt for persisted loops", () => {
+    expect(AUTO_TASK_WORKER_LEGACY_PROMPTS).toContain(PREVIOUS_WORKER_PROMPT);
   });
 
   it("identifies an auto-task worker loop", () => {

@@ -88,8 +88,12 @@ describe("TaskList", () => {
     );
 
     const output = await result("TaskList", {});
+    const content = output.content[0].text;
     const details = output.details as { summary: string; expanded: string[] };
     const expanded = details.expanded.join("\n");
+    expect(content).toContain("Investigate regression");
+    expect(content).toContain("Find the root cause; next: implement fix (task #2).");
+    expect(content).toContain("workflow #3");
     expect(expanded).toContain("Investigate regression");
     expect(expanded).toContain("Find the root cause; next: implement fix (task #2).");
     expect(expanded).toContain("workflow #3");

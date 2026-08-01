@@ -104,10 +104,12 @@ Fields:
         statuses[t.status]++;
         const icon = t.status === "completed" ? "ok" : t.status === "closed" ? "x" : t.status === "in_progress" ? ">" : "*";
         const row = `${icon} #${t.id} [${t.status}] ${t.subject.slice(0, 80)}`;
-        lines.push(row);
-        expanded.push(row);
-        if (t.description) expanded.push(`    ${t.description.slice(0, 120)}`);
-        if (t.workflow) expanded.push(`    workflow #${t.workflow.loopId} · state ${t.workflow.stateId}`);
+        const context = [
+          t.description ? `    ${t.description.slice(0, 120)}` : undefined,
+          t.workflow ? `    workflow #${t.workflow.loopId} · state ${t.workflow.stateId}` : undefined,
+        ].filter((line): line is string => line !== undefined);
+        lines.push(row, ...context);
+        expanded.push(row, ...context);
       }
       lines.unshift(`${tasks.length} tasks (${statuses.pending} pending, ${statuses.in_progress} in progress, ${statuses.completed} done, ${statuses.closed} closed)`);
       return Promise.resolve(textResult(lines.join("\n"), {

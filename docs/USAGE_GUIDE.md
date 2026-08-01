@@ -159,7 +159,7 @@ The native provider is selected for the session and exposes `/tasks`, compact st
 
 TaskList shows each task with a short description excerpt and its workflow link (loop/state) when one exists. TaskGet reads the full untruncated description, timestamps, metadata, and workflow link — use it before starting a chained task whose goal-state and next-step text exceeds the excerpt.
 
-Set `taskBacklog=true` on a loop that processes existing pending tasks. Backlog workers bootstrap when tasks already exist and delete themselves when the queue drains. Workers pick the next pending task by reading each description and preferring a task whose description names a next task or successor, so chain-created backlogs are processed in dependency order. `autoTask` serves a different purpose: it creates a new task on each loop fire.
+Set `taskBacklog=true` on a loop that processes existing pending tasks. Backlog workers bootstrap when tasks already exist and delete themselves when the queue drains. TaskList exposes bounded description and workflow context in model-visible output; workers use TaskGet when an excerpt is truncated. Workers choose a pending task with no unresolved prerequisite: if A names B as its successor, or B says it depends on A, A must complete before B. `autoTask` serves a different purpose: it creates a new task on each loop fire.
 
 ## Events
 
