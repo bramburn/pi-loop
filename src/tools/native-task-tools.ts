@@ -44,7 +44,7 @@ export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
       "When the user gives a broad goal, use multiple TaskCreate calls to decompose it into a small backlog of concrete tasks rather than one oversized task.",
       "If the user supplies a shared goal or meta-goal, preserve it explicitly using the user's wording and tie each created task back to that goal in its description.",
       "When the user asks to break work into tasks, create the backlog directly and do not pivot to loops, monitors, or other automation unless the user also asked for ongoing automation.",
-      "Use short verb-object subjects; descriptions state the artifact, done condition, dependencies, and next task when chained.",
+      "Use short verb-object subjects; descriptions state the goal state, artifact, done condition, dependencies, and next task when chained.",
       "Use WorkflowCreate for named phases/outcomes and LoopCreate taskBacklog=true only when autonomous backlog processing was explicitly requested.",
     ],
     parameters: Type.Object({
