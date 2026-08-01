@@ -48,15 +48,23 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "bash test/e2e/reminder-injection.sh",
+    "test:property": "TZ=UTC vitest run test/property --maxWorkers=1 --no-file-parallelism --passWithNoTests",
+    "test:fuzz": "FC_NUM_RUNS=10000 npm run test:property",
+    "bench": "TZ=UTC vitest bench --run --maxWorkers=1 --no-file-parallelism --passWithNoTests",
+    "bench:baseline": "node -e \"require('node:fs').mkdirSync('.artifacts/benchmarks',{recursive:true})\" && npm run bench -- --outputJson .artifacts/benchmarks/baseline.json",
+    "bench:compare": "npm run bench -- --compare .artifacts/benchmarks/baseline.json",
     "hooks:install": "git config core.hooksPath .githooks",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome check src/ test/",
-    "lint:fix": "biome check --fix src/ test/"
+    "typecheck": "npm run typecheck:prod && tsc -p tsconfig.dev.json",
+    "typecheck:prod": "tsc --noEmit",
+    "lint": "biome check src/ test/ benchmarks/",
+    "lint:fix": "biome check --fix src/ test/ benchmarks/"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@types/node": "^25.0.0",
     "@vitest/coverage-v8": "^4.1.8",
+    "fast-check": "^4.9.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.0",
     "vitest": "^4.1.5"
   },
