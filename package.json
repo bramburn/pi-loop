@@ -9,6 +9,9 @@
     "type": "git",
     "url": "https://github.com/trvon/pi-loop.git"
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "pi",
