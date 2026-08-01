@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type LoopReducerEvent, type LoopReducerState, reduceLoopState } from "./loop-reducer.js";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
 import type { DynamicLoopState, LoopDeletionTombstone, LoopDeletionTombstoneInput, LoopEntry, LoopStoreData, Trigger, WorkflowDefinition, WorkflowTerminalStatus } from "./types.js";
-import { transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionInput } from "./workflow-reducer.js";
+import { isTerminalWorkflowRun, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionInput } from "./workflow-reducer.js";
 
 const LOOPS_DIR = join(homedir(), ".pi", "loops");
 const MAX_LOOPS = 25;
@@ -77,7 +77,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
   resume(id: string): LoopEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry || isTerminalWorkflowRun(entry.workflow)) return undefined;
       this.applyReducerEvent({
         type: "LOOP_RESUMED",
         at: Date.now(),

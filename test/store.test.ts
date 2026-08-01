@@ -78,6 +78,26 @@ describe("LoopStore (in-memory)", () => {
     expect(entry!.status).toBe("active");
   });
 
+  it("does not resume a workflow paused in a terminal state", () => {
+    store.create({ type: "dynamic" }, "Investigate", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "investigate",
+        states: {
+          investigate: { prompt: "Find the blocker.", on: { blocked: "blocked" } },
+          blocked: { prompt: "Report the blocker.", terminal: "paused" },
+        },
+      },
+    });
+    const result = store.transitionWorkflow("1", { outcome: "blocked" });
+    expect(result.terminal).toBe("paused");
+    store.pause("1");
+
+    expect(store.resume("1")).toBeUndefined();
+    expect(store.get("1")?.status).toBe("paused");
+  });
+
   it("updates loop prompt metadata", () => {
     store.create(cronTrigger, "original", { recurring: true });
     const { changedFields } = store.updateMetadata("1", { prompt: "updated" });

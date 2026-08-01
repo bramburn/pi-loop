@@ -29,6 +29,9 @@ export function validateWorkflowDefinition(definition: WorkflowDefinition): stri
   if (!definition.initialState || !definition.states[definition.initialState]) {
     return `Initial state "${definition.initialState}" is not defined`;
   }
+  if (definition.states[definition.initialState]?.terminal) {
+    return `Initial state "${definition.initialState}" cannot be terminal`;
+  }
 
   for (const [stateId, state] of Object.entries(definition.states)) {
     if (!stateId) return "Workflow state IDs must be non-empty";
@@ -62,6 +65,10 @@ export function createWorkflowRun(definition: WorkflowDefinition, at: number): W
     stateEnteredAt: at,
     attemptsByState: { [definition.initialState]: 1 },
   };
+}
+
+export function isTerminalWorkflowRun(run: WorkflowRunState | undefined): boolean {
+  return Boolean(run?.definition.states[run.currentState]?.terminal);
 }
 
 export function transitionWorkflowRun(

@@ -444,10 +444,10 @@ Recurring loops persist across fires. A completed iteration, unchanged result, o
 
 Use this when work has named phases and explicit outcomes, such as investigate → fix → validate. Use LoopCreate for ordinary scheduled/event work and TaskCreate for a normal flat backlog.
 
-The definition requires version: 1, initialState, and states. Each state has a prompt, optional task: {subject, description} (a tracked task created when the state is entered and completed on transition), an optional on outcome-to-state map, optional maxAttempts, and an optional terminal value of completed or paused.`,
+The definition requires version: 1, a non-terminal initialState, and states. Each state has a prompt, optional task: {subject, description} (a tracked task created when the state is entered and completed on transition), an optional on outcome-to-state map, optional maxAttempts, and an optional terminal value of completed or paused. Terminal states are final and cannot be resumed.`,
     promptGuidelines: [
       "Use WorkflowCreate only for explicit multi-phase work with stable named outcomes; ordinary reminders, polling, and task backlogs should remain loops or tasks.",
-      "Pass `definition` as valid JSON. Give each non-terminal state a concise prompt and explicit outcome names, for example `root_cause_found` or `tests_pass`.",
+      "Pass `definition` as valid JSON with a non-terminal initialState. Give each non-terminal state a concise prompt and explicit outcome names, for example `root_cause_found` or `tests_pass`.",
       "Each non-terminal state may declare `task: {subject, description}`; the runtime creates a tracked task when the state is entered and completes it when you transition out.",
       "Write state prompts to be self-contained: describe the deliverable of this phase. The previous phase's finding is replayed as transition evidence in the next wake, so the next state can rely on it.",
       "Express rework as cycles in the outcome map (e.g. `regression_found → investigate`); `maxAttempts` bounds how many times a state may be re-entered so rework cannot loop forever.",
@@ -578,7 +578,7 @@ Use exactly once after completing the current workflow state. The outcome must b
         return textResult(
           `Workflow #${entry.id} paused\n` +
           `Final state: ${entry.workflow?.currentState ?? "?"}\n` +
-          "Next: inspect it with WorkflowList before deciding whether to resume or delete it.",
+          "Next: inspect it with WorkflowList. Terminal workflow states cannot be resumed; delete the loop when it is no longer needed.",
           {
             kind: "workflow",
             action: "transition",
@@ -586,7 +586,7 @@ Use exactly once after completing the current workflow state. The outcome must b
             summary: `Workflow #${entry.id} paused · ${entry.workflow?.currentState ?? "?"}`,
             expanded: [
               sourceTaskId ? `Source task #${sourceTaskId}: ${sourceTaskClosed ? "completed" : "not completed"}` : "Source task: none",
-              "Inspect WorkflowList before resuming or deleting this workflow.",
+              "Inspect WorkflowList before deleting this terminal workflow.",
             ],
           },
         );

@@ -267,6 +267,26 @@ describe("Workflow tools", () => {
     h = setup();
   });
 
+  it("rejects a terminal initial state instead of creating an active dead end", async () => {
+    const terminalInitial = JSON.stringify({
+      version: 1,
+      initialState: "done",
+      states: {
+        done: { prompt: "Nothing remains.", terminal: "completed" },
+      },
+    });
+
+    const out = await h.text("WorkflowCreate", {
+      goal: "Already complete",
+      definition: terminalInitial,
+    });
+
+    expect(out).toContain("Workflow definition rejected");
+    expect(out).toContain('Initial state "done" cannot be terminal');
+    expect(h.store.list()).toHaveLength(0);
+    expect(h.onDynamicLoopActivated).not.toHaveBeenCalled();
+  });
+
   it("creates an opt-in dynamic workflow and activates its first state", async () => {
     const out = await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
 
@@ -423,6 +443,32 @@ describe("Workflow tools", () => {
     expect(out).toContain("Workflow #1 completed and deleted");
     expect(out).toContain("Final transition: fix → done");
     expect(h.store.get("1")).toBeUndefined();
+  });
+
+  it("does not suggest resuming a workflow paused in a terminal state", async () => {
+    const pausedDefinition = JSON.stringify({
+      version: 1,
+      initialState: "investigate",
+      states: {
+        investigate: { prompt: "Find the blocker.", on: { blocked: "blocked" } },
+        blocked: { prompt: "Report the blocker.", terminal: "paused" },
+      },
+    });
+    await h.text("WorkflowCreate", {
+      goal: "Investigate the blocker",
+      definition: pausedDefinition,
+    });
+
+    const out = await h.text("WorkflowTransition", {
+      id: "1",
+      outcome: "blocked",
+      evidence: "Credentials are unavailable.",
+    });
+
+    expect(out).toContain("Workflow #1 paused");
+    expect(out).toContain("Terminal workflow states cannot be resumed");
+    expect(out).not.toContain("resume or delete");
+    expect(h.store.get("1")?.status).toBe("paused");
   });
 
   it("explains how to recover from an invalid workflow definition", async () => {

@@ -294,6 +294,50 @@ describe("registerLoopCommand", () => {
     expect(ui.notify).toHaveBeenCalledWith("Loop #1 paused", "info");
   });
 
+  it("does not offer resume for a workflow paused in a terminal state", async () => {
+    h.store.create({ type: "dynamic" }, "Investigate", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "investigate",
+        states: {
+          investigate: { prompt: "Find the blocker.", on: { blocked: "blocked" } },
+          blocked: { prompt: "Report the blocker.", terminal: "paused" },
+        },
+      },
+    });
+    h.store.transitionWorkflow("1", { outcome: "blocked" });
+    h.store.pause("1");
+
+    const actionChoices: string[][] = [];
+    let loopVisits = 0;
+    const ui = {
+      select: vi.fn(async (title: string, choices: string[]) => {
+        if (title === "Loop") return "View loops";
+        if (title === "Loops") {
+          loopVisits++;
+          return loopVisits === 1
+            ? "- #1 [paused] Investigate (dynamic)"
+            : "< Back";
+        }
+        if (title.startsWith("#1")) {
+          actionChoices.push(choices);
+          return "< Back";
+        }
+        return undefined;
+      }),
+      input: vi.fn(),
+      notify: vi.fn(),
+    };
+
+    await h.command.handler!("", { ui } as any);
+
+    expect(actionChoices).toEqual([["x Delete", "< Back"]]);
+    expect(h.store.get("1")?.status).toBe("paused");
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(h.onDynamicLoopActivated).not.toHaveBeenCalled();
+  });
+
   it("resumes a blocked dynamic loop and clears its awaiting-update gate", async () => {
     await h.command.handler!("finish release", createCtx());
     h.store.updateDynamic("1", { dynamic: { awaitingUpdate: true } });
