@@ -18,11 +18,9 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
-import { registerTasksCommand } from "./commands/tasks-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { MonitorManager } from "./monitor-manager.js";
 import { createMonitorOnDoneRuntime } from "./runtime/monitor-ondone-runtime.js";
-import { registerNativeTaskRpc } from "./runtime/native-task-rpc.js";
 import {
   createNotificationRuntime,
   type LoopFireEvent,
@@ -30,13 +28,11 @@ import {
 import { resolveLoopStorePath, resolveTaskStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
 import { createTaskBacklogRuntime } from "./runtime/task-backlog-runtime.js";
-import { createTaskRuntimeBridge } from "./runtime/task-rpc.js";
+import { createTaskProviderRuntime, type TaskProviderRuntime } from "./runtime/task-provider-runtime.js";
 import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
-import { TaskStore } from "./task-store.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
 import { registerMonitorTools } from "./tools/monitor-tools.js";
-import { registerNativeTaskTools } from "./tools/native-task-tools.js";
 import { registerWorkflowTools } from "./tools/workflow-tools.js";
 import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry, Trigger } from "./types.js";
@@ -67,102 +63,13 @@ export default function (pi: ExtensionAPI) {
   // Repaint the status bar when a monitor finishes/prunes on its own (no tool
   // call), so stale monitors don't linger in the count between turns.
   monitorManager.setOnChange(() => widget.update());
-  widget.setTaskSummaryProvider(() => {
-    // Once pi-tasks owns the channels, any native store created during the
-    // detection window is a shadow — never surface it in the status line.
-    if (tasksAvailable || !nativeTaskStore) return { count: 0 };
-
-    let count = 0;
-    let activeSubject: string | undefined;
-    let nextSubject: string | undefined;
-    for (const task of nativeTaskStore.list()) {
-      if (task.status === "in_progress") {
-        count++;
-        activeSubject ??= task.subject;
-      } else if (task.status === "pending") {
-        count++;
-        nextSubject ??= task.subject;
-      }
-    }
-
-    const focus = activeSubject
-      ? `active: ${activeSubject.slice(0, 50)}`
-      : nextSubject
-        ? `next: ${nextSubject.slice(0, 50)}`
-        : undefined;
-    return { count, focusText: focus };
-  });
 
   scheduler = new CronScheduler(store, onLoopFire);
   triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
 
-  // ── pi-tasks integration ──
-  let tasksAvailable = false;
-  let tasksDetectionSettled = false;
-  let nativeTaskStore: TaskStore | undefined;
-  let nativeTasksRegistered = false;
-
-  function getOrCreateNativeTaskStore(): TaskStore | undefined {
-    // pi-tasks owns the task channels; don't create a shadow store.
-    if (tasksAvailable) return undefined;
-    if (!nativeTaskStore) {
-      nativeTaskStore = new TaskStore(resolveTaskStorePath(getScopeOptions(), _sessionId));
-    }
-    return nativeTaskStore;
-  }
-
-  const taskRuntime = createTaskRuntimeBridge({
-    pi,
-    isTasksAvailable: () => tasksAvailable,
-    setTasksAvailable: (available) => {
-      if (available) tasksAvailable = true;
-    },
-    getNativeTaskStore: () => nativeTaskStore,
-    onNativeTaskCreated: () => {
-      widget.update();
-    },
-    onNativeTasksPruned: async (taskStore) => {
-      widget.update();
-      await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
-    },
-    onDetectionStarted: () => {
-      tasksDetectionSettled = false;
-    },
-    onDetectionSettled: () => {
-      tasksDetectionSettled = true;
-    },
-    isDetectionSettled: () => tasksDetectionSettled,
-    onNativeTaskCompleted: () => {
-      widget.update();
-    },
-    debug,
-  });
-
-  // The RPC server registers at init (not behind the 6s tool-fallback timer) so
-  // early cross-extension calls never race the timer; it stands down via
-  // isEnabled once an external pi-tasks is detected. checkTasksVersion ignores
-  // this server's own ping reply via its provider field. Mutating verbs stay
-  // silent until the detection probe settles, so a co-resident pi-tasks can
-  // never race the native server into creating divergent task state.
-  registerNativeTaskRpc({
-    pi,
-    getNativeTaskStore: getOrCreateNativeTaskStore,
-    isEnabled: () => !tasksAvailable,
-    isDetectionSettled: () => tasksDetectionSettled,
-    evaluateTaskBacklog: (taskStore, pendingCount) =>
-      evaluateTaskBacklog(taskStore, pendingCount),
-    updateWidget: () => {
-      widget.update();
-    },
-    debug,
-  });
-
-  taskRuntime.checkTasksVersion();
-  pi.events.on("tasks:ready", () => taskRuntime.checkTasksVersion());
-
-  const autoCreateTask = taskRuntime.autoCreateTask;
-  const hasPendingTasks = taskRuntime.hasPendingTasks;
-  const cleanDoneTasks = taskRuntime.cleanDoneTasks;
+  let taskProvider: TaskProviderRuntime | undefined;
+  const hasPendingTasks = () => taskProvider?.hasPendingTasks() ?? Promise.resolve(-1);
+  const cleanDoneTasks = () => taskProvider?.cleanDoneTasks() ?? Promise.resolve();
 
   const notificationRuntime = createNotificationRuntime({
     pi,
@@ -248,6 +155,20 @@ export default function (pi: ExtensionAPI) {
   const cleanupTaskBacklogLoops = taskBacklogRuntime.cleanupTaskBacklogLoops;
   const evaluateTaskBacklog = taskBacklogRuntime.evaluateTaskBacklog;
 
+  taskProvider = createTaskProviderRuntime({
+    pi,
+    runtimeId,
+    resolveStorePath: () => resolveTaskStorePath(getScopeOptions(), _sessionId),
+    getSessionId: () => _sessionId,
+    evaluateTaskBacklog,
+    updateWidget: () => {
+      widget.update();
+    },
+    isStaleExtensionContextError,
+    debug,
+  });
+  widget.setTaskSummaryProvider(() => taskProvider?.summary() ?? { count: 0 });
+
   // ── Loop fire handler ──
 
   function onLoopFire(entry: LoopEntry): void {
@@ -272,7 +193,7 @@ export default function (pi: ExtensionAPI) {
       : entry;
 
     if (entry.autoTask) {
-      autoCreateTask(entry).then((taskId) => {
+      taskProvider?.autoCreateTask(entry).then((taskId) => {
         if (taskId) debug(`loop #${entry.id} → task #${taskId}`);
       });
     }
@@ -377,7 +298,7 @@ export default function (pi: ExtensionAPI) {
       widget.update();
     },
     maybeBootstrapTaskLoop,
-    isTaskSystemReady: () => tasksAvailable || nativeTasksRegistered,
+    isTaskSystemReady: () => taskProvider?.isReady() ?? false,
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
     },
@@ -393,8 +314,8 @@ export default function (pi: ExtensionAPI) {
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
     },
-    createWorkflowTask: (entry) => taskRuntime.createWorkflowTask(entry),
-    completeWorkflowTask: (taskId) => taskRuntime.completeWorkflowTask(taskId),
+    createWorkflowTask: (entry) => taskProvider?.createWorkflowTask(entry) ?? Promise.resolve(undefined),
+    completeWorkflowTask: (taskId) => taskProvider?.completeWorkflowTask(taskId) ?? Promise.resolve(false),
   });
 
   function handleMonitorDoneLoop(doneLoop: LoopEntry, monitorId: string): void {
@@ -423,50 +344,4 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── Native task tools (only when pi-tasks is absent) ──
-
-  // Only tool/command registration stays deferred: the tool names collide with
-  // pi-tasks and cannot be unregistered. The RPC server is already live (above).
-  const nativeTaskFallbackTimer = setTimeout(() => {
-    if (tasksAvailable || nativeTasksRegistered) return;
-    const taskStore = getOrCreateNativeTaskStore();
-    if (!taskStore) return;
-
-    try {
-      registerTasksCommand({
-        pi,
-        getNativeTaskStore: () => nativeTaskStore,
-        evaluateTaskBacklog,
-        updateWidget: () => {
-          widget.update();
-        },
-      });
-
-      registerNativeTaskTools({
-        pi,
-        taskStore,
-        evaluateTaskBacklog,
-        getTaskOwner: () => ({
-          sessionId: _sessionId ?? "unbound",
-          runtimeId,
-        }),
-        updateWidget: () => {
-          widget.update();
-        },
-      });
-    } catch (error) {
-      if (isStaleExtensionContextError(error)) {
-        debug("native task fallback skipped: extension context went stale");
-        return;
-      }
-      throw error;
-    }
-
-    nativeTasksRegistered = true;
-    debug("native task tools registered (pi-tasks not detected)");
-  }, 6000);
-
-  pi.on("session_shutdown", () => {
-    clearTimeout(nativeTaskFallbackTimer);
-  });
 }

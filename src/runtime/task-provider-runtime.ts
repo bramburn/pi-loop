@@ -1,0 +1,167 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerTasksCommand } from "../commands/tasks-command.js";
+import { TaskStore } from "../task-store.js";
+import { registerNativeTaskTools } from "../tools/native-task-tools.js";
+import { registerNativeTaskRpc } from "./native-task-rpc.js";
+import type { TaskBacklogResult } from "./task-mutations.js";
+import { createTaskRuntimeBridge } from "./task-rpc.js";
+
+export interface TaskProviderSummary {
+  count: number;
+  focusText?: string;
+}
+
+export interface TaskProviderRuntimeOptions {
+  pi: ExtensionAPI;
+  runtimeId: string;
+  resolveStorePath: () => string | undefined;
+  getSessionId: () => string | undefined;
+  evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
+  updateWidget: () => void;
+  isStaleExtensionContextError: (error: unknown) => boolean;
+  debug?: (...args: unknown[]) => void;
+  fallbackDelayMs?: number;
+}
+
+export interface TaskProviderRuntime {
+  autoCreateTask: ReturnType<typeof createTaskRuntimeBridge>["autoCreateTask"];
+  hasPendingTasks: ReturnType<typeof createTaskRuntimeBridge>["hasPendingTasks"];
+  cleanDoneTasks: ReturnType<typeof createTaskRuntimeBridge>["cleanDoneTasks"];
+  createWorkflowTask: ReturnType<typeof createTaskRuntimeBridge>["createWorkflowTask"];
+  completeWorkflowTask: ReturnType<typeof createTaskRuntimeBridge>["completeWorkflowTask"];
+  isReady(): boolean;
+  summary(): TaskProviderSummary;
+  getNativeTaskStore(): TaskStore | undefined;
+}
+
+export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): TaskProviderRuntime {
+  const {
+    pi,
+    runtimeId,
+    resolveStorePath,
+    getSessionId,
+    evaluateTaskBacklog,
+    updateWidget,
+    isStaleExtensionContextError,
+    debug,
+    fallbackDelayMs = 6_000,
+  } = options;
+
+  let tasksAvailable = false;
+  let detectionSettled = false;
+  let nativeTaskStore: TaskStore | undefined;
+  let nativeToolsRegistered = false;
+
+  function getOrCreateNativeTaskStore(): TaskStore | undefined {
+    if (tasksAvailable) return undefined;
+    nativeTaskStore ??= new TaskStore(resolveStorePath());
+    return nativeTaskStore;
+  }
+
+  const bridge = createTaskRuntimeBridge({
+    pi,
+    isTasksAvailable: () => tasksAvailable,
+    setTasksAvailable: (available) => {
+      if (available) tasksAvailable = true;
+    },
+    getNativeTaskStore: () => nativeTaskStore,
+    onNativeTaskCreated: updateWidget,
+    onNativeTasksPruned: async (taskStore) => {
+      updateWidget();
+      await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
+    },
+    onDetectionStarted: () => {
+      detectionSettled = false;
+    },
+    onDetectionSettled: () => {
+      detectionSettled = true;
+    },
+    isDetectionSettled: () => detectionSettled,
+    onNativeTaskCompleted: updateWidget,
+    debug,
+  });
+
+  registerNativeTaskRpc({
+    pi,
+    getNativeTaskStore: getOrCreateNativeTaskStore,
+    isEnabled: () => !tasksAvailable,
+    isDetectionSettled: () => detectionSettled,
+    evaluateTaskBacklog,
+    updateWidget,
+    debug,
+  });
+
+  bridge.checkTasksVersion();
+  pi.events.on("tasks:ready", () => bridge.checkTasksVersion());
+
+  const fallbackTimer = setTimeout(() => {
+    if (tasksAvailable || nativeToolsRegistered) return;
+    const taskStore = getOrCreateNativeTaskStore();
+    if (!taskStore) return;
+
+    try {
+      registerTasksCommand({
+        pi,
+        getNativeTaskStore: () => nativeTaskStore,
+        evaluateTaskBacklog,
+        updateWidget,
+      });
+      registerNativeTaskTools({
+        pi,
+        taskStore,
+        evaluateTaskBacklog,
+        getTaskOwner: () => ({
+          sessionId: getSessionId() ?? "unbound",
+          runtimeId,
+        }),
+        updateWidget,
+      });
+    } catch (error) {
+      if (isStaleExtensionContextError(error)) {
+        debug?.("native task fallback skipped: extension context went stale");
+        return;
+      }
+      throw error;
+    }
+
+    nativeToolsRegistered = true;
+    debug?.("native task tools registered (pi-tasks not detected)");
+  }, fallbackDelayMs);
+
+  pi.on("session_shutdown", () => {
+    clearTimeout(fallbackTimer);
+  });
+
+  function summary(): TaskProviderSummary {
+    if (tasksAvailable || !nativeTaskStore) return { count: 0 };
+    let count = 0;
+    let activeSubject: string | undefined;
+    let nextSubject: string | undefined;
+    for (const task of nativeTaskStore.list()) {
+      if (task.status === "in_progress") {
+        count++;
+        activeSubject ??= task.subject;
+      } else if (task.status === "pending") {
+        count++;
+        nextSubject ??= task.subject;
+      }
+    }
+    const focusText = activeSubject
+      ? `active: ${activeSubject.slice(0, 50)}`
+      : nextSubject
+        ? `next: ${nextSubject.slice(0, 50)}`
+        : undefined;
+    return { count, focusText };
+  }
+
+  return {
+    autoCreateTask: bridge.autoCreateTask,
+    hasPendingTasks: bridge.hasPendingTasks,
+    cleanDoneTasks: bridge.cleanDoneTasks,
+    createWorkflowTask: bridge.createWorkflowTask,
+    completeWorkflowTask: bridge.completeWorkflowTask,
+    isReady: () => tasksAvailable || nativeToolsRegistered,
+    summary,
+    getNativeTaskStore: () => nativeTaskStore,
+  };
+}
