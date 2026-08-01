@@ -50,21 +50,29 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
   let tasksAvailable = false;
   let detectionSettled = false;
   let nativeTaskStore: TaskStore | undefined;
+  const nativeTaskStores = new Map<string, TaskStore>();
   let nativeToolsRegistered = false;
 
   function getOrCreateNativeTaskStore(): TaskStore | undefined {
     if (tasksAvailable) return undefined;
-    nativeTaskStore ??= new TaskStore(resolveStorePath());
-    return nativeTaskStore;
+    const storePath = resolveStorePath();
+    const storeKey = storePath ?? `memory:${getSessionId() ?? "unbound"}`;
+    let taskStore = nativeTaskStores.get(storeKey);
+    if (!taskStore) {
+      taskStore = new TaskStore(storePath);
+      nativeTaskStores.set(storeKey, taskStore);
+    }
+    nativeTaskStore = taskStore;
+    return taskStore;
   }
 
   const bridge = createTaskRuntimeBridge({
     pi,
     isTasksAvailable: () => tasksAvailable,
     setTasksAvailable: (available) => {
-      if (available) tasksAvailable = true;
+      if (available && !nativeToolsRegistered) tasksAvailable = true;
     },
-    getNativeTaskStore: () => nativeTaskStore,
+    getNativeTaskStore: () => nativeTaskStore ? getOrCreateNativeTaskStore() : undefined,
     onNativeTaskCreated: updateWidget,
     onNativeTasksPruned: async (taskStore) => {
       updateWidget();
@@ -92,7 +100,9 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
   });
 
   bridge.checkTasksVersion();
-  pi.events.on("tasks:ready", () => bridge.checkTasksVersion());
+  pi.events.on("tasks:ready", () => {
+    if (!nativeToolsRegistered) bridge.checkTasksVersion();
+  });
 
   const fallbackTimer = setTimeout(() => {
     if (tasksAvailable || nativeToolsRegistered) return;
@@ -102,13 +112,13 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     try {
       registerTasksCommand({
         pi,
-        getNativeTaskStore: () => nativeTaskStore,
+        getNativeTaskStore: getOrCreateNativeTaskStore,
         evaluateTaskBacklog,
         updateWidget,
       });
       registerNativeTaskTools({
         pi,
-        taskStore,
+        getTaskStore: () => getOrCreateNativeTaskStore() ?? taskStore,
         evaluateTaskBacklog,
         getTaskOwner: () => ({
           sessionId: getSessionId() ?? "unbound",
@@ -134,10 +144,12 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
 
   function summary(): TaskProviderSummary {
     if (tasksAvailable || !nativeTaskStore) return { count: 0 };
+    const taskStore = getOrCreateNativeTaskStore();
+    if (!taskStore) return { count: 0 };
     let count = 0;
     let activeSubject: string | undefined;
     let nextSubject: string | undefined;
-    for (const task of nativeTaskStore.list()) {
+    for (const task of taskStore.list()) {
       if (task.status === "in_progress") {
         count++;
         activeSubject ??= task.subject;
@@ -162,6 +174,6 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     completeWorkflowTask: bridge.completeWorkflowTask,
     isReady: () => tasksAvailable || nativeToolsRegistered,
     summary,
-    getNativeTaskStore: () => nativeTaskStore,
+    getNativeTaskStore: () => getOrCreateNativeTaskStore(),
   };
 }

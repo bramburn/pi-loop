@@ -13,7 +13,7 @@ function setup(backlog: NativeTaskToolsOptions["evaluateTaskBacklog"] = vi.fn(as
   const taskStore = new TaskStore();
   registerNativeTaskTools({
     pi,
-    taskStore,
+    getTaskStore: () => taskStore,
     evaluateTaskBacklog: backlog,
     getTaskOwner: () => ({ sessionId: "session-a", runtimeId: "runtime-a" }),
     updateWidget: vi.fn(),

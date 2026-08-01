@@ -18,7 +18,7 @@ export type { TaskBacklogResult };
 
 export interface NativeTaskToolsOptions {
   pi: ExtensionAPI;
-  taskStore: TaskStore;
+  getTaskStore: () => TaskStore;
   evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
   getTaskOwner: () => { sessionId: string; runtimeId: string };
   updateWidget: () => void;
@@ -31,8 +31,13 @@ function backlogSuffix(backlog: TaskBacklogResult): string {
 }
 
 export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
-  const { pi, taskStore, evaluateTaskBacklog, getTaskOwner, updateWidget } = options;
-  const mutationCtx: TaskMutationContext = { pi, taskStore, evaluateTaskBacklog, updateWidget };
+  const { pi, getTaskStore, evaluateTaskBacklog, getTaskOwner, updateWidget } = options;
+  const mutationContext = (): TaskMutationContext => ({
+    pi,
+    taskStore: getTaskStore(),
+    evaluateTaskBacklog,
+    updateWidget,
+  });
 
   pi.registerTool({
     name: "TaskCreate",
@@ -52,7 +57,7 @@ export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
       description: Type.String({ description: "Detailed description of what needs to be done" }),
     }),
     async execute(_toolCallId, params) {
-      const { entry, backlog } = await createTask(mutationCtx, {
+      const { entry, backlog } = await createTask(mutationContext(), {
         subject: params.subject,
         description: params.description,
       });
@@ -77,7 +82,7 @@ export function registerNativeTaskTools(options: NativeTaskToolsOptions): void {
     description: "List all tasks with status. Use to check progress and find available work.",
     parameters: Type.Object({}),
     execute() {
-      const tasks = taskStore.list();
+      const tasks = getTaskStore().list();
       if (tasks.length === 0) {
         return Promise.resolve(textResult("No tasks.", {
           kind: "task", action: "list", tone: "info", summary: "No tasks", expanded: ["Use TaskCreate for work that spans turns."],
@@ -133,7 +138,7 @@ Use when TaskList's excerpt is truncated or you need the complete goal-state and
       id: Type.String({ description: "Task ID to read" }),
     }),
     execute(_toolCallId, params) {
-      const t = taskStore.get(params.id);
+      const t = getTaskStore().get(params.id);
       if (!t) {
         return Promise.resolve(textResult(`Task #${params.id} not found`, {
           kind: "task", action: "get", tone: "error", summary: `Task #${params.id} not found`, expanded: ["Use TaskList to find valid task IDs."],
@@ -189,7 +194,7 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
     async execute(_toolCallId, params) {
       const owner = getTaskOwner();
       const leaseMs = (params.leaseSeconds ?? 1800) * 1000;
-      const claimed = await claimTask(mutationCtx, {
+      const claimed = await claimTask(mutationContext(), {
         id: params.id,
         claim: {
           ownerSessionId: owner.sessionId,
@@ -198,7 +203,7 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
         },
       });
       if (!claimed) {
-        const existing = taskStore.get(params.id);
+        const existing = getTaskStore().get(params.id);
         const detail = existing?.claim
           ? `live claim ${existing.claim.claimId} owned by ${existing.claim.ownerSessionId}/${existing.claim.ownerRuntimeId} until ${new Date(existing.claim.leaseExpiresAt).toISOString()}`
           : existing ? `task status is ${existing.status}` : "task not found";
@@ -234,7 +239,7 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
       leaseSeconds: Type.Optional(Type.Number({ description: "Renewed lease duration in seconds", minimum: 60, maximum: 3600, default: 1800 })),
     }),
     execute(_toolCallId, params) {
-      const entry = heartbeatTask(mutationCtx, {
+      const entry = heartbeatTask(mutationContext(), {
         id: params.id,
         claimId: params.claimId,
         leaseMs: (params.leaseSeconds ?? 1800) * 1000,
@@ -274,7 +279,7 @@ Parameters: id (required), status, subject, description, claimId`,
     }),
     async execute(_toolCallId, params) {
       const { id, status, subject, description, claimId } = params;
-      const result = await updateTask(mutationCtx, {
+      const result = await updateTask(mutationContext(), {
         id,
         status: status as TaskStatus | undefined,
         subject,
@@ -282,7 +287,7 @@ Parameters: id (required), status, subject, description, claimId`,
         claimId,
       });
       if (!result) {
-        const current = taskStore.get(id);
+        const current = getTaskStore().get(id);
         const reason = current
           ? current.claim
             ? "Claim token does not match the live task owner."
@@ -318,7 +323,7 @@ Parameters: id (required), status, subject, description, claimId`,
       id: Type.String({ description: "Task ID to delete" }),
     }),
     async execute(_toolCallId, params) {
-      const result = await deleteTask(mutationCtx, params.id);
+      const result = await deleteTask(mutationContext(), params.id);
       if (!result) {
         return textResult(`Task #${params.id} not found`, {
           kind: "task", action: "delete", tone: "error", summary: `Task #${params.id} not found`, expanded: ["Use TaskList to find valid task IDs."],
