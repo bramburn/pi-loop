@@ -217,6 +217,7 @@ export default function (pi: ExtensionAPI) {
     deleteLoop: (id) => {
       store.delete(id);
     },
+    updateLoopPrompt: (id, prompt) => store.updateMetadata(id, { prompt }).entry,
     recordDeletionTombstone: (id, tombstone) => {
       store.recordDeletionTombstone(id, tombstone);
     },
@@ -245,6 +246,7 @@ export default function (pi: ExtensionAPI) {
   const queueOrDeliverNotification = notificationRuntime.queueOrDeliverNotification;
   const queueOrDeliverMonitorStarted = notificationRuntime.queueOrDeliverMonitorStarted;
   const discardMonitorStarted = notificationRuntime.discardMonitorStarted;
+  const migrateTaskBacklogLoops = taskBacklogRuntime.migrateAutoTaskWorkerPrompts;
   const cleanupTaskBacklogLoops = taskBacklogRuntime.cleanupTaskBacklogLoops;
   const evaluateTaskBacklog = taskBacklogRuntime.evaluateTaskBacklog;
 
@@ -323,6 +325,7 @@ export default function (pi: ExtensionAPI) {
     widget,
     notificationRuntime,
     flushPendingNotifications,
+    migrateTaskBacklogLoops,
     cleanupTaskBacklogLoops,
     hasPendingTasks,
     cleanDoneTasks,

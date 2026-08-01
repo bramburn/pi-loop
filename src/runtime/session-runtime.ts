@@ -25,6 +25,7 @@ export interface SessionRuntimeOptions {
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
+  migrateTaskBacklogLoops: () => number;
   cleanupTaskBacklogLoops: () => Promise<number>;
   hasPendingTasks: () => Promise<number>;
   cleanDoneTasks: () => Promise<void>;
@@ -45,6 +46,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget,
     notificationRuntime,
     flushPendingNotifications,
+    migrateTaskBacklogLoops,
     cleanupTaskBacklogLoops,
     hasPendingTasks,
     cleanDoneTasks,
@@ -89,6 +91,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     if (persistedShown) return;
     persistedShown = true;
     const sessionStartedAt = Date.now();
+    migrateTaskBacklogLoops();
     const loops = getStore().list();
     if (loops.length > 0) {
       getStore().clearExpired();

@@ -24,7 +24,7 @@ const LEGACY_WORKER_PROMPT =
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 const PREVIOUS_WORKER_PROMPT =
-  "Run TaskList, read each pending task's description (use TaskGet when the excerpt truncates it), and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+  "Run TaskList and read each pending task's description; use TaskGet whenever an excerpt is truncated. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Mark the chosen task in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
   return {
@@ -57,6 +57,12 @@ function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
     getLoops: () => loops,
     createLoop,
     deleteLoop,
+    updateLoopPrompt: vi.fn((id: string, prompt: string) => {
+      const entry = loops.find((loop) => loop.id === id);
+      if (!entry) return undefined;
+      entry.prompt = prompt;
+      return entry;
+    }),
     recordDeletionTombstone: vi.fn(),
     addTrigger: vi.fn(),
     removeTrigger: vi.fn(),
@@ -88,8 +94,29 @@ describe("task-backlog-runtime predicates", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never.*dependent.*prerequisite/i);
   });
 
+  it("resumes unfinished work instead of waiting forever on in-progress tasks", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/inspect.*in_progress.*before.*pending/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/resume.*in_progress/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/follow.*prerequisite.*chain/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never report.*no eligible.*in_progress/i);
+  });
+
   it("retains the immediately previous worker prompt for persisted loops", () => {
     expect(AUTO_TASK_WORKER_LEGACY_PROMPTS).toContain(PREVIOUS_WORKER_PROMPT);
+  });
+
+  it("migrates persisted worker prompts to the current recovery contract", () => {
+    const { runtime, loops, opts } = setup();
+    loops.push(makeLoop({ id: "8", prompt: PREVIOUS_WORKER_PROMPT, fireCount: 7 }));
+
+    expect(runtime.migrateAutoTaskWorkerPrompts()).toBe(1);
+    expect(opts.updateLoopPrompt).toHaveBeenCalledWith("8", AUTO_TASK_WORKER_PROMPT);
+    expect(loops[0]).toMatchObject({
+      id: "8",
+      prompt: AUTO_TASK_WORKER_PROMPT,
+      fireCount: 7,
+      recurring: true,
+    });
   });
 
   it("identifies an auto-task worker loop", () => {

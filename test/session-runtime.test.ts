@@ -20,10 +20,13 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),
+      queueOrDeliverMonitorStarted: vi.fn(async () => {}),
+      discardMonitorStarted: vi.fn(),
       flushPendingNotifications: vi.fn(async () => {}),
       clear: vi.fn(),
     },
     flushPendingNotifications: vi.fn(async () => {}),
+    migrateTaskBacklogLoops: vi.fn(() => 0),
     cleanupTaskBacklogLoops: vi.fn(async () => 0),
     hasPendingTasks: vi.fn(async () => 0),
     cleanDoneTasks: vi.fn(async () => {}),
@@ -52,6 +55,32 @@ describe("session-runtime heartbeat lifecycle", () => {
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
     expect(setIntervalSpy.mock.calls[0][1]).toBe(30000);
     expect(unref).toHaveBeenCalledTimes(1); // never keeps a `pi -p` process alive
+  });
+
+  it("migrates persisted backlog prompts before starting loop triggers", async () => {
+    const calls: string[] = [];
+    const migrateTaskBacklogLoops = vi.fn(() => {
+      calls.push("migrate");
+      return 1;
+    });
+    const triggerSystem = {
+      start: vi.fn(() => calls.push("start")),
+      stop: vi.fn(),
+    };
+    const { drive } = setup({
+      migrateTaskBacklogLoops,
+      getStore: () => ({
+        list: () => [{ id: "8", status: "active" }],
+        clearExpired: vi.fn(),
+        expireEventLoops: vi.fn(),
+      }) as any,
+      getTriggerSystem: () => triggerSystem,
+    });
+
+    await drive("session_start");
+
+    expect(migrateTaskBacklogLoops).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["migrate", "start"]);
   });
 
   it("repaints the widget on session_start after the harness resets extension UI", async () => {

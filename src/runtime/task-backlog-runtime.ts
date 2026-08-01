@@ -17,12 +17,13 @@ import {
 } from "./loop-events.js";
 
 export const AUTO_TASK_WORKER_THRESHOLD = 5;
-export const AUTO_TASK_WORKER_PROMPT = "Run TaskList and read each pending task's description; use TaskGet whenever an excerpt is truncated. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Mark the chosen task in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+export const AUTO_TASK_WORKER_PROMPT = "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Resume an eligible in_progress task before claiming new work. If a dependent task is blocked, follow its prerequisite chain to the earliest unfinished task and resume it when it is in_progress. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: resume it, verify evidence and complete it, or report why it is actively owned or blocked and what recovery is required. Mark newly claimed work in_progress, implement it, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 // Worker loops persist their prompt in the loop store. Changing the prompt text
 // must append the previous version here, or persisted workers orphan after an
 // extension reload and never auto-delete.
 export const AUTO_TASK_WORKER_LEGACY_PROMPTS: readonly string[] = [
+  "Run TaskList and read each pending task's description; use TaskGet whenever an excerpt is truncated. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Mark the chosen task in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
   "Run TaskList, read each pending task's description, and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
   "Run TaskList, read each pending task's description (use TaskGet when the excerpt truncates it), and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
@@ -40,6 +41,7 @@ export interface TaskBacklogRuntimeOptions {
     maxFires?: number;
   }) => LoopEntry;
   deleteLoop: (id: string) => void;
+  updateLoopPrompt: (id: string, prompt: string) => LoopEntry | undefined;
   recordDeletionTombstone?: (id: string, tombstone: LoopDeletionTombstoneInput) => void;
   addTrigger: (entry: LoopEntry) => void;
   removeTrigger: (id: string) => void;
@@ -59,6 +61,7 @@ export interface TaskBacklogRuntime {
   isAutoTaskWorkerLoop(entry: LoopEntry): boolean;
   isTaskBacklogLoop(entry: LoopEntry): boolean;
   findAutoTaskWorkerLoop(): LoopEntry | undefined;
+  migrateAutoTaskWorkerPrompts(): number;
 }
 
 export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): TaskBacklogRuntime {
@@ -66,6 +69,7 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
     getLoops,
     createLoop,
     deleteLoop,
+    updateLoopPrompt,
     recordDeletionTombstone,
     addTrigger,
     removeTrigger,
@@ -92,6 +96,16 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
 
   function findAutoTaskWorkerLoop(): LoopEntry | undefined {
     return getLoops().find(isAutoTaskWorkerLoop);
+  }
+
+  function migrateAutoTaskWorkerPrompts(): number {
+    let migrated = 0;
+    for (const entry of getLoops()) {
+      if (!AUTO_TASK_WORKER_LEGACY_PROMPTS.includes(entry.prompt)) continue;
+      if (!triggerHasEventSource(entry.trigger, "tasks:created")) continue;
+      if (updateLoopPrompt(entry.id, AUTO_TASK_WORKER_PROMPT)) migrated++;
+    }
+    return migrated;
   }
 
   function deleteTaskBacklogLoop(entry: LoopEntry, pendingCount: number): void {
@@ -190,5 +204,6 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
     isAutoTaskWorkerLoop,
     isTaskBacklogLoop,
     findAutoTaskWorkerLoop,
+    migrateAutoTaskWorkerPrompts,
   };
 }

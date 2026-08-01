@@ -562,7 +562,7 @@ describe("native task fallback", () => {
 
     listResult = await loopList!.execute?.("60", {});
     expect(listResult.content[0].text).toContain("tasks:created");
-    expect(listResult.content[0].text).toContain("Run TaskList and read each pending task");
+    expect(listResult.content[0].text).toContain("inspect every in_progress task");
   });
 
   it("flushes the auto-created worker wake on agent_end even if pending messages are reported", async () => {
@@ -607,7 +607,7 @@ describe("native task fallback", () => {
 
     expect(sentCustomMessages).toHaveLength(1);
     expect(sentCustomMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
-    expect((sentCustomMessages[0].message as { content: string }).content).toContain("Run TaskList and read each pending task");
+    expect((sentCustomMessages[0].message as { content: string }).content).toContain("inspect every in_progress task");
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("complete A before B");
     expect((sentCustomMessages[0].message as { content: string }).content).toContain("managed automatically");
     expect((sentCustomMessages[0].message as { content: string }).content).not.toContain("one-shot wake");
