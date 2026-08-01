@@ -187,6 +187,96 @@ describe("loop:fire custom message delivery", () => {
     expect(content).toContain("Evidence: A null config reaches the parser.");
   });
 
+  it("collapses multi-line transition evidence into a single wake line", async () => {
+    const { pi, sentMessages, emitExtension } = createMockPi();
+    const extension = await import("../src/index.js");
+    extension.default(pi);
+
+    const ctx = createCtx(false);
+    await emitExtension("turn_start", null, ctx);
+
+    pi.events.emit("loop:fire", {
+      loopId: "10",
+      prompt: "Fix the regression",
+      trigger: { type: "dynamic" },
+      timestamp: Date.now(),
+      recurring: true,
+      workflow: {
+        definition: {
+          version: 1,
+          initialState: "investigate",
+          states: {
+            investigate: { prompt: "Find the cause.", on: { found: "fix" } },
+            fix: { prompt: "Implement the fix.", on: { passing: "done" } },
+            done: { prompt: "Report.", terminal: "completed" },
+          },
+        },
+        currentState: "fix",
+        transitionSeq: 1,
+        stateEnteredAt: Date.now(),
+        attemptsByState: { investigate: 1, fix: 1 },
+        lastTransition: {
+          from: "investigate",
+          to: "fix",
+          outcome: "found",
+          evidence: "Line one.\nLine two.",
+          at: Date.now(),
+          sequence: 1,
+        },
+      },
+    });
+    await flushAsync();
+
+    const content = sentMessages[0].message.content;
+    expect(content).toContain("Evidence: Line one. Line two.");
+    expect(content).not.toContain("Evidence: Line one.\n");
+  });
+
+  it("does not instruct a transition when the wake lands on a terminal state", async () => {
+    const { pi, sentMessages, emitExtension } = createMockPi();
+    const extension = await import("../src/index.js");
+    extension.default(pi);
+
+    const ctx = createCtx(false);
+    await emitExtension("turn_start", null, ctx);
+
+    pi.events.emit("loop:fire", {
+      loopId: "11",
+      prompt: "Fix the regression",
+      trigger: { type: "dynamic" },
+      timestamp: Date.now(),
+      recurring: true,
+      workflow: {
+        definition: {
+          version: 1,
+          initialState: "investigate",
+          states: {
+            investigate: { prompt: "Find the cause.", on: { found: "blocked" } },
+            blocked: { prompt: "Report the blocker.", terminal: "paused" },
+          },
+        },
+        currentState: "blocked",
+        transitionSeq: 1,
+        stateEnteredAt: Date.now(),
+        attemptsByState: { investigate: 1, blocked: 1 },
+        lastTransition: {
+          from: "investigate",
+          to: "blocked",
+          outcome: "found",
+          evidence: "Missing credentials.",
+          at: Date.now(),
+          sequence: 1,
+        },
+      },
+    });
+    await flushAsync();
+
+    const content = sentMessages[0].message.content;
+    expect(content).toContain("State: blocked");
+    expect(content).toContain("Terminal: paused");
+    expect(content).not.toContain("call WorkflowTransition exactly once");
+  });
+
   it("keeps backlog cleanup under pi-loop control", async () => {
     const { pi, sentMessages, emitExtension } = createMockPi();
     const extension = await import("../src/index.js");

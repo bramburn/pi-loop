@@ -17,13 +17,14 @@ import {
 } from "./loop-events.js";
 
 export const AUTO_TASK_WORKER_THRESHOLD = 5;
-export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, read each pending task's description, and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+export const AUTO_TASK_WORKER_PROMPT = "Run TaskList, read each pending task's description (use TaskGet when the excerpt truncates it), and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
 // Worker loops persist their prompt in the loop store. Changing the prompt text
 // must append the previous version here, or persisted workers orphan after an
 // extension reload and never auto-delete.
 export const AUTO_TASK_WORKER_LEGACY_PROMPTS: readonly string[] = [
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
+  "Run TaskList, read each pending task's description, and pick the next pending task — prefer one whose description names a next task or successor, and any task whose description depends on an earlier one. Mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.",
 ];
 
 export function isAutoTaskWorkerPrompt(prompt: string): boolean {

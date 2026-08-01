@@ -170,6 +170,15 @@ describe("LoopList", () => {
       vi.useRealTimers();
     }
   });
+
+  it("omits elapsed time for paused loops", async () => {
+    const h = setup();
+    await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
+    await h.text("LoopDelete", { id: "1", action: "pause" });
+    const out = await h.text("LoopList", {});
+    expect(out).toContain("[paused]");
+    expect(out).not.toContain("elapsed:");
+  });
 });
 
 describe("LoopUpdate", () => {

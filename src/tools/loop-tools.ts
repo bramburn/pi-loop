@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { formatTrigger } from "../loop-format.js";
+import { formatLastTransitionLines, formatTrigger } from "../loop-format.js";
 import { parseInterval } from "../loop-parse.js";
 import type { LoopEntry, Trigger, WorkflowDefinition } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
@@ -155,9 +155,7 @@ function formatWorkflowSummary(entry: LoopEntry, heading: string, suppressed?: b
   const outcomes = Object.keys(state?.on ?? {});
   let message = `${heading}\nGoal: ${entry.prompt}\nCurrent state: ${workflow.currentState}`;
   if (workflow.lastTransition) {
-    const { from, to, outcome, evidence } = workflow.lastTransition;
-    message += `\nLast transition: ${from} → ${to} via ${outcome}`;
-    if (evidence) message += `\nEvidence: ${evidence}`;
+    message += `\n${formatLastTransitionLines(workflow.lastTransition).join("\n")}`;
   }
   if (state?.prompt) message += `\nInstruction: ${state.prompt}`;
   if (workflow.activeTaskId) {
@@ -678,7 +676,9 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           const remaining = Math.max(0, nextFire - Date.now());
           line += ` next: ${formatRemaining(remaining)}`;
         }
-        line += ` elapsed: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
+        if (entry.status === "active") {
+          line += ` elapsed: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
+        }
         if (entry.autoTask) line += " [auto-task]";
         if (entry.taskBacklog) line += " [backlog-worker]";
         if (entry.workflow) line += ` [workflow:${entry.workflow.currentState}]`;

@@ -5,7 +5,7 @@ import {
   type ReducerEvent,
   type ReducerHandler,
 } from "../coordinator.js";
-import { formatTrigger } from "../loop-format.js";
+import { formatLastTransitionLines, formatTrigger } from "../loop-format.js";
 import {
   type NotificationReducerEvent,
   type NotificationReducerState,
@@ -125,17 +125,19 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
         `State: ${data.workflow.currentState}`,
       ];
       if (data.workflow.lastTransition) {
-        const { from, to, outcome, evidence } = data.workflow.lastTransition;
-        lines.push(`Last transition: ${from} → ${to} via ${outcome}`);
-        if (evidence) lines.push(`Evidence: ${evidence}`);
+        lines.push(...formatLastTransitionLines(data.workflow.lastTransition));
       }
       if (state?.prompt) lines.push(`State instructions: ${state.prompt}`);
       if (data.workflow.activeTaskId) lines.push(`Active task: #${data.workflow.activeTaskId}`);
       if (outcomes.length > 0) lines.push(`Allowed outcomes: ${outcomes.join(", ")}`);
-      lines.push(
-        `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not call LoopDelete after this state.`,
-        "Before ending this turn, call WorkflowTransition exactly once with this workflow id and one allowed outcome. Include evidence for the branch decision. Terminal outcomes complete or pause the workflow automatically.",
-      );
+      if (state?.terminal) {
+        lines.push(`Terminal: ${state.terminal} — this workflow state is terminal; no transition is needed.`);
+      } else {
+        lines.push(
+          `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not call LoopDelete after this state.`,
+          "Before ending this turn, call WorkflowTransition exactly once with this workflow id and one allowed outcome. Include evidence for the branch decision. Terminal outcomes complete or pause the workflow automatically.",
+        );
+      }
       return lines.join("\n");
     }
 

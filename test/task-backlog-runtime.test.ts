@@ -74,6 +74,10 @@ describe("task-backlog-runtime predicates", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/prefer/i);
   });
 
+  it("teaches the worker to use TaskGet for full descriptions", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/TaskGet/i);
+  });
+
   it("identifies an auto-task worker loop", () => {
     const { runtime } = setup();
     expect(runtime.isAutoTaskWorkerLoop(makeLoop())).toBe(true);
