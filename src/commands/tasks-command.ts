@@ -81,7 +81,6 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     } else if (task.status === "in_progress") {
       actions.unshift("x Close without completing");
       actions.unshift("ok Complete");
-      actions.unshift("* Return to pending");
     } else {
       actions.unshift("* Reopen");
     }
@@ -90,28 +89,44 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
     const action = await ui.select(`#${task.id}: ${task.subject}\n\n${task.description}`, actions);
     if (!action || action === "< Back") return viewNativeTasks(ui);
 
-    if (action === "x Delete") {
-      taskStore.delete(task.id);
-      emitNativeTaskEvent(pi, "tasks:deleted", task, task.status);
-      ui.notify(`Task #${task.id} deleted`, "info");
-    } else if (action === "> Start") {
-      const next = taskStore.start(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status);
-      ui.notify(`Task #${task.id} started`, "info");
-    } else if (action === "ok Complete") {
-      const next = taskStore.complete(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status);
-      ui.notify(`Task #${task.id} completed`, "info");
-    } else if (action === "x Close without completing") {
-      const next = taskStore.close(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:closed", next, task.status);
-      ui.notify(`Task #${task.id} closed without completing`, "info");
-    } else if (action === "* Return to pending" || action === "* Reopen") {
-      const next = taskStore.reopen(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status);
-      ui.notify(`Task #${task.id} reopened`, "info");
+    const claimId = task.claim ? await ui.input("Claim token required") : undefined;
+    if (task.claim && !claimId) {
+      ui.notify(`Task #${task.id} unchanged: claim token required`, "warning");
+      return viewNativeTasks(ui);
     }
 
+    let changed = false;
+    if (action === "x Delete") {
+      changed = taskStore.delete(task.id, claimId);
+      if (changed) emitNativeTaskEvent(pi, "tasks:deleted", task, task.status);
+    } else if (action === "> Start") {
+      const next = taskStore.start(task.id);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status);
+    } else if (action === "ok Complete") {
+      const next = taskStore.complete(task.id, claimId);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status);
+    } else if (action === "x Close without completing") {
+      const next = taskStore.close(task.id, claimId);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:closed", next, task.status);
+    } else if (action === "* Reopen") {
+      const next = taskStore.reopen(task.id);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status);
+    }
+
+    if (!changed) {
+      ui.notify(`Task #${task.id} unchanged: operation rejected`, "warning");
+      return viewNativeTasks(ui);
+    }
+    const pastTense = action === "x Delete" ? "deleted"
+      : action === "> Start" ? "started"
+        : action === "ok Complete" ? "completed"
+          : action === "x Close without completing" ? "closed without completing"
+            : "reopened";
+    ui.notify(`Task #${task.id} ${pastTense}`, "info");
     updateWidget();
     await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
     return viewNativeTasks(ui);

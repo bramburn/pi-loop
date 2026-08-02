@@ -1932,6 +1932,38 @@ describe("monitor tool wrappers", () => {
     expect(existsSync(join(cwd, ".pi", "loops", "loops.json"))).toBe(false);
   });
 
+  it("preserves memory-scoped workflow controllers when clearing ordinary loops", async () => {
+    process.env.PI_LOOP_SCOPE = "memory";
+    const { pi, toolMap, extensionHandlers } = createMockPi();
+    extension(pi as any);
+    await vi.advanceTimersByTimeAsync(6100);
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) await handler(null, ctx);
+
+    await toolMap.get("WorkflowCreate")!.execute!("create", {
+      goal: "Preserve workflow ownership",
+      definition: JSON.stringify({
+        version: 1,
+        initialState: "work",
+        states: {
+          work: { prompt: "Work.", task: { subject: "State task", description: "Finish it." }, on: { done: "done" } },
+          done: { prompt: "Done.", terminal: "completed" },
+        },
+      }),
+    });
+
+    for (const handler of extensionHandlers.get("session_switch") ?? []) await handler({ reason: "switch" }, ctx);
+
+    const loops = await toolMap.get("LoopList")!.execute!("loops", {});
+    const tasks = await toolMap.get("TaskList")!.execute!("tasks", {});
+    expect(loops.content[0].text).toContain("#1 [paused] Preserve workflow ownership");
+    expect(tasks.content[0].text).toContain("State task");
+  });
+
   it("clears memory-scoped loops on non-resume session switch", async () => {
     process.env.PI_LOOP_SCOPE = "memory";
     const { pi, toolMap, extensionHandlers } = createMockPi();

@@ -29,6 +29,7 @@ export interface TaskProviderRuntime {
   cleanDoneTasks: ReturnType<typeof createTaskRuntimeBridge>["cleanDoneTasks"];
   createWorkflowTask: ReturnType<typeof createTaskRuntimeBridge>["createWorkflowTask"];
   completeWorkflowTask: ReturnType<typeof createTaskRuntimeBridge>["completeWorkflowTask"];
+  closeWorkflowTask: ReturnType<typeof createTaskRuntimeBridge>["closeWorkflowTask"];
   isReady(): boolean;
   summary(): TaskProviderSummary;
   getNativeTaskStore(): TaskStore | undefined;
@@ -85,7 +86,10 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
       detectionSettled = true;
     },
     isDetectionSettled: () => detectionSettled,
-    onNativeTaskCompleted: updateWidget,
+    onNativeTaskCompleted: async (taskStore) => {
+      updateWidget();
+      await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
+    },
     debug,
   });
 
@@ -172,6 +176,7 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     cleanDoneTasks: bridge.cleanDoneTasks,
     createWorkflowTask: bridge.createWorkflowTask,
     completeWorkflowTask: bridge.completeWorkflowTask,
+    closeWorkflowTask: bridge.closeWorkflowTask,
     isReady: () => tasksAvailable || nativeToolsRegistered,
     summary,
     getNativeTaskStore: () => getOrCreateNativeTaskStore(),

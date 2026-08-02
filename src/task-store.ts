@@ -8,6 +8,8 @@ import type { TaskClaim, TaskEntry, TaskStoreData, TaskWorkflowLink } from "./ta
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const MAX_TASKS = 200;
 
+const MAX_TASK_LEASE_MS = 60 * 60 * 1000;
+
 export interface TaskClaimInput {
   claimId?: string;
   ownerSessionId: string;
@@ -56,7 +58,8 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
   }
 
   claim(id: string, input: TaskClaimInput): TaskClaimResult | undefined {
-    if (!input.ownerSessionId || !input.ownerRuntimeId || !Number.isFinite(input.leaseMs) || input.leaseMs <= 0) {
+    if (!input.ownerSessionId || !input.ownerRuntimeId || !Number.isSafeInteger(input.leaseMs)
+      || input.leaseMs <= 0 || input.leaseMs > MAX_TASK_LEASE_MS) {
       return undefined;
     }
     return this.withLock(() => {
@@ -64,12 +67,15 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
       if (!current || current.status === "completed" || current.status === "closed") return undefined;
       const now = input.now ?? Date.now();
       const existing = current.claim;
-      const sameOwner = existing?.ownerSessionId === input.ownerSessionId
+      const existingIsLive = existing !== undefined && existing.leaseExpiresAt > now;
+      const sameLiveOwner = existingIsLive
+        && existing.ownerSessionId === input.ownerSessionId
         && existing.ownerRuntimeId === input.ownerRuntimeId;
-      if (existing && existing.leaseExpiresAt > now && !sameOwner) return undefined;
+      if (existingIsLive && !sameLiveOwner) return undefined;
 
-      const takenOver = current.status === "in_progress" && !sameOwner;
-      const claim: TaskClaim = sameOwner && existing
+      const takenOver = current.status === "in_progress" && existing !== undefined
+        && (existing.ownerSessionId !== input.ownerSessionId || existing.ownerRuntimeId !== input.ownerRuntimeId);
+      const claim: TaskClaim = sameLiveOwner && existing
         ? {
             ...existing,
             heartbeatAt: now,
@@ -92,11 +98,12 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
         claim,
       };
       this.entries.set(id, entry);
-      return { entry, claim, takenOver, renewed: sameOwner && existing !== undefined };
+      return { entry, claim, takenOver, renewed: sameLiveOwner };
     });
   }
 
   heartbeat(id: string, claimId: string, now = Date.now(), leaseMs = 30 * 60 * 1000): TaskEntry | undefined {
+    if (!claimId || !Number.isSafeInteger(leaseMs) || leaseMs <= 0 || leaseMs > MAX_TASK_LEASE_MS) return undefined;
     return this.withLock(() => {
       const current = this.entries.get(id);
       if (!current?.claim
@@ -213,9 +220,14 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
-  delete(id: string): boolean {
+  delete(id: string, claimId?: string, now = Date.now()): boolean {
     return this.withLock(() => {
-      if (!this.entries.has(id)) return false;
+      const entry = this.entries.get(id);
+      if (!entry
+        || (entry.workflow && (entry.status === "pending" || entry.status === "in_progress"))
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return false;
+      }
       this.applyReducerEvent({
         type: "TASK_DELETED",
         at: Date.now(),

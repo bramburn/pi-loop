@@ -7,7 +7,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
   const scheduler = { nextFire: vi.fn(() => undefined), pump: vi.fn() };
   const options: SessionRuntimeOptions = {
     pi,
-    getLoopScope: () => "memory", // skip session store recreation
+    getLoopScope: () => "memory",
     getPiLoopEnv: () => undefined,
     recreateSessionStore: vi.fn(),
     clearAllLoops: vi.fn(),

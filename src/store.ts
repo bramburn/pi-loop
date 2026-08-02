@@ -146,6 +146,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
+
   updateDynamic(id: string, fields: { prompt?: string; dynamic: Partial<DynamicLoopState> }): LoopEntry | undefined {
     return this.withLock(() => {
       if (!this.entries.has(id)) return undefined;
@@ -161,11 +162,81 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  transitionWorkflow(id: string, input: WorkflowTransitionInput): { entry?: LoopEntry; applied: boolean; error?: string; failure?: WorkflowTransitionFailure; terminal?: WorkflowTerminalStatus } {
+  continueDynamic(
+    id: string,
+    fields: { prompt?: string; dynamic: Partial<DynamicLoopState> },
+    expected?: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): LoopEntry | undefined {
+    return this.withLock(() => {
+      const entry = this.entries.get(id);
+      if (!entry || entry.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow) return undefined;
+      if (expected && (
+        entry.status !== expected.status
+        || entry.dynamic.iteration !== expected.iteration
+        || entry.updatedAt !== expected.updatedAt
+      )) return undefined;
+      const now = Date.now();
+      if (entry.status === "paused") {
+        this.applyReducerEvent({
+          type: "LOOP_RESUMED",
+          at: now,
+          source: "tool",
+          entityType: "loop",
+          entityId: id,
+          payload: { id },
+        });
+      }
+      this.applyReducerEvent({
+        type: "LOOP_DYNAMIC_UPDATED",
+        at: now,
+        source: "tool",
+        entityType: "loop",
+        entityId: id,
+        payload: { id, prompt: fields.prompt, dynamic: fields.dynamic },
+      });
+      return this.entries.get(id);
+    });
+  }
+
+  stopDynamic(
+    id: string,
+    status: "completed" | "paused",
+    expected: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): boolean {
+    return this.withLock(() => {
+      const entry = this.entries.get(id);
+      if (!entry || entry.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow
+        || entry.status !== expected.status
+        || entry.dynamic.iteration !== expected.iteration
+        || entry.updatedAt !== expected.updatedAt) return false;
+      this.applyReducerEvent({
+        type: status === "completed" ? "LOOP_DELETED" : "LOOP_PAUSED",
+        at: Date.now(),
+        source: "tool",
+        entityType: "loop",
+        entityId: id,
+        payload: { id },
+      });
+      return true;
+    });
+  }
+
+  transitionWorkflow(
+    id: string,
+    input: WorkflowTransitionInput,
+    expected?: { currentState: string; transitionSeq: number; activeTaskId?: string },
+  ): { entry?: LoopEntry; applied: boolean; error?: string; failure?: WorkflowTransitionFailure; terminal?: WorkflowTerminalStatus } {
     return this.withLock(() => {
       const entry = this.entries.get(id);
       if (!entry) return { applied: false, error: `Loop #${id} not found` };
       if (!entry.workflow) return { applied: false, error: `Loop #${id} is not a workflow loop` };
+      if (expected && (
+        entry.workflow.currentState !== expected.currentState
+        || entry.workflow.transitionSeq !== expected.transitionSeq
+        || entry.workflow.activeTaskId !== expected.activeTaskId
+      )) {
+        return { applied: false, error: `Workflow #${id} changed; inspect LoopList and retry the transition.` };
+      }
 
       const result = transitionWorkflowRun(entry.workflow, input, Date.now());
       if (!result.applied) {
@@ -189,10 +260,19 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  setWorkflowActiveTask(id: string, taskId?: string): LoopEntry | undefined {
+  setWorkflowActiveTask(
+    id: string,
+    taskId?: string,
+    expected?: { currentState: string; transitionSeq: number; activeTaskId?: string },
+  ): LoopEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
       if (!entry?.workflow) return undefined;
+      if (expected && (
+        entry.workflow.currentState !== expected.currentState
+        || entry.workflow.transitionSeq !== expected.transitionSeq
+        || entry.workflow.activeTaskId !== expected.activeTaskId
+      )) return undefined;
       this.applyReducerEvent({
         type: "LOOP_WORKFLOW_TASK_SET",
         at: Date.now(),
@@ -248,14 +328,23 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       let count = 0;
       for (const [id, entry] of [...this.entries.entries()]) {
         if (now < entry.expiresAt) continue;
-        this.applyReducerEvent({
-          type: "LOOP_EXPIRED",
-          at: now,
-          source: "system",
-          entityType: "loop",
-          entityId: id,
-          payload: { id, reason: "expires_at" },
-        });
+        this.applyReducerEvent(entry.workflow
+          ? {
+              type: "LOOP_PAUSED",
+              at: now,
+              source: "system",
+              entityType: "loop",
+              entityId: id,
+              payload: { id },
+            }
+          : {
+              type: "LOOP_EXPIRED",
+              at: now,
+              source: "system",
+              entityType: "loop",
+              entityId: id,
+              payload: { id, reason: "expires_at" },
+            });
         count++;
       }
       return count;
@@ -283,20 +372,29 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  clearAll(): number {
+  clearAll(options?: { preserveWorkflows?: boolean }): number {
     return this.withLock(() => {
-      const ids = [...this.entries.keys()];
-      for (const id of ids) {
-        this.applyReducerEvent({
-          type: "LOOP_DELETED",
-          at: Date.now(),
-          source: "system",
-          entityType: "loop",
-          entityId: id,
-          payload: { id },
-        });
+      const entries = [...this.entries.values()];
+      for (const entry of entries) {
+        this.applyReducerEvent(options?.preserveWorkflows && entry.workflow
+          ? {
+              type: "LOOP_PAUSED",
+              at: Date.now(),
+              source: "system",
+              entityType: "loop",
+              entityId: entry.id,
+              payload: { id: entry.id },
+            }
+          : {
+              type: "LOOP_DELETED",
+              at: Date.now(),
+              source: "system",
+              entityType: "loop",
+              entityId: entry.id,
+              payload: { id: entry.id },
+            });
       }
-      return ids.length;
+      return entries.length;
     });
   }
 }

@@ -81,7 +81,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
-    if (getLoopScope() === "session" && !getPiLoopEnv()) {
+    if ((getLoopScope() === "session" || getLoopScope() === "memory") && !getPiLoopEnv()) {
       recreateSessionStore(ctx.sessionManager.getSessionId());
     }
     storeUpgraded = true;
@@ -182,12 +182,9 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     storeUpgraded = false;
     persistedShown = false;
 
-    if (!isResume && getLoopScope() === "memory") {
-      clearAllLoops();
-    }
-
     setSessionId(ctx.sessionManager.getSessionId());
     upgradeStoreIfNeeded(ctx);
+    if (!isResume && getLoopScope() === "memory") clearAllLoops();
     showPersistedLoops(isResume);
     widget.update();
   });

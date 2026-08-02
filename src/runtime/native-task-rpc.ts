@@ -19,11 +19,14 @@ import {
   heartbeatTask,
   type TaskBacklogResult,
   type TaskMutationContext,
+  taskMutationRejectionMessage,
   updateTask,
 } from "./task-mutations.js";
 
 /** Discriminates pi-loop's own ping replies from an external pi-tasks provider. */
 export const NATIVE_TASKS_PROVIDER = "pi-loop-native";
+const MIN_TASK_LEASE_MS = 60_000;
+const MAX_TASK_LEASE_MS = 3_600_000;
 
 interface CreateTaskRequest {
   requestId: string;
@@ -153,7 +156,7 @@ export function registerNativeTaskRpc(options: NativeTaskRpcOptions): void {
         description: request.description,
         claimId: request.claimId,
       });
-      if (!result) throw new Error(`Task #${request.id} not found`);
+      if (!result.applied) throw new Error(taskMutationRejectionMessage(request.id, result));
       return { task: result.entry };
     },
     settledRpcOpts,
@@ -163,8 +166,11 @@ export function registerNativeTaskRpc(options: NativeTaskRpcOptions): void {
     pi.events,
     TASKS_RPC.claim,
     async (request) => {
-      if (!request.id || !request.ownerSessionId || !request.ownerRuntimeId || !request.leaseMs) {
-        throw new Error("id, ownerSessionId, ownerRuntimeId, and leaseMs are required");
+      const leaseMs = request.leaseMs;
+      if (!request.id || !request.ownerSessionId || !request.ownerRuntimeId
+        || typeof leaseMs !== "number" || !Number.isSafeInteger(leaseMs)
+        || leaseMs < MIN_TASK_LEASE_MS || leaseMs > MAX_TASK_LEASE_MS) {
+        throw new Error("id, ownerSessionId, ownerRuntimeId, and leaseMs between 60000 and 3600000 are required");
       }
       const claimed = await claimTask(requireMutationContext(), {
         id: request.id,
@@ -172,7 +178,7 @@ export function registerNativeTaskRpc(options: NativeTaskRpcOptions): void {
           claimId: request.claimId,
           ownerSessionId: request.ownerSessionId,
           ownerRuntimeId: request.ownerRuntimeId,
-          leaseMs: request.leaseMs,
+          leaseMs,
         },
       });
       if (!claimed) throw new Error(`Task #${request.id} is not claimable`);
@@ -190,16 +196,18 @@ export function registerNativeTaskRpc(options: NativeTaskRpcOptions): void {
     pi.events,
     TASKS_RPC.heartbeat,
     (request) => {
-      if (!request.id || !request.claimId || !request.leaseMs) {
-        throw new Error("id, claimId, and leaseMs are required");
+      const leaseMs = request.leaseMs;
+      if (!request.id || !request.claimId || typeof leaseMs !== "number" || !Number.isSafeInteger(leaseMs)
+        || leaseMs < MIN_TASK_LEASE_MS || leaseMs > MAX_TASK_LEASE_MS) {
+        throw new Error("id, claimId, and leaseMs between 60000 and 3600000 are required");
       }
-      const task = heartbeatTask(requireMutationContext(), {
+      const result = heartbeatTask(requireMutationContext(), {
         id: request.id,
         claimId: request.claimId,
-        leaseMs: request.leaseMs,
+        leaseMs,
       });
-      if (!task) throw new Error(`Task #${request.id} heartbeat rejected`);
-      return { task };
+      if (!result.applied) throw new Error(taskMutationRejectionMessage(request.id, result));
+      return { task: result.entry };
     },
     settledRpcOpts,
   );

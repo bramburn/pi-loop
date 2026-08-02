@@ -56,6 +56,7 @@ export default function (pi: ExtensionAPI) {
   const getScopeOptions = () => ({ piLoopEnv, loopScope });
 
   let store = new LoopStore(resolveLoopStorePath(getScopeOptions()));
+  const memoryLoopStores = new Map<string, LoopStore>();
   const monitorManager = new MonitorManager(pi);
   let scheduler: CronScheduler;
   let triggerSystem: TriggerSystem;
@@ -175,8 +176,11 @@ export default function (pi: ExtensionAPI) {
     debug(`loop:fire #${entry.id}`, { prompt: entry.prompt.slice(0, 50) });
 
     if (atMaxFires(entry)) {
-      debug(`loop #${entry.id} — reached maxFires ${entry.maxFires}, expiring`);
-      store.delete(entry.id);
+      debug(`loop #${entry.id} — reached maxFires ${entry.maxFires}, retiring`);
+      triggerSystem.remove(entry.id);
+      if (entry.workflow) store.pause(entry.id);
+      else store.delete(entry.id);
+      widget.update();
       return;
     }
     store.fire(entry.id);
@@ -224,13 +228,17 @@ export default function (pi: ExtensionAPI) {
     getPiLoopEnv: () => piLoopEnv,
     recreateSessionStore: (sessionId: string) => {
       const path = resolveLoopStorePath(getScopeOptions(), sessionId);
-      store = new LoopStore(path);
+      if (path) store = new LoopStore(path);
+      else {
+        store = memoryLoopStores.get(sessionId) ?? new LoopStore();
+        memoryLoopStores.set(sessionId, store);
+      }
       widget.setStore(store);
       scheduler = new CronScheduler(store, onLoopFire);
       triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
     },
     clearAllLoops: () => {
-      store.clearAll();
+      store.clearAll({ preserveWorkflows: true });
     },
     getStore: () => store,
     getScheduler: () => scheduler,
@@ -302,6 +310,7 @@ export default function (pi: ExtensionAPI) {
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
     },
+    closeWorkflowTask: (taskId, claimId) => taskProvider?.closeWorkflowTask(taskId, claimId) ?? Promise.resolve(false),
   });
 
   registerWorkflowTools({
@@ -315,7 +324,8 @@ export default function (pi: ExtensionAPI) {
       onLoopFire(entry);
     },
     createWorkflowTask: (entry) => taskProvider?.createWorkflowTask(entry) ?? Promise.resolve(undefined),
-    completeWorkflowTask: (taskId) => taskProvider?.completeWorkflowTask(taskId) ?? Promise.resolve(false),
+    completeWorkflowTask: (taskId, claimId) => taskProvider?.completeWorkflowTask(taskId, claimId) ?? Promise.resolve(false),
+    closeWorkflowTask: (taskId, claimId) => taskProvider?.closeWorkflowTask(taskId, claimId) ?? Promise.resolve(false),
   });
 
   function handleMonitorDoneLoop(doneLoop: LoopEntry, monitorId: string): void {

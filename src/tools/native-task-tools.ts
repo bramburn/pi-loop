@@ -7,14 +7,13 @@ import {
   heartbeatTask,
   type TaskBacklogResult,
   type TaskMutationContext,
+  taskMutationRejectionMessage,
   updateTask,
 } from "../runtime/task-mutations.js";
 import { TaskStore } from "../task-store.js";
 import type { TaskStatus } from "../task-types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
 import { displayRows, textResult } from "./tool-result.js";
-
-export type { TaskBacklogResult };
 
 export interface NativeTaskToolsOptions {
   pi: ExtensionAPI;
@@ -239,18 +238,25 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
       leaseSeconds: Type.Optional(Type.Number({ description: "Renewed lease duration in seconds", minimum: 60, maximum: 3600, default: 1800 })),
     }),
     execute(_toolCallId, params) {
-      const entry = heartbeatTask(mutationContext(), {
+      const result = heartbeatTask(mutationContext(), {
         id: params.id,
         claimId: params.claimId,
         leaseMs: (params.leaseSeconds ?? 1800) * 1000,
       });
-      if (!entry?.claim) {
-        return Promise.resolve(textResult(`Task #${params.id} heartbeat rejected`, {
-          kind: "task", action: "heartbeat", tone: "error", summary: `Task #${params.id} heartbeat rejected`, expanded: ["Claim is missing, expired/taken over, terminal, or token does not match."],
+      if (!result.applied) {
+        const reason = taskMutationRejectionMessage(params.id, result);
+        return Promise.resolve(textResult(`Task #${params.id} heartbeat rejected: ${reason}`, {
+          kind: "task", action: "heartbeat", tone: "error", summary: `Task #${params.id} heartbeat rejected`, expanded: [reason],
         }));
       }
-      return Promise.resolve(textResult(`Task #${entry.id} lease renewed until ${new Date(entry.claim.leaseExpiresAt).toISOString()}`, {
-        kind: "task", action: "heartbeat", tone: "success", summary: `Task #${entry.id} lease renewed`, expanded: [`Claim: ${entry.claim.claimId}`],
+      const claim = result.entry.claim;
+      if (!claim) {
+        return Promise.resolve(textResult(`Task #${params.id} heartbeat rejected: claim disappeared during renewal`, {
+          kind: "task", action: "heartbeat", tone: "error", summary: `Task #${params.id} heartbeat rejected`, expanded: ["Refresh and reclaim the task."],
+        }));
+      }
+      return Promise.resolve(textResult(`Task #${result.entry.id} lease renewed until ${new Date(claim.leaseExpiresAt).toISOString()}`, {
+        kind: "task", action: "heartbeat", tone: "success", summary: `Task #${result.entry.id} lease renewed`, expanded: [`Claim: ${claim.claimId}`],
       }));
     },
   });
@@ -260,14 +266,14 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
     label: "TaskUpdate",
     renderCall: renderToolCall("Task", (args) => `update · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Update task status or details. Set status to "in_progress" before starting work, "completed" when done, or "closed" when work is intentionally abandoned without completion.
+    description: `Update task status or details. TaskClaim starts owned work and sets in_progress. Use completed when done or closed when intentionally abandoned.
 
 Statuses: pending → in_progress → completed | closed
-Parameters: id (required), status, subject, description, claimId`,
+Parameters: id, status, subject, description, claimId`,
     promptGuidelines: [
       "TaskUpdate uses parameter `id`, not `taskId`.",
       "Accepted parameters: `id` (required), `status`, `subject`, `description`, `claimId`.",
-      "When a task has a claim, pass its exact `claimId` when completing or closing it.",
+      "TaskClaim already sets in_progress; do not repeat that update. Pass claimId when completing or closing claimed work.",
       "When validation fails with 'must have required properties id', you passed `taskId` instead of `id`. Correct silently and retry.",
     ],
     parameters: Type.Object({
@@ -286,16 +292,17 @@ Parameters: id (required), status, subject, description, claimId`,
         description,
         claimId,
       });
-      if (!result) {
-        const current = getTaskStore().get(id);
-        const reason = current
-          ? current.claim
-            ? "Claim token does not match the live task owner."
-            : `Transition from ${current.status} to ${status ?? current.status} is not allowed.`
-          : "Use TaskList to find valid task IDs.";
-        const message = current ? `Task #${id} update rejected: ${reason}` : `Task #${id} not found`;
+      if (!result.applied) {
+        const reason = taskMutationRejectionMessage(id, result);
+        const notFound = result.code === "not_found";
+        const message = notFound ? reason : `Task #${id} update rejected: ${reason}`;
         return textResult(message, {
-          kind: "task", action: "update", tone: "error", summary: current ? `Task #${id} update rejected` : `Task #${id} not found`, expanded: [reason],
+          kind: "task", action: "update", tone: "error", summary: notFound ? `Task #${id} not found` : `Task #${id} update rejected`, expanded: [reason],
+        });
+      }
+      if (result.idempotent) {
+        return textResult(`Task #${id} already ${result.entry.status}; ownership unchanged`, {
+          kind: "task", action: "update", tone: "info", summary: `Task #${id} already ${result.entry.status}`, expanded: ["No state mutation was needed."],
         });
       }
       const statusMsg = status ? ` → ${status}` : "";
@@ -318,15 +325,17 @@ Parameters: id (required), status, subject, description, claimId`,
     label: "TaskDelete",
     renderCall: renderToolCall("Task", (args) => `delete · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: "Delete a task by ID. Use for cleaning up completed or irrelevant tasks.",
+    description: "Delete a task. Live claims require claimId; active workflow tasks use the workflow.",
     parameters: Type.Object({
       id: Type.String({ description: "Task ID to delete" }),
+      claimId: Type.Optional(Type.String({ description: "Claim token required to delete live claimed work" })),
     }),
     async execute(_toolCallId, params) {
-      const result = await deleteTask(mutationContext(), params.id);
-      if (!result) {
-        return textResult(`Task #${params.id} not found`, {
-          kind: "task", action: "delete", tone: "error", summary: `Task #${params.id} not found`, expanded: ["Use TaskList to find valid task IDs."],
+      const result = await deleteTask(mutationContext(), params);
+      if (!result.applied) {
+        const reason = taskMutationRejectionMessage(params.id, result);
+        return textResult(result.code === "not_found" ? reason : `Task #${params.id} delete rejected: ${reason}`, {
+          kind: "task", action: "delete", tone: "error", summary: result.code === "not_found" ? `Task #${params.id} not found` : `Task #${params.id} delete rejected`, expanded: [reason],
         });
       }
       return textResult(`Task #${params.id} deleted`, {

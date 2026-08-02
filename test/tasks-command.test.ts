@@ -221,6 +221,33 @@ describe("registerTasksCommand", () => {
     expect(ui.notify).toHaveBeenCalledWith("Task #1 closed without completing", "info");
   });
 
+  it("does not report deletion success when a claimed task lacks its token", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+    h.taskStore.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+    });
+    let taskVisits = 0;
+    const ui = {
+      select: vi.fn(async (title: string) => {
+        if (title === "Tasks") return taskVisits++ === 0 ? "> #1 [in_progress] subject" : "< Back";
+        if (title.startsWith("#1")) return "x Delete";
+        return "< Back";
+      }),
+      input: vi.fn(async () => ""),
+      notify: vi.fn(),
+    };
+
+    await h.command.handler!("", { ui } as any);
+
+    expect(h.taskStore.get("1")).toBeDefined();
+    expect(h.emittedEvents.some((event) => event.name === "tasks:deleted")).toBe(false);
+    expect(ui.notify).toHaveBeenCalledWith("Task #1 unchanged: claim token required", "warning");
+  });
+
   it("selecting a task and choosing Delete removes it and emits tasks:deleted", async () => {
     const h = setup();
     h.taskStore.create("subject", "desc");

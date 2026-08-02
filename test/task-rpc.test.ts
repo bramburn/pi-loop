@@ -293,6 +293,27 @@ describe("task-rpc completeWorkflowTask", () => {
     expect(emittedEvents.some((event) => event.name === "tasks:completed" && event.payload.taskId === task.id)).toBe(true);
   });
 
+  it("passes the claim token when completing a claimed native workflow task", async () => {
+    const { pi } = createMockPi();
+    const store = new TaskStore();
+    const task = store.create("Investigate regression", "Find the cause.");
+    store.claim(task.id, {
+      claimId: "workflow-claim",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+    });
+    const bridge = createTaskRuntimeBridge({
+      pi,
+      isTasksAvailable: () => false,
+      setTasksAvailable: vi.fn(),
+      getNativeTaskStore: () => store,
+    });
+
+    expect(await bridge.completeWorkflowTask(task.id, "workflow-claim")).toBe(true);
+    expect(store.get(task.id)?.status).toBe("completed");
+  });
+
   it("uses the existing update RPC when pi-tasks owns workflow tasks", async () => {
     const { pi, emittedEvents } = createMockPi({
       respondToTaskUpdate: (request) => ({
@@ -313,8 +334,11 @@ describe("task-rpc completeWorkflowTask", () => {
       getNativeTaskStore: () => undefined,
     });
 
-    expect(await bridge.completeWorkflowTask("external-7")).toBe(true);
-    expect(emittedEvents.some((event) => event.name === "tasks:rpc:update" && event.payload.id === "external-7" && event.payload.status === "completed")).toBe(true);
+    expect(await bridge.completeWorkflowTask("external-7", "external-claim")).toBe(true);
+    expect(emittedEvents.some((event) => event.name === "tasks:rpc:update"
+      && event.payload.id === "external-7"
+      && event.payload.status === "completed"
+      && event.payload.claimId === "external-claim")).toBe(true);
   });
 
   it("does not re-emit completion for an already completed native task", async () => {

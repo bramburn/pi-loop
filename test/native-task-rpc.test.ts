@@ -350,7 +350,7 @@ describe("tasks:rpc:update", () => {
     expect(updatedEvt?.payload.previousStatus).toBe("completed");
   });
 
-  it("fails with 'not found' when store.start returns undefined mid-update", async () => {
+  it("reports a mutation conflict when store.start fails mid-update", async () => {
     const { mock, store } = setup();
     store!.create("subject", "desc");
     vi.spyOn(store!, "start").mockReturnValue(undefined);
@@ -360,7 +360,7 @@ describe("tasks:rpc:update", () => {
 
     expect(replyOf(mock, "tasks:rpc:update", "r1")).toEqual({
       success: false,
-      error: "Task #1 not found",
+      error: "Task #1 changed while the update was applied; refresh it and retry.",
     });
   });
 
@@ -433,6 +433,42 @@ describe("tasks:rpc:claim and heartbeat", () => {
     reply = replyOf(mock, "tasks:rpc:update", "complete-1");
     expect(reply.data.task.status).toBe("completed");
     expect(reply.data.task.claim).toBeUndefined();
+  });
+
+  it("rejects non-positive claim and heartbeat leases", async () => {
+    const { mock, store } = setup();
+    store!.create("subject", "desc");
+
+    mock.pi.events.emit("tasks:rpc:claim", {
+      requestId: "claim-negative",
+      id: "1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: -1,
+    });
+    await flushAsync();
+    expect(replyOf(mock, "tasks:rpc:claim", "claim-negative")).toEqual({
+      success: false,
+      error: "id, ownerSessionId, ownerRuntimeId, and leaseMs between 60000 and 3600000 are required",
+    });
+
+    store!.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 60_000,
+    });
+    mock.pi.events.emit("tasks:rpc:heartbeat", {
+      requestId: "heartbeat-negative",
+      id: "1",
+      claimId: "claim-1",
+      leaseMs: -1,
+    });
+    await flushAsync();
+    expect(replyOf(mock, "tasks:rpc:heartbeat", "heartbeat-negative")).toEqual({
+      success: false,
+      error: "id, claimId, and leaseMs between 60000 and 3600000 are required",
+    });
   });
 
   it("rejects a concurrent live owner", async () => {

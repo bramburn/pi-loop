@@ -89,11 +89,11 @@ WorkflowCreate goal="Fix the regression" definition='{
 The initial state must be non-terminal. Each wake presents the current state, state instructions, active task, allowed outcomes, and — after the first transition — the last transition and its recorded evidence, so the next state can act on what the previous one found. The agent finishes the state by selecting one declared outcome:
 
 ```text
-WorkflowTransition id="1" outcome="root_cause_found" evidence="A null config reaches the parser."
-WorkflowTransition id="1" outcome="tests_pass" evidence="Targeted and full test suites pass."
+WorkflowTransition id="1" outcome="root_cause_found" evidence="A null config reaches the parser." claimId="<active-task-claim>"
+WorkflowTransition id="1" outcome="tests_pass" evidence="Targeted and full test suites pass." claimId="<active-task-claim>"
 ```
 
-`WorkflowTransition` validates the branch, records evidence, creates the next state's optional task, and queues the next wake. When a target reaches `maxAttempts`, only outcomes leading to that target become unavailable; other declared outcomes remain selectable. Reaching a `completed` terminal state deletes the workflow loop; reaching a `paused` terminal state preserves it in paused state for inspection or deletion. Terminal workflow states cannot be resumed. Task completion does not guess an outcome—the model selects one explicitly.
+`WorkflowTransition` validates the branch, completes the current state task, records evidence, creates the next state's optional task, and queues the next wake. Pass `claimId` when the current state task was claimed; a task completion failure leaves the workflow in its source state. When a target reaches `maxAttempts`, only outcomes leading to that target become unavailable; other declared outcomes remain selectable. Reaching a `completed` terminal state deletes the workflow loop; reaching a `paused` terminal state preserves it in paused state for inspection or deletion. Terminal workflow states cannot be resumed. Task completion does not guess an outcome—the model selects one explicitly.
 
 `LoopList` includes workflow state, active task, transition evidence, and valid outcomes alongside ordinary loops.
 
@@ -102,10 +102,10 @@ WorkflowTransition id="1" outcome="tests_pass" evidence="Targeted and full test 
 ```text
 LoopList
 LoopDelete id="1" action="pause"
-LoopDelete id="1" action="delete"
+LoopDelete id="1" action="delete" claimId="<active-workflow-task-claim>"
 ```
 
-`LoopDelete` defaults to `action="delete"`.
+`LoopDelete` defaults to `action="delete"`. Deleting a workflow first closes its active state task; pass that task's `claimId` when claimed.
 
 ## Background monitors
 
@@ -152,7 +152,9 @@ TaskUpdate id="1" status="closed" claimId="<claim-id>"  # abandon without comple
 TaskDelete id="1"
 ```
 
-The native provider is selected for the session and exposes `/tasks`, compact status-line tracking, persisted task state, lifecycle events, and task RPC replies. `TaskClaim` provides one live owner per task, renewable heartbeats, and takeover only after lease expiry. Claimed terminal updates require the exact claim token. `closed` is terminal like `completed`, is excluded from pending backlog work, and deliberately does not emit `tasks:completed`; use it when work is intentionally abandoned.
+The native provider is selected for the session and exposes `/tasks`, compact status-line tracking, persisted task state, lifecycle events, and task RPC replies. `TaskClaim` provides one live owner per task, renewable heartbeats, and takeover only after lease expiry. It also moves the task to `in_progress`; a following `TaskUpdate status="in_progress"` is harmless but redundant. Claimed terminal updates require the exact live claim token; an expired token must be replaced by reclaiming the task. `closed` is terminal like `completed`, is excluded from pending backlog work, and deliberately does not emit `tasks:completed`; use it when work is intentionally abandoned.
+
+See the [mutation contract](./architecture/mutation-contract.md) for the complete transition matrix, rejection reasons, and recovery actions.
 
 TaskList shows each task with a short description excerpt and its workflow link (loop/state) when one exists. TaskGet reads the full untruncated description, timestamps, metadata, and workflow link — use it before starting a chained task whose goal-state and next-step text exceeds the excerpt.
 

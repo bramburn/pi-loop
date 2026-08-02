@@ -57,6 +57,12 @@ export class CronScheduler {
     return this.fireTimes.get(id);
   }
 
+  private retire(entry: LoopEntry): void {
+    if (entry.workflow) this.store.pause(entry.id);
+    else this.store.delete(entry.id);
+    this.fireTimes.delete(entry.id);
+  }
+
   private armTimer(entry: LoopEntry): void {
     const nextFire = computeNextFire(entry);
     let jitter = 0;
@@ -69,7 +75,7 @@ export class CronScheduler {
     const fireTime = nextFire.getTime() + jitter;
 
     if (fireTime > entry.expiresAt) {
-      this.store.delete(entry.id);
+      this.retire(entry);
       return;
     }
 
@@ -91,8 +97,7 @@ export class CronScheduler {
       if (filter && !filter(entry)) continue;
 
       if (now >= entry.expiresAt) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+        this.retire(entry);
         continue;
       }
 
@@ -105,14 +110,12 @@ export class CronScheduler {
       }
 
       if (!fresh.recurring) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+        this.retire(fresh);
         continue;
       }
 
       if (fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+        this.retire(fresh);
         continue;
       }
 

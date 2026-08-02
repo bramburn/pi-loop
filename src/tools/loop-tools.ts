@@ -19,7 +19,16 @@ interface LoopStoreLike {
     dynamic?: Partial<NonNullable<LoopEntry["dynamic"]>>;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
-  updateDynamic(id: string, fields: { prompt?: string; dynamic: Partial<NonNullable<LoopEntry["dynamic"]>> }): LoopEntry | undefined;
+  continueDynamic(
+    id: string,
+    fields: { prompt?: string; dynamic: Partial<NonNullable<LoopEntry["dynamic"]>> },
+    expected?: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): LoopEntry | undefined;
+  stopDynamic(
+    id: string,
+    status: "completed" | "paused",
+    expected: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): boolean;
   getDeletionTombstone(id: string): { reason: string; pendingCount?: number } | undefined;
   delete(id: string): boolean;
 }
@@ -52,6 +61,7 @@ export interface LoopToolsOptions {
   maybeBootstrapTaskLoop: (entry: LoopEntry) => Promise<boolean>;
   isTaskSystemReady: () => boolean;
   onDynamicLoopActivated?: (entry: LoopEntry) => void;
+  closeWorkflowTask: (taskId: string, claimId?: string) => Promise<boolean>;
 }
 
 function validateTrigger(trigger: Trigger): string | null {
@@ -95,7 +105,9 @@ function parseDelayMs(input: string): number | undefined {
   const value = Number.parseInt(match[1] ?? "", 10);
   const unit = (match[2] ?? "").toLowerCase();
   const multiplier = unit === "s" ? 1000 : unit === "m" ? 60000 : unit === "h" ? 3600000 : 86400000;
-  return value * multiplier;
+  const delayMs = value * multiplier;
+  if (!Number.isSafeInteger(delayMs) || delayMs <= 0 || delayMs > 7 * 24 * 60 * 60 * 1000) return undefined;
+  return delayMs;
 }
 
 interface LoopUpdateParams {
@@ -116,11 +128,11 @@ function resolveNextWakeAt(nextInterval?: string): { nextWakeAt?: number; error?
 }
 
 
-function formatDynamicUpdateResult(id: string, iteration: number | undefined, nextWakeAt: number | undefined): string {
+function formatDynamicUpdateResult(id: string, iteration: number | undefined, nextWakeAt: number | undefined, resumed: boolean): string {
   const mode = nextWakeAt === undefined
     ? "Next wake: when idle"
     : `Next wake: ${formatRemaining(Math.max(0, nextWakeAt - Date.now()))}`;
-  return `Dynamic loop #${id} updated\n` +
+  return `Dynamic loop #${id} ${resumed ? "resumed and updated" : "updated"}\n` +
     `Iteration: ${iteration ?? "?"}` +
     `\n${mode}`;
 }
@@ -135,11 +147,15 @@ function continueDynamicLoop(
   entry: LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> },
   store: LoopStoreLike,
   triggerSystem: TriggerSystemLike,
-): string {
+): { applied: boolean; message: string } {
   const { nextWakeAt, error } = resolveNextWakeAt(params.nextInterval);
-  if (error) return error;
+  if (error) return { applied: false, message: error };
+  if (nextWakeAt !== undefined && nextWakeAt > entry.expiresAt) {
+    return { applied: false, message: `nextInterval exceeds loop #${params.id}'s remaining lifetime.` };
+  }
 
-  const updated = store.updateDynamic(params.id, {
+  const resumed = entry.status === "paused";
+  const updated = store.continueDynamic(params.id, {
     prompt: params.prompt,
     dynamic: {
       goal: params.prompt ?? entry.dynamic.goal,
@@ -151,26 +167,39 @@ function continueDynamicLoop(
       awaitingUpdate: false,
       lastUpdatedAt: Date.now(),
     },
+  }, {
+    status: entry.status,
+    iteration: entry.dynamic.iteration ?? 0,
+    updatedAt: entry.updatedAt,
   });
-  if (updated) {
-    triggerSystem.remove(params.id);
-    triggerSystem.add(updated);
+  if (!updated) {
+    return { applied: false, message: `Loop #${params.id} changed while the update was applied; inspect LoopList and retry.` };
   }
-  return formatDynamicUpdateResult(params.id, updated?.dynamic?.iteration, nextWakeAt);
+  triggerSystem.remove(params.id);
+  triggerSystem.add(updated);
+  return { applied: true, message: formatDynamicUpdateResult(params.id, updated.dynamic?.iteration, nextWakeAt, resumed) };
 }
 
 function stopDynamicLoop(
   params: LoopUpdateParams,
+  entry: LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> },
   store: LoopStoreLike,
   triggerSystem: TriggerSystemLike,
-): string {
-  triggerSystem.remove(params.id);
-  if (params.status === "completed") {
-    store.delete(params.id);
-    return `Dynamic loop #${params.id} completed and deleted`;
+): { applied: boolean; message: string } {
+  const status = params.status === "completed" ? "completed" : "paused";
+  const applied = store.stopDynamic(params.id, status, {
+    status: entry.status,
+    iteration: entry.dynamic.iteration ?? 0,
+    updatedAt: entry.updatedAt,
+  });
+  if (!applied) {
+    return { applied: false, message: `Loop #${params.id} changed while the update was applied; inspect LoopList and retry.` };
   }
-  store.pause(params.id);
-  return `Dynamic loop #${params.id} paused`;
+  triggerSystem.remove(params.id);
+  return {
+    applied: true,
+    message: status === "completed" ? `Dynamic loop #${params.id} completed and deleted` : `Dynamic loop #${params.id} paused`,
+  };
 }
 
 export function registerLoopTools(options: LoopToolsOptions): void {
@@ -184,6 +213,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
     onDynamicLoopActivated,
+    closeWorkflowTask,
   } = options;
 
   pi.registerTool({
@@ -213,7 +243,7 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
       triggerType: Type.Optional(Type.String({ description: "cron, event, hybrid, or idle (cron/event inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid", "idle"] })),
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
-      maxFires: Type.Optional(Type.Number({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops." })),
+      maxFires: Type.Optional(Type.Integer({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops.", minimum: 1 })),
     }),
     async execute(_toolCallId, params) {
       const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires } = params;
@@ -399,15 +429,28 @@ Use this exactly once after each dynamic loop wake. Mark status as "continue" wi
           kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
         }));
       }
+      if (entry.workflow) {
+        const message = `Loop #${params.id} is workflow-owned. Use WorkflowTransition for state changes or LoopDelete to cancel it.`;
+        return Promise.resolve(textResult(message, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} update rejected`, expanded: [message],
+        }));
+      }
       if (entry.trigger.type !== "dynamic" || !entry.dynamic) {
         return Promise.resolve(textResult(`Loop #${params.id} is not a dynamic loop`, {
           kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} is not dynamic`, expanded: ["Use LoopUpdate only for dynamic loops."],
         }));
       }
 
-      const message = params.status === "continue"
-        ? continueDynamicLoop(params, entry as LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> }, store, triggerSystem)
-        : stopDynamicLoop(params, store, triggerSystem);
+      const dynamicEntry = entry as LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> };
+      const outcome = params.status === "continue"
+        ? continueDynamicLoop(params, dynamicEntry, store, triggerSystem)
+        : stopDynamicLoop(params, dynamicEntry, store, triggerSystem);
+      if (!outcome.applied) {
+        return Promise.resolve(textResult(outcome.message, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} update rejected`, expanded: [outcome.message],
+        }));
+      }
+      const message = outcome.message;
       updateWidget();
       const tone = params.status === "paused" ? "warning" : "success";
       const summary = params.status === "completed"
@@ -440,8 +483,9 @@ Do not use this after a normal loop fire, an unchanged check, an empty iteration
     parameters: Type.Object({
       id: Type.String({ description: "Loop ID to delete or pause" }),
       action: Type.Optional(Type.String({ description: "delete or pause (default: delete)", enum: ["delete", "pause"], default: "delete" })),
+      claimId: Type.Optional(Type.String({ description: "Claim token for an active workflow task" })),
     }),
-    execute(_toolCallId, params) {
+    async execute(_toolCallId, params) {
       const { id, action } = params;
 
       if (action === "pause") {
@@ -464,6 +508,14 @@ Do not use this after a normal loop fire, an unchanged check, an empty iteration
         }));
       }
 
+      const current = getStore().get(id);
+      const activeTaskId = current?.workflow?.activeTaskId;
+      if (activeTaskId && !await closeWorkflowTask(activeTaskId, params.claimId)) {
+        const message = `Loop #${id} could not close active task #${activeTaskId}; reclaim the task and pass claimId before retrying deletion.`;
+        return textResult(message, {
+          kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} deletion blocked by task #${activeTaskId}`, expanded: [message],
+        });
+      }
       getTriggerSystem().remove(id);
       const deleted = getStore().delete(id);
       updateWidget();

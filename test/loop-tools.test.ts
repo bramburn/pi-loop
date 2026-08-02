@@ -12,7 +12,8 @@ function setup() {
   const monitorManager = { get: vi.fn(() => undefined) };
   const onDynamicLoopActivated = vi.fn();
   const createWorkflowTask = vi.fn(async (_entry: unknown) => undefined as string | undefined);
-  const completeWorkflowTask = vi.fn(async (_taskId: string) => true);
+  const completeWorkflowTask = vi.fn(async (_taskId: string, _claimId?: string) => true);
+  const closeWorkflowTask = vi.fn(async (_taskId: string, _claimId?: string) => true);
   registerLoopTools({
     pi,
     getStore: () => store as any,
@@ -23,6 +24,7 @@ function setup() {
     maybeBootstrapTaskLoop: vi.fn(async () => false),
     isTaskSystemReady: () => true,
     onDynamicLoopActivated,
+    closeWorkflowTask,
   });
   registerWorkflowTools({
     pi,
@@ -32,10 +34,11 @@ function setup() {
     onDynamicLoopActivated,
     createWorkflowTask,
     completeWorkflowTask,
+    closeWorkflowTask,
   });
-  const text = async (name: string, args: any) =>
-    (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
-  return { store, triggerSystem, text, toolMap, onDynamicLoopActivated, createWorkflowTask, completeWorkflowTask };
+  const result = async (name: string, args: any) => await toolMap.get(name)!.execute!("t", args);
+  const text = async (name: string, args: any) => (await result(name, args)).content[0].text as string;
+  return { store, triggerSystem, text, result, toolMap, onDynamicLoopActivated, createWorkflowTask, completeWorkflowTask, closeWorkflowTask };
 }
 
 describe("LoopCreate", () => {
@@ -276,9 +279,39 @@ describe("LoopUpdate", () => {
     expect(h.store.get("1")?.dynamic?.nextWakeAt).toBeUndefined();
   });
 
-  it("reports invalid next intervals", async () => {
-    const out = await h.text("LoopUpdate", { id: "1", status: "continue", nextInterval: "soon" });
-    expect(out).toContain("Invalid nextInterval");
+  it("reports invalid next intervals as structured errors without mutation", async () => {
+    const before = h.store.get("1")!;
+    before.expiresAt = Date.now() + 1_000;
+    h.triggerSystem.add.mockClear();
+    h.triggerSystem.remove.mockClear();
+
+    const result = await h.result("LoopUpdate", { id: "1", status: "continue", nextInterval: "soon" });
+
+    expect(result.content[0].text).toContain("Invalid nextInterval");
+    expect(result.details).toMatchObject({ tone: "error", summary: "Loop #1 update rejected" });
+    expect(h.store.get("1")).toEqual(before);
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(h.triggerSystem.remove).not.toHaveBeenCalled();
+
+    const overflow = await h.result("LoopUpdate", { id: "1", status: "continue", nextInterval: "999999999999999999999d" });
+    expect(overflow.details).toMatchObject({ tone: "error", summary: "Loop #1 update rejected" });
+    const beyondLifetime = await h.result("LoopUpdate", { id: "1", status: "continue", nextInterval: "2s" });
+    expect(beyondLifetime.content[0].text).toContain("exceeds loop #1's remaining lifetime");
+    expect(beyondLifetime.details).toMatchObject({ tone: "error" });
+    expect(h.store.get("1")).toEqual(before);
+  });
+
+  it("resumes a paused dynamic loop when it continues", async () => {
+    await h.text("LoopUpdate", { id: "1", status: "paused" });
+    h.triggerSystem.add.mockClear();
+    h.triggerSystem.remove.mockClear();
+
+    const out = await h.text("LoopUpdate", { id: "1", status: "continue", state: "blocker resolved" });
+
+    expect(out).toContain("resumed and updated");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.store.get("1")?.dynamic?.state).toBe("blocker resolved");
+    expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
   });
 });
 
@@ -336,6 +369,20 @@ describe("Workflow tools", () => {
     expect(h.toolMap.get("WorkflowTransition")?.renderResult).toBeTypeOf("function");
   });
 
+  it("rejects creation when its initial task cannot bind to the original state", async () => {
+    h.createWorkflowTask.mockImplementationOnce(async (entry) => {
+      h.store.transitionWorkflow((entry as { id: string }).id, { outcome: "found", evidence: "Concurrent transition." });
+      return "12";
+    });
+
+    const out = await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+
+    expect(out).toContain("changed while initial task #12 was created");
+    expect(h.closeWorkflowTask).toHaveBeenCalledWith("12");
+    expect(h.triggerSystem.add).not.toHaveBeenCalled();
+    expect(h.onDynamicLoopActivated).not.toHaveBeenCalled();
+  });
+
   it("creates and records a task declared by the active workflow state", async () => {
     h.createWorkflowTask.mockResolvedValueOnce("12");
     const definitionWithTask = JSON.stringify({
@@ -358,6 +405,26 @@ describe("Workflow tools", () => {
     expect(h.store.get("1")?.workflow?.activeTaskId).toBe("12");
   });
 
+  it("closes an active state task before deleting its workflow", async () => {
+    h.createWorkflowTask.mockResolvedValueOnce("12");
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+
+    expect(await h.text("LoopDelete", { id: "1", claimId: "claim-12" })).toBe("Loop #1 deleted");
+    expect(h.closeWorkflowTask).toHaveBeenCalledWith("12", "claim-12");
+    expect(h.store.get("1")).toBeUndefined();
+  });
+
+  it("keeps a workflow when its active state task cannot be closed", async () => {
+    h.createWorkflowTask.mockResolvedValueOnce("12");
+    h.closeWorkflowTask.mockResolvedValueOnce(false);
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+
+    const out = await h.text("LoopDelete", { id: "1", claimId: "stale" });
+
+    expect(out).toContain("could not close active task #12");
+    expect(h.store.get("1")).toBeDefined();
+  });
+
   it("lists ordinary loops and full workflow state through LoopList", async () => {
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
     await h.text("LoopCreate", { trigger: "5m", prompt: "ordinary loop", triggerType: "cron" });
@@ -368,6 +435,37 @@ describe("Workflow tools", () => {
     expect(out).toContain("Current state: investigate");
     expect(out).toContain("Choose outcome: found");
     expect(out).toContain("#2 [active] ordinary loop");
+  });
+
+  it("rejects LoopUpdate for workflow-owned dynamic loops", async () => {
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+    const before = h.store.get("1");
+
+    const result = await h.result("LoopUpdate", { id: "1", status: "completed" });
+
+    expect(result.content[0].text).toContain("Use WorkflowTransition");
+    expect(result.details).toMatchObject({ tone: "error", summary: "Loop #1 update rejected" });
+    expect(h.store.get("1")).toEqual(before);
+  });
+
+  it("resumes a paused nonterminal workflow when it transitions", async () => {
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+    await h.text("LoopDelete", { id: "1", action: "pause" });
+    h.triggerSystem.add.mockClear();
+
+    const out = await h.text("WorkflowTransition", { id: "1", outcome: "found", evidence: "Blocker resolved." });
+
+    expect(out).toContain("investigate → fix");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
+  });
+
+  it("ignores caller-supplied destination task identifiers", async () => {
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+
+    await h.text("WorkflowTransition", { id: "1", outcome: "found", activeTaskId: "unrelated-task" });
+
+    expect(h.store.get("1")?.workflow?.activeTaskId).toBeUndefined();
   });
 
   it("transitions only along declared outcomes and re-arms the loop", async () => {
@@ -411,17 +509,17 @@ describe("Workflow tools", () => {
     });
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition: definitionWithTasks });
 
-    await h.text("WorkflowTransition", { id: "1", outcome: "found" });
+    await h.text("WorkflowTransition", { id: "1", outcome: "found", claimId: "claim-10" });
 
-    expect(h.completeWorkflowTask).toHaveBeenCalledWith("10");
+    expect(h.completeWorkflowTask).toHaveBeenCalledWith("10", "claim-10");
     expect(h.store.get("1")?.workflow?.activeTaskId).toBe("11");
 
-    await h.text("WorkflowTransition", { id: "1", outcome: "passing" });
-    expect(h.completeWorkflowTask).toHaveBeenLastCalledWith("11");
+    await h.text("WorkflowTransition", { id: "1", outcome: "passing", claimId: "claim-11" });
+    expect(h.completeWorkflowTask).toHaveBeenLastCalledWith("11", "claim-11");
     expect(h.store.get("1")).toBeUndefined();
   });
 
-  it("continues the workflow when source task completion is unavailable", async () => {
+  it("rejects the transition when source task completion is unavailable", async () => {
     h.createWorkflowTask.mockResolvedValueOnce("10").mockResolvedValueOnce("11");
     h.completeWorkflowTask.mockResolvedValueOnce(false);
     const definitionWithTasks = JSON.stringify({
@@ -443,11 +541,46 @@ describe("Workflow tools", () => {
     });
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition: definitionWithTasks });
 
+    const before = h.store.get("1");
+    const out = await h.text("WorkflowTransition", { id: "1", outcome: "found", claimId: "stale" });
+
+    expect(out).toContain("Source task #10 could not be completed");
+    expect(out).toContain("reclaim it and pass claimId");
+    expect(h.store.get("1")).toEqual(before);
+    expect(h.createWorkflowTask).toHaveBeenCalledTimes(1);
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a stale transition instead of skipping a concurrently-entered state", async () => {
+    h.createWorkflowTask.mockResolvedValueOnce("10");
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+    h.completeWorkflowTask.mockImplementationOnce(async () => {
+      h.store.transitionWorkflow("1", { outcome: "found", evidence: "Concurrent transition." });
+      return true;
+    });
+
+    const out = await h.text("WorkflowTransition", { id: "1", outcome: "found", claimId: "claim-10" });
+
+    expect(out).toContain("Workflow #1 changed; inspect LoopList and retry");
+    expect(h.store.get("1")?.workflow?.currentState).toBe("fix");
+    expect(h.store.get("1")?.workflow?.transitionSeq).toBe(1);
+  });
+
+  it("closes an unbound destination task when the workflow advances concurrently", async () => {
+    h.createWorkflowTask
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(async () => {
+        h.store.transitionWorkflow("1", { outcome: "passing", evidence: "Concurrent completion." });
+        return "11";
+      });
+    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
+
     const out = await h.text("WorkflowTransition", { id: "1", outcome: "found" });
 
-    expect(out).toContain("investigate → fix");
-    expect(h.store.get("1")?.workflow?.activeTaskId).toBe("11");
-    expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
+    expect(out).toContain("changed while destination task #11 was created");
+    expect(h.closeWorkflowTask).toHaveBeenCalledWith("11");
+    expect(h.store.get("1")?.workflow?.currentState).toBe("done");
+    expect(h.store.get("1")?.workflow?.activeTaskId).toBeUndefined();
   });
 
   it("rejects an undeclared outcome without changing or re-arming the workflow", async () => {

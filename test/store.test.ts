@@ -136,11 +136,42 @@ describe("LoopStore (in-memory)", () => {
     expect(store2.list()).toHaveLength(0);
   });
 
+  it("pauses expired workflows instead of deleting them", () => {
+    const workflow = store.create({ type: "dynamic" }, "workflow", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "work",
+        states: { work: { prompt: "Work.", on: { done: "done" } }, done: { prompt: "Done.", terminal: "completed" } },
+      },
+    });
+    workflow.expiresAt = Date.now() - 1;
+
+    expect(store.clearExpired()).toBe(1);
+    expect(store.get(workflow.id)?.status).toBe("paused");
+  });
+
   it("clears all loops", () => {
     store.create(cronTrigger, "a", { recurring: true });
     store.create(cronTrigger, "b", { recurring: true });
     expect(store.clearAll()).toBe(2);
     expect(store.list()).toHaveLength(0);
+  });
+
+  it("can clear ordinary loops while preserving workflows for safe reconciliation", () => {
+    store.create(cronTrigger, "ordinary", { recurring: true });
+    const workflow = store.create({ type: "dynamic" }, "workflow", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "work",
+        states: { work: { prompt: "Work.", on: { done: "done" } }, done: { prompt: "Done.", terminal: "completed" } },
+      },
+    });
+
+    expect(store.clearAll({ preserveWorkflows: true })).toBe(2);
+    expect(store.get("1")).toBeUndefined();
+    expect(store.get(workflow.id)?.status).toBe("paused");
   });
 
   it("expires event-triggered loops on session start", () => {
@@ -227,6 +258,16 @@ describe("LoopStore (in-memory)", () => {
       awaitingUpdate: false,
     });
     expect(l.dynamic?.lastUpdatedAt).toBe(l.createdAt);
+  });
+
+  it("rejects a stale dynamic continuation without overwriting newer progress", () => {
+    const entry = store.create({ type: "dynamic" }, "ship", { recurring: true });
+    const expected = { status: entry.status, iteration: entry.dynamic?.iteration ?? 0, updatedAt: entry.updatedAt };
+    store.updateDynamic(entry.id, { dynamic: { state: "newer", iteration: 1 } });
+
+    expect(store.continueDynamic(entry.id, { dynamic: { state: "stale", iteration: 1 } }, expected)).toBeUndefined();
+    expect(store.stopDynamic(entry.id, "completed", expected)).toBe(false);
+    expect(store.get(entry.id)?.dynamic?.state).toBe("newer");
   });
 
   it("defaults dynamic goal to the prompt", () => {

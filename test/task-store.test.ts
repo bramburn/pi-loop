@@ -56,6 +56,16 @@ describe("TaskStore (in-memory)", () => {
     expect(entry?.completedAt).toBe(completedAt);
   });
 
+  it("rejects claim leases beyond the one-hour safety bound", () => {
+    store.create("task", "desc");
+    expect(store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 3_600_001,
+    })).toBeUndefined();
+  });
+
   it("claims pending work and rejects a live foreign owner", () => {
     store.create("task", "desc");
     const claimed = store.claim("1", {
@@ -127,6 +137,47 @@ describe("TaskStore (in-memory)", () => {
     });
   });
 
+  it("issues a new token when the same owner reclaims after expiry", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    const reclaimed = store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 2_001,
+      leaseMs: 1_000,
+    });
+
+    expect(reclaimed).toMatchObject({
+      takenOver: false,
+      renewed: false,
+      entry: { claim: { claimId: "claim-2", attempt: 2, leaseExpiresAt: 3_001 } },
+    });
+  });
+
+  it("requires the live claim token for deletion", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    expect(store.delete("1", undefined, 1_500)).toBe(false);
+    expect(store.delete("1", "wrong", 1_500)).toBe(false);
+    expect(store.delete("1", "claim-1", 2_001)).toBe(false);
+    expect(store.delete("1", "claim-1", 1_500)).toBe(true);
+  });
+
   it("requires the claim token for heartbeat and completion", () => {
     store.create("task", "desc");
     store.claim("1", {
@@ -138,6 +189,7 @@ describe("TaskStore (in-memory)", () => {
     });
 
     expect(store.heartbeat("1", "wrong", 1_500, 1_000)).toBeUndefined();
+    expect(store.heartbeat("1", "claim-1", 1_500, 3_600_001)).toBeUndefined();
     expect(store.heartbeat("1", "claim-1", 1_500, 1_000)?.claim?.leaseExpiresAt).toBe(2_500);
     expect(store.heartbeat("1", "claim-1", 2_501, 1_000)).toBeUndefined();
     expect(store.complete("1", "wrong", 2_000)).toBeUndefined();

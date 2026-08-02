@@ -13,16 +13,17 @@ afterEach(() => {
 function setup(respondToTaskPing = false) {
   let sessionId = "session-a";
   const mock = createMockPi({ respondToTaskPing });
+  const evaluateTaskBacklog = vi.fn(async () => ({ created: false, cleaned: 0 }));
   const runtime = createTaskProviderRuntime({
     pi: mock.pi,
     runtimeId: "runtime-a",
     resolveStorePath: () => undefined,
     getSessionId: () => sessionId,
-    evaluateTaskBacklog: vi.fn(async () => ({ created: false, cleaned: 0 })),
+    evaluateTaskBacklog,
     updateWidget: vi.fn(),
     isStaleExtensionContextError: () => false,
   });
-  return { ...mock, runtime, setSessionId: (next: string) => { sessionId = next; } };
+  return { ...mock, runtime, evaluateTaskBacklog, setSessionId: (next: string) => { sessionId = next; } };
 }
 
 describe("task-provider-runtime", () => {
@@ -82,6 +83,17 @@ describe("task-provider-runtime", () => {
     const inA = (await list.execute!("list-a", {})).content[0].text;
     expect(inA).toContain("session A");
     expect(inA).not.toContain("session B");
+  });
+
+  it("settles backlog state after closing a workflow task", async () => {
+    const { toolMap, runtime, evaluateTaskBacklog } = setup();
+    await vi.advanceTimersByTimeAsync(6_100);
+    await toolMap.get("TaskCreate")!.execute!("create", { subject: "state task", description: "work" });
+    evaluateTaskBacklog.mockClear();
+
+    expect(await runtime.closeWorkflowTask("1")).toBe(true);
+
+    expect(evaluateTaskBacklog).toHaveBeenCalledWith(runtime.getNativeTaskStore(), 0);
   });
 
   it("cancels delayed fallback registration on session shutdown", async () => {

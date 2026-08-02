@@ -160,15 +160,53 @@ describe("TaskClaim and TaskHeartbeat", () => {
     expect(heartbeat).toContain("lease renewed");
   });
 
-  it("rejects a wrong heartbeat and requires claimId at completion", async () => {
+  it("rejects a wrong heartbeat and distinguishes missing from mismatched completion claims", async () => {
     const h = setup();
     h.taskStore.create("subject", "desc");
     await h.text("TaskClaim", { id: "1" });
     const claimId = h.taskStore.get("1")?.claim?.claimId;
 
-    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "wrong" })).toContain("rejected");
-    expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("Claim token does not match");
+    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "wrong" })).toContain("Claim token does not match");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("claimId is required");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId: "wrong" })).toContain("Claim token does not match");
     expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId })).toContain("→ completed");
+  });
+
+  it("explains a heartbeat sent before claiming", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+
+    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "stale" })).toContain("has no live claim; claim the task");
+  });
+
+  it("treats TaskClaim followed by in_progress as idempotent", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+    await h.text("TaskClaim", { id: "1" });
+    const claimed = h.taskStore.get("1")!;
+
+    const output = await h.text("TaskUpdate", { id: "1", status: "in_progress" });
+
+    expect(output).toContain("already in_progress");
+    expect(output).toContain("ownership unchanged");
+    expect(h.taskStore.get("1")).toEqual(claimed);
+  });
+
+  it("reports an expired completion lease instead of a token mismatch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const h = setup();
+      h.taskStore.create("subject", "desc");
+      await h.text("TaskClaim", { id: "1", leaseSeconds: 60 });
+      const claimId = h.taskStore.get("1")?.claim?.claimId;
+      vi.advanceTimersByTime(60_001);
+
+      expect(await h.text("TaskHeartbeat", { id: "1", claimId })).toContain("claim lease expired; reclaim the task");
+      expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId })).toContain("lease expired; reclaim the task");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -203,6 +241,47 @@ describe("TaskUpdate", () => {
     expect(h.emittedEvents.some((e) => e.name === "tasks:updated" && e.payload.taskId === "1")).toBe(true);
   });
 
+  it("rejects an update with no requested changes", async () => {
+    const before = h.taskStore.get("1");
+    expect(await h.text("TaskUpdate", { id: "1" })).toContain("No update fields were provided");
+    expect(h.taskStore.get("1")).toEqual(before);
+  });
+
+  it.each([
+    ["pending", "pending", true],
+    ["pending", "in_progress", true],
+    ["pending", "completed", true],
+    ["pending", "closed", true],
+    ["in_progress", "pending", false],
+    ["in_progress", "in_progress", true],
+    ["in_progress", "completed", true],
+    ["in_progress", "closed", true],
+    ["completed", "pending", true],
+    ["completed", "in_progress", false],
+    ["completed", "completed", false],
+    ["completed", "closed", false],
+    ["closed", "pending", true],
+    ["closed", "in_progress", false],
+    ["closed", "completed", false],
+    ["closed", "closed", false],
+  ] as const)("models %s → %s as applied=%s", async (from, to, applied) => {
+    const matrix = setup();
+    matrix.taskStore.create("subject", "desc");
+    if (from === "in_progress") matrix.taskStore.start("1");
+    if (from === "completed") matrix.taskStore.complete("1");
+    if (from === "closed") matrix.taskStore.close("1");
+
+    const output = await matrix.text("TaskUpdate", { id: "1", status: to });
+
+    if (applied) {
+      expect(output).not.toContain("rejected");
+      expect(matrix.taskStore.get("1")?.status).toBe(to);
+    } else {
+      expect(output).toContain(`Transition from ${from} to ${to} is not allowed`);
+      expect(matrix.taskStore.get("1")?.status).toBe(from);
+    }
+  });
+
   it("reports not found for an unknown id", async () => {
     expect(await h.text("TaskUpdate", { id: "99", status: "completed" })).toBe("Task #99 not found");
   });
@@ -220,6 +299,25 @@ describe("TaskDelete", () => {
     expect(await h.text("TaskDelete", { id: "1" })).toBe("Task #1 deleted");
     expect(h.taskStore.get("1")).toBeUndefined();
     expect(h.emittedEvents.some((e) => e.name === "tasks:deleted" && e.payload.taskId === "1")).toBe(true);
+  });
+
+  it("rejects deletion of live claimed work without its token", async () => {
+    const h = setup();
+    h.taskStore.create("claimed", "d");
+    await h.text("TaskClaim", { id: "1" });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+
+    expect(await h.text("TaskDelete", { id: "1" })).toContain("claimId is required");
+    expect(h.taskStore.get("1")).toBeDefined();
+    expect(await h.text("TaskDelete", { id: "1", claimId })).toBe("Task #1 deleted");
+  });
+
+  it("rejects deletion of active workflow-owned work", async () => {
+    const h = setup();
+    h.taskStore.create("workflow", "d", undefined, { loopId: "9", stateId: "fix", transitionSeq: 1 });
+
+    expect(await h.text("TaskDelete", { id: "1" })).toContain("managed by workflow #9");
+    expect(h.taskStore.get("1")).toBeDefined();
   });
 
   it("reports not found for an unknown id", async () => {

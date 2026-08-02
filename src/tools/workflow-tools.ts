@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { formatLastTransitionLines } from "../loop-format.js";
 import type { LoopEntry, Trigger, WorkflowDefinition } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
-import { validateWorkflowDefinition, type WorkflowTransitionFailure } from "../workflow-reducer.js";
+import { transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure } from "../workflow-reducer.js";
 import { textResult } from "./tool-result.js";
 
 interface WorkflowStoreLike {
@@ -15,14 +15,23 @@ interface WorkflowStoreLike {
     workflow?: WorkflowDefinition;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
-  transitionWorkflow(id: string, input: { outcome: string; evidence?: string; activeTaskId?: string }): {
+  resume(id: string): LoopEntry | undefined;
+  transitionWorkflow(
+    id: string,
+    input: { outcome: string; evidence?: string; activeTaskId?: string },
+    expected?: { currentState: string; transitionSeq: number; activeTaskId?: string },
+  ): {
     entry?: LoopEntry;
     applied: boolean;
     error?: string;
     failure?: WorkflowTransitionFailure;
     terminal?: "completed" | "paused";
   };
-  setWorkflowActiveTask(id: string, taskId?: string): LoopEntry | undefined;
+  setWorkflowActiveTask(
+    id: string,
+    taskId?: string,
+    expected?: { currentState: string; transitionSeq: number; activeTaskId?: string },
+  ): LoopEntry | undefined;
   delete(id: string): boolean;
 }
 
@@ -38,7 +47,8 @@ export interface WorkflowToolsOptions {
   updateWidget: () => void;
   onDynamicLoopActivated?: (entry: LoopEntry) => void;
   createWorkflowTask?: (entry: LoopEntry) => Promise<string | undefined>;
-  completeWorkflowTask?: (taskId: string) => Promise<boolean>;
+  completeWorkflowTask?: (taskId: string, claimId?: string) => Promise<boolean>;
+  closeWorkflowTask?: (taskId: string, claimId?: string) => Promise<boolean>;
 }
 
 function parseWorkflowDefinition(input: string): { definition?: WorkflowDefinition; error?: string } {
@@ -107,6 +117,7 @@ export function registerWorkflowTools(options: WorkflowToolsOptions): void {
     onDynamicLoopActivated,
     createWorkflowTask,
     completeWorkflowTask,
+    closeWorkflowTask,
   } = options;
 
   pi.registerTool({
@@ -129,7 +140,7 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
     parameters: Type.Object({
       goal: Type.String({ description: "Overall workflow goal" }),
       definition: Type.String({ description: "Workflow JSON: version, initialState, and named states" }),
-      maxFires: Type.Optional(Type.Number({ description: "Maximum workflow wakes before automatic expiry (default: 30)", default: 30 })),
+      maxFires: Type.Optional(Type.Integer({ description: "Maximum workflow wakes before automatic expiry (default: 30)", default: 30, minimum: 1 })),
     }),
     async execute(_toolCallId, params) {
       const parsed = parseWorkflowDefinition(params.definition);
@@ -150,8 +161,26 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
         dynamic: { goal: params.goal, state: parsed.definition.initialState, iteration: 0 },
         workflow: parsed.definition,
       });
-      const taskId = await createWorkflowTask?.(entry);
-      if (taskId) entry = getStore().setWorkflowActiveTask(entry.id, taskId) ?? entry;
+      const createdTaskId = await createWorkflowTask?.(entry);
+      let taskId: string | undefined;
+      if (createdTaskId && entry.workflow) {
+        const bound = getStore().setWorkflowActiveTask(entry.id, createdTaskId, {
+          currentState: entry.workflow.currentState,
+          transitionSeq: entry.workflow.transitionSeq,
+          activeTaskId: entry.workflow.activeTaskId,
+        });
+        if (bound) {
+          entry = bound;
+          taskId = createdTaskId;
+        } else {
+          const closed = await closeWorkflowTask?.(createdTaskId);
+          const message = `Workflow #${entry.id} changed while initial task #${createdTaskId} was created; task cleanup ${closed ? "succeeded" : "failed"}. Inspect LoopList before retrying.`;
+          updateWidget();
+          return textResult(message, {
+            kind: "workflow", action: "create", tone: "error", summary: `Workflow #${entry.id} task binding rejected`, expanded: [message],
+          });
+        }
+      }
       getTriggerSystem().add(entry);
       updateWidget();
       onDynamicLoopActivated?.(entry);
@@ -178,7 +207,7 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
     label: "WorkflowTransition",
     renderCall: renderToolCall("Workflow", (args) => `transition · #${String(toolArg(args, "id") ?? "?")} → ${String(toolArg(args, "outcome") ?? "?")}`),
     renderResult: renderToolResult,
-    description: "Advance a workflow using one declared outcome. Call exactly once after its current state; pass id, outcome, and concise evidence.",
+    description: "Advance via one declared outcome. Pass claimId for a claimed state task so it closes before transition.",
     promptGuidelines: [
       "WorkflowTransition uses `id`, not `loopId`.",
       "Use an exact declared outcome and include evidence. Inspect LoopList when the current state is unclear.",
@@ -187,12 +216,38 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
       id: Type.String({ description: "Workflow loop ID" }),
       outcome: Type.String({ description: "Declared outcome for the current workflow state" }),
       evidence: Type.Optional(Type.String({ description: "Concise evidence supporting this transition" })),
-      activeTaskId: Type.Optional(Type.String({ description: "Optional task ID now active in the destination state" })),
+      claimId: Type.Optional(Type.String({ description: "Claim token for the current state's active task" })),
     }),
     async execute(_toolCallId, params) {
       const store = getStore();
-      const sourceTaskId = store.get(params.id)?.workflow?.activeTaskId;
-      const result = store.transitionWorkflow(params.id, params);
+      const transitionInput = { outcome: params.outcome, evidence: params.evidence };
+      const currentEntry = store.get(params.id);
+      const sourceTaskId = currentEntry?.workflow?.activeTaskId;
+      if (currentEntry?.workflow) {
+        const preview = transitionWorkflowRun(currentEntry.workflow, transitionInput, Date.now());
+        if (!preview.applied) {
+          const error = preview.error ?? "unknown transition error";
+          return textResult(
+            `Workflow #${params.id} did not transition\nReason: ${error}\n${formatWorkflowSummary(currentEntry, `Workflow #${params.id} remains — ${currentEntry.status}`, preview.failure)}`,
+            { kind: "workflow", action: "transition", tone: "error", summary: `Workflow #${params.id} remains in ${currentEntry.workflow.currentState}`, expanded: [error] },
+          );
+        }
+      }
+      const sourceTaskClosed = sourceTaskId ? await completeWorkflowTask?.(sourceTaskId, params.claimId) : undefined;
+      if (sourceTaskId && !sourceTaskClosed) {
+        const message = `Source task #${sourceTaskId} could not be completed; reclaim it and pass claimId before retrying the workflow transition.`;
+        return textResult(message, {
+          kind: "workflow", action: "transition", tone: "error", summary: `Workflow #${params.id} transition blocked by task #${sourceTaskId}`, expanded: [message],
+        });
+      }
+      const expected = currentEntry?.workflow
+        ? {
+            currentState: currentEntry.workflow.currentState,
+            transitionSeq: currentEntry.workflow.transitionSeq,
+            activeTaskId: currentEntry.workflow.activeTaskId,
+          }
+        : undefined;
+      const result = store.transitionWorkflow(params.id, transitionInput, expected);
       if (!result.applied || !result.entry) {
         const current = store.get(params.id);
         if (current?.workflow) {
@@ -207,7 +262,6 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
 
       const entry = result.entry;
       getTriggerSystem().remove(entry.id);
-      const sourceTaskClosed = sourceTaskId ? await completeWorkflowTask?.(sourceTaskId) : undefined;
       if (result.terminal === "completed") {
         store.delete(entry.id);
         updateWidget();
@@ -239,8 +293,26 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
         );
       }
 
-      const taskId = await createWorkflowTask?.(entry);
-      const updatedEntry = taskId ? store.setWorkflowActiveTask(entry.id, taskId) ?? entry : entry;
+      const resumedEntry = entry.status === "paused" ? store.resume(entry.id) ?? entry : entry;
+      const existingTaskId = resumedEntry.workflow?.activeTaskId;
+      const createdTaskId = existingTaskId ? undefined : await createWorkflowTask?.(resumedEntry);
+      let updatedEntry = resumedEntry;
+      if (createdTaskId && resumedEntry.workflow) {
+        const bound = store.setWorkflowActiveTask(resumedEntry.id, createdTaskId, {
+          currentState: resumedEntry.workflow.currentState,
+          transitionSeq: resumedEntry.workflow.transitionSeq,
+          activeTaskId: resumedEntry.workflow.activeTaskId,
+        });
+        if (!bound) {
+          await closeWorkflowTask?.(createdTaskId);
+          const message = `Workflow #${resumedEntry.id} changed while destination task #${createdTaskId} was created; the task was closed. Inspect LoopList before retrying.`;
+          return textResult(message, {
+            kind: "workflow", action: "transition", tone: "error", summary: `Workflow #${resumedEntry.id} task binding rejected`, expanded: [message],
+          });
+        }
+        updatedEntry = bound;
+      }
+      const taskId = existingTaskId ?? createdTaskId;
       getTriggerSystem().add(updatedEntry);
       updateWidget();
       const from = updatedEntry.workflow?.lastTransition?.from ?? "?";

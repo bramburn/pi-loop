@@ -95,6 +95,12 @@ export class TriggerSystem {
     this.hybridTimers.set(entry.id, timer);
   }
 
+  private retire(entry: LoopEntry): void {
+    this.remove(entry.id);
+    if (entry.workflow) this.store.pause(entry.id);
+    else this.store.delete(entry.id);
+  }
+
   private fireLoop(entry: LoopEntry): void {
     const current = this.store.get(entry.id);
     if (!current || current.status !== "active") {
@@ -112,15 +118,11 @@ export class TriggerSystem {
     }
 
     if (fresh.recurring && atMaxFires(fresh)) {
-      this.remove(fresh.id);
-      this.store.delete(fresh.id);
+      this.retire(fresh);
       return;
     }
 
-    if (!fresh.recurring) {
-      this.remove(fresh.id);
-      this.store.delete(fresh.id);
-    }
+    if (!fresh.recurring) this.retire(fresh);
   }
 
   private matchesFilter(data: unknown, filter?: string): boolean {

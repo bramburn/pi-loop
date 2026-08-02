@@ -53,9 +53,9 @@ MonitorStop monitorId="1"
 | `LoopCreate`, `LoopList`, `LoopUpdate`, `LoopDelete` | Create and control ordinary loops |
 | `WorkflowCreate`, `WorkflowTransition` | Create and advance opt-in task-driven workflows; inspect them with `LoopList` |
 | `MonitorCreate`, `MonitorList`, `MonitorStop` | Run and inspect background commands |
-| `TaskCreate`, `TaskList`, `TaskUpdate`, `TaskDelete` | Native fallback task management |
+| `TaskCreate`, `TaskList`, `TaskClaim`, `TaskHeartbeat`, `TaskUpdate`, `TaskDelete` | Native fallback task management |
 
-See the [usage guide](./docs/USAGE_GUIDE.md) for trigger types, dynamic loop lifecycle, monitor behavior, task integration, configuration, events, and the public RPC API.
+See the [usage guide](./docs/USAGE_GUIDE.md) for trigger types, dynamic loop lifecycle, monitor behavior, task integration, configuration, events, and the public RPC API. The [mutation contract](./docs/architecture/mutation-contract.md) defines accepted, idempotent, and rejected task/loop/workflow writes.
 
 ## Development
 

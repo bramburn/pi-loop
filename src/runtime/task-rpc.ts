@@ -36,7 +36,8 @@ export interface TaskRuntimeBridge {
   checkTasksVersion(): void;
   autoCreateTask(entry: LoopEntry): Promise<string | undefined>;
   createWorkflowTask(entry: LoopEntry): Promise<string | undefined>;
-  completeWorkflowTask(taskId: string): Promise<boolean>;
+  completeWorkflowTask(taskId: string, claimId?: string): Promise<boolean>;
+  closeWorkflowTask(taskId: string, claimId?: string): Promise<boolean>;
   hasPendingTasks(): Promise<number>;
   cleanDoneTasks(): Promise<void>;
 }
@@ -147,10 +148,10 @@ export function createTaskRuntimeBridge(options: TaskRuntimeBridgeOptions): Task
     return task.id;
   }
 
-  async function completeWorkflowTask(taskId: string): Promise<boolean> {
+  async function finishWorkflowTask(taskId: string, status: "completed" | "closed", claimId?: string): Promise<boolean> {
     if (isTasksAvailable()) {
       try {
-        await rpcCall<UpdateTaskReply>(pi.events, TASKS_RPC.update, { id: taskId, status: "completed" }, 5000);
+        await rpcCall<UpdateTaskReply>(pi.events, TASKS_RPC.update, { id: taskId, status, claimId }, 5000);
         return true;
       } catch {
         return false;
@@ -160,14 +161,20 @@ export function createTaskRuntimeBridge(options: TaskRuntimeBridgeOptions): Task
     const nativeTaskStore = getNativeTaskStore();
     const existing = nativeTaskStore?.get(taskId);
     if (!nativeTaskStore || !existing) return false;
-    if (existing.status === "completed") return true;
+    if (existing.status === status) return true;
+    if (existing.status === "completed" || existing.status === "closed") return false;
 
-    const completed = nativeTaskStore.complete(taskId);
-    if (!completed) return false;
-    emitNativeTaskEvent(pi, "tasks:completed", completed, existing.status);
+    const finished = status === "completed"
+      ? nativeTaskStore.complete(taskId, claimId)
+      : nativeTaskStore.close(taskId, claimId);
+    if (!finished) return false;
+    emitNativeTaskEvent(pi, status === "completed" ? "tasks:completed" : "tasks:closed", finished, existing.status);
     await onNativeTaskCompleted?.(nativeTaskStore);
     return true;
   }
+
+  const completeWorkflowTask = (taskId: string, claimId?: string) => finishWorkflowTask(taskId, "completed", claimId);
+  const closeWorkflowTask = (taskId: string, claimId?: string) => finishWorkflowTask(taskId, "closed", claimId);
 
   async function hasPendingTasks(): Promise<number> {
     if (isTasksAvailable()) {
@@ -206,6 +213,7 @@ export function createTaskRuntimeBridge(options: TaskRuntimeBridgeOptions): Task
     autoCreateTask,
     createWorkflowTask,
     completeWorkflowTask,
+    closeWorkflowTask,
     hasPendingTasks,
     cleanDoneTasks,
   };
