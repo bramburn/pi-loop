@@ -161,8 +161,7 @@ export function createTaskRuntimeBridge(options: TaskRuntimeBridgeOptions): Task
     const nativeTaskStore = getNativeTaskStore();
     const existing = nativeTaskStore?.get(taskId);
     if (!nativeTaskStore || !existing) return false;
-    if (existing.status === status) return true;
-    if (existing.status === "completed" || existing.status === "closed") return false;
+    if (existing.status === "completed" || existing.status === "closed") return true;
 
     const finished = status === "completed"
       ? nativeTaskStore.complete(taskId, claimId)

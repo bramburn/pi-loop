@@ -13,6 +13,7 @@ import {
   reduceNotificationState,
 } from "../notification-reducer.js";
 import type { DynamicLoopState, Trigger, WorkflowRunState } from "../types.js";
+import { getWorkflowOutcomeAvailability } from "../workflow-reducer.js";
 
 export interface LoopFireEvent {
   loopId: string;
@@ -121,24 +122,36 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
 
     if (data.workflow) {
       const state = data.workflow.definition.states[data.workflow.currentState];
-      const outcomes = Object.keys(state?.on ?? {});
+      const availability = getWorkflowOutcomeAvailability(data.workflow);
+      const outcomes = availability.available;
+      const attempt = data.workflow.attemptsByState[data.workflow.currentState] ?? 1;
+      const attemptLabel = state?.maxAttempts ? `${attempt}/${state.maxAttempts}` : String(attempt);
       const lines = [
         `[pi-loop] Loop #${loopId} fired (workflow).${constraint}`,
         `Goal: ${data.prompt || data.workflow.definition.initialState}`,
         `State: ${data.workflow.currentState}`,
+        `Attempt: ${attemptLabel}`,
       ];
       if (data.workflow.lastTransition) {
         lines.push(...formatLastTransitionLines(data.workflow.lastTransition));
       }
       if (state?.prompt) lines.push(`State instructions: ${state.prompt}`);
-      if (data.workflow.activeTaskId) lines.push(`Active task: #${data.workflow.activeTaskId}`);
+      if (data.workflow.activeTaskId) {
+        lines.push(
+          `Active task: #${data.workflow.activeTaskId}`,
+          `State task lifecycle: Task #${data.workflow.activeTaskId} is workflow-owned. Claim it before work and retain the returned claimId. Do not complete or close it with TaskUpdate; call WorkflowTransition with claimId: "<returned claimId>". WorkflowTransition settles this attempt and creates the next linked task.`,
+        );
+      }
       if (outcomes.length > 0) lines.push(`Allowed outcomes: ${outcomes.join(", ")}`);
+      if (availability.unavailable.length > 0) {
+        lines.push(`Unavailable outcomes: ${availability.unavailable.map((item) => item.outcome).join(", ")} (attempt limit reached)`);
+      }
       if (state?.terminal) {
         lines.push(`Terminal: ${state.terminal} — this workflow state is terminal; no transition is needed.`);
       } else {
         lines.push(
           `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not call LoopDelete after this state.`,
-          "Before ending this turn, call WorkflowTransition exactly once with this workflow id and one allowed outcome. Include evidence for the branch decision. Terminal outcomes complete or pause the workflow automatically.",
+          "Before ending this turn, call WorkflowTransition exactly once with id, one allowed outcome, evidence, and the returned claimId when an active task exists. WorkflowTransition does not accept activeTaskId. Terminal outcomes complete or pause the workflow automatically.",
         );
       }
       return lines.join("\n");

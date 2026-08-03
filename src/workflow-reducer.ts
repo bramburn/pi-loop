@@ -30,6 +30,25 @@ export type WorkflowTransitionResult =
   | { applied: true; run: WorkflowRunState; terminal?: WorkflowTerminalStatus }
   | { applied: false; error: string; failure?: WorkflowTransitionFailure };
 
+export interface WorkflowOutcomeAvailability {
+  available: string[];
+  unavailable: Array<{ outcome: string; targetState: string; maxAttempts: number }>;
+}
+
+export function getWorkflowOutcomeAvailability(run: WorkflowRunState): WorkflowOutcomeAvailability {
+  const state = run.definition.states[run.currentState];
+  const available: string[] = [];
+  const unavailable: WorkflowOutcomeAvailability["unavailable"] = [];
+  for (const [outcome, targetState] of Object.entries(state?.on ?? {})) {
+    const target = run.definition.states[targetState];
+    const nextAttempt = (run.attemptsByState[targetState] ?? 0) + 1;
+    if (target?.maxAttempts !== undefined && nextAttempt > target.maxAttempts) {
+      unavailable.push({ outcome, targetState, maxAttempts: target.maxAttempts });
+    } else available.push(outcome);
+  }
+  return { available, unavailable };
+}
+
 export function validateWorkflowDefinition(definition: WorkflowDefinition): string | undefined {
   if (!definition || definition.version !== 1) return "Workflow version must be 1";
   if (!definition.states || typeof definition.states !== "object") return "Workflow states must be an object";

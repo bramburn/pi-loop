@@ -133,6 +133,15 @@ export async function updateTask(
   if (status === undefined && subject === undefined && description === undefined) {
     return { applied: false, code: "no_changes", entry };
   }
+  if (entry.workflow && (status === "completed" || status === "closed"
+    || (status === "pending" && (entry.status === "completed" || entry.status === "closed")))) {
+    return {
+      applied: false,
+      code: "workflow_owned",
+      entry,
+      workflowLoopId: entry.workflow.loopId,
+    };
+  }
 
   const previousStatus = entry.status;
   if (status === entry.status && (status === "pending" || status === "in_progress")) {

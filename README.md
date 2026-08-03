@@ -67,9 +67,11 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+# Opt-in real Pi/LLM workflow conformance
+PI_LOOP_LIVE_MODEL="<provider/model[:thinking]>" npm run test:e2e:workflow
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), the [workflow harness testing guide](./docs/WORKFLOW_HARNESS_TESTING.md), and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
 
 ## License
 

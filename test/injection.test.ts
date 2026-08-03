@@ -116,7 +116,7 @@ describe("loop:fire custom message delivery", () => {
           version: 1,
           initialState: "investigate",
           states: {
-            investigate: { prompt: "Find the cause.", on: { found: "fix", blocked: "blocked" } },
+            investigate: { prompt: "Find the cause.", on: { found: "fix", blocked: "blocked" }, maxAttempts: 3 },
             fix: { prompt: "Implement the fix." },
             blocked: { prompt: "Report the blocker.", terminal: "paused" },
           },
@@ -134,10 +134,50 @@ describe("loop:fire custom message delivery", () => {
     expect(content).toContain("fired (workflow)");
     expect(content).toContain("State: investigate");
     expect(content).toContain("Find the cause.");
+    expect(content).toContain("Attempt: 1/3");
     expect(content).toContain("Active task: #12");
+    expect(content).toContain("workflow-owned");
+    expect(content).toContain("Do not complete or close it with TaskUpdate");
     expect(content).toContain("Allowed outcomes: found, blocked");
     expect(content).toContain("WorkflowTransition");
     expect(content).not.toContain("call LoopUpdate exactly once");
+  });
+
+  it("does not advertise a self-loop outcome after its target attempt limit is exhausted", async () => {
+    const { pi, sentMessages, emitExtension } = createMockPi();
+    const extension = await import("../src/index.js");
+    extension.default(pi);
+    const ctx = createCtx(false);
+    await emitExtension("turn_start", null, ctx);
+
+    pi.events.emit("loop:fire", {
+      loopId: "8",
+      prompt: "Finish bounded work",
+      trigger: { type: "dynamic" },
+      timestamp: Date.now(),
+      recurring: true,
+      workflow: {
+        definition: {
+          version: 1,
+          initialState: "work",
+          states: {
+            work: { prompt: "Choose retry or done.", on: { retry: "work", done: "done" }, maxAttempts: 3 },
+            done: { prompt: "Done.", terminal: "completed" },
+          },
+        },
+        currentState: "work",
+        transitionSeq: 2,
+        stateEnteredAt: Date.now(),
+        attemptsByState: { work: 3 },
+      },
+    });
+    await flushAsync();
+
+    const content = sentMessages[0].message.content;
+    expect(content).toContain("Attempt: 3/3");
+    expect(content).toContain("Allowed outcomes: done");
+    expect(content).toContain("Unavailable outcomes: retry");
+    expect(content).not.toContain("Allowed outcomes: retry");
   });
 
   it("replays the last transition and its evidence in the next workflow state wake", async () => {

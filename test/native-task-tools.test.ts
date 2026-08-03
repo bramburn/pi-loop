@@ -282,6 +282,18 @@ describe("TaskUpdate", () => {
     }
   });
 
+  it("rejects direct terminal updates for workflow-owned state tasks", async () => {
+    const task = h.taskStore.create("workflow attempt", "Use WorkflowTransition.", undefined, {
+      loopId: "9",
+      stateId: "fix",
+      transitionSeq: 1,
+    });
+
+    expect(await h.text("TaskUpdate", { id: task.id, status: "closed" })).toContain("managed by workflow #9");
+    expect(await h.text("TaskUpdate", { id: task.id, status: "completed" })).toContain("managed by workflow #9");
+    expect(h.taskStore.get(task.id)?.status).toBe("pending");
+  });
+
   it("reports not found for an unknown id", async () => {
     expect(await h.text("TaskUpdate", { id: "99", status: "completed" })).toBe("Task #99 not found");
   });

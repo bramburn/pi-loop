@@ -23,7 +23,7 @@ A claimed task adds these guards:
 | Same owner reclaims before expiry | lease renewal; token and attempt retained | Continue work |
 | Same owner reclaims after expiry | new attempt and token | Replace the stale token |
 | Delete live claimed work | same claim checks as terminal updates | Pass the live token or wait and reclaim |
-| Delete active workflow task | `workflow_owned` | Transition or cancel the workflow |
+| Complete, close, reopen, or delete a workflow-owned state task | `workflow_owned` | Pass its claimId to `WorkflowTransition`, or cancel the workflow |
 | No status/subject/description | `no_changes` | Supply at least one update field |
 
 Detail-only edits remain allowed without a claim token because they do not grant execution ownership. `TaskClaim`, not `TaskUpdate`, is the ownership boundary.
@@ -42,7 +42,7 @@ An invalid `nextInterval`, a wake beyond `expiresAt`, or a stale iteration snaps
 
 ## Workflow and state-task ordering
 
-`WorkflowTransition` previews the declared outcome before mutating anything. If the current state has an active task, that task must complete before the transition commits. Claimed state tasks require `claimId` on `WorkflowTransition`; failure leaves the workflow in its source state and does not create a destination task. Transition and destination-task binding use state/sequence/task compare-and-set guards; a task created from a stale state is closed instead of being attached to the wrong state.
+`WorkflowTransition` previews the declared outcome before mutating anything. If the current state has an active task, WorkflowTransition settles it before the transition commits; direct terminal TaskUpdate calls are rejected. Claimed state tasks require `claimId` on `WorkflowTransition`; failure leaves the workflow in its source state and does not create a destination task. Transition and destination-task binding use state/sequence/task compare-and-set guards; a task created from a stale state is closed instead of being attached to the wrong state.
 
 A paused nonterminal workflow resumes when a valid transition succeeds. Terminal workflow states remain final. Deleting a workflow closes its active task first and rejects cancellation if task ownership cannot be reconciled.
 

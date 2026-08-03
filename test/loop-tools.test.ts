@@ -551,6 +551,41 @@ describe("Workflow tools", () => {
     expect(h.store.get("1")).toBeUndefined();
   });
 
+  it("creates a fresh linked task and increments the attempt when a workflow self-loops", async () => {
+    h.createWorkflowTask.mockResolvedValueOnce("10").mockResolvedValueOnce("11");
+    const retryDefinition = JSON.stringify({
+      version: 1,
+      initialState: "work",
+      states: {
+        work: {
+          prompt: "Run one bounded attempt.",
+          task: { subject: "Workflow attempt", description: "Use WorkflowTransition; do not close directly." },
+          on: { retry: "work", done: "done" },
+          maxAttempts: 3,
+        },
+        done: { prompt: "Done.", terminal: "completed" },
+      },
+    });
+    await h.text("WorkflowCreate", { goal: "Finish bounded work", definition: retryDefinition });
+
+    const out = await h.text("WorkflowTransition", {
+      id: "1",
+      outcome: "retry",
+      evidence: "The first attempt found another case.",
+      claimId: "claim-10",
+    });
+
+    expect(out).toContain("work → work");
+    expect(out).toContain("Attempt: 2/3");
+    expect(h.completeWorkflowTask).toHaveBeenCalledWith("10", "claim-10");
+    expect(h.store.get("1")?.workflow).toMatchObject({
+      currentState: "work",
+      transitionSeq: 1,
+      attemptsByState: { work: 2 },
+      activeTaskId: "11",
+    });
+  });
+
   it("rejects the transition when source task completion is unavailable", async () => {
     h.createWorkflowTask.mockResolvedValueOnce("10").mockResolvedValueOnce("11");
     h.completeWorkflowTask.mockResolvedValueOnce(false);

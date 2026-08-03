@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { formatLastTransitionLines } from "../loop-format.js";
 import type { LoopEntry, Trigger, WorkflowDefinition } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
-import { transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure } from "../workflow-reducer.js";
+import { getWorkflowOutcomeAvailability, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure } from "../workflow-reducer.js";
 import { textResult } from "./tool-result.js";
 
 interface WorkflowStoreLike {
@@ -79,13 +79,16 @@ export function formatWorkflowSummary(entry: LoopEntry, heading: string, failure
   const workflow = entry.workflow!;
   const state = workflow.definition.states[workflow.currentState];
   const outcomeEntries = Object.entries(state?.on ?? {});
-  const unavailableOutcomes = failure?.code === "target_exhausted"
-    ? outcomeEntries.filter(([, target]) => target === failure.targetState).map(([outcome]) => outcome)
-    : [];
-  const outcomes = outcomeEntries
-    .filter(([outcome]) => !unavailableOutcomes.includes(outcome))
-    .map(([outcome]) => outcome);
-  let message = `${heading}\nGoal: ${entry.prompt}\nCurrent state: ${workflow.currentState}`;
+  const availability = getWorkflowOutcomeAvailability(workflow);
+  const unavailable = [...availability.unavailable].sort((left, right) => {
+    if (left.outcome === failure?.outcome) return -1;
+    if (right.outcome === failure?.outcome) return 1;
+    return 0;
+  });
+  const outcomes = availability.available;
+  const attempt = workflow.attemptsByState[workflow.currentState] ?? 1;
+  const attemptLabel = state?.maxAttempts ? `${attempt}/${state.maxAttempts}` : String(attempt);
+  let message = `${heading}\nGoal: ${entry.prompt}\nCurrent state: ${workflow.currentState}\nAttempt: ${attemptLabel}`;
   if (workflow.lastTransition) message += `\n${formatLastTransitionLines(workflow.lastTransition).join("\n")}`;
   if (state?.prompt) message += `\nInstruction: ${state.prompt}`;
   if (workflow.activeTaskId) {
@@ -96,8 +99,9 @@ export function formatWorkflowSummary(entry: LoopEntry, heading: string, failure
     message += "\nTask: none configured for this state";
   }
 
-  if (failure?.code === "target_exhausted") {
-    message += `\nUnavailable outcome${unavailableOutcomes.length === 1 ? "" : "s"}: ${unavailableOutcomes.join(", ")} — target state "${failure.targetState}" exhausted its ${failure.maxAttempts} attempt limit.`;
+  if (unavailable.length > 0) {
+    const details = unavailable.map((item) => `${item.outcome} — target state "${item.targetState}" exhausted its ${item.maxAttempts} attempt limit`);
+    message += `\nUnavailable outcome${unavailable.length === 1 ? "" : "s"}: ${details.join("; ")}.`;
   }
   if (state?.terminal) return `${message}\nTerminal: ${state.terminal}`;
   if (outcomeEntries.length === 0) return `${message}\nNeeds attention: this state has no declared outcomes, so it cannot advance.`;
@@ -125,17 +129,13 @@ export function registerWorkflowTools(options: WorkflowToolsOptions): void {
     label: "WorkflowCreate",
     renderCall: renderToolCall("Workflow", (args) => `create · ${String(toolArg(args, "goal") ?? "workflow").slice(0, 56)}`),
     renderResult: renderToolResult,
-    description: `Create an opt-in task-driven workflow loop from a JSON state definition.
-
-Use this when work has named phases and explicit outcomes, such as investigate → fix → validate. Use LoopCreate for ordinary scheduled/event work and TaskCreate for a normal flat backlog.
-
-The definition requires version: 1, a non-terminal initialState, and states. Each state has a prompt, optional task: {subject, description} (a tracked task created when the state is entered and completed on transition), an optional on outcome-to-state map, optional maxAttempts, and an optional terminal value of completed or paused. Terminal states are final and cannot be resumed.`,
+    description: `Create a task-driven workflow for named phases and outcomes. The JSON definition needs version 1, a nonterminal initialState, and states with prompt, optional task: {subject, description}, outcome map, maxAttempts, or terminal status.`,
     promptGuidelines: [
-      "Use WorkflowCreate only for explicit multi-phase work with stable named outcomes; ordinary reminders, polling, and task backlogs should remain loops or tasks.",
-      "Pass `definition` as valid JSON with a non-terminal initialState. Give each non-terminal state a concise prompt and explicit outcome names.",
-      "Each non-terminal state may declare `task: {subject, description}`; the runtime creates a tracked task when the state is entered and completes it when you transition out.",
-      "Model rework with outcome cycles and bound re-entry with maxAttempts.",
-      "After each workflow wake, call WorkflowTransition with the workflow `id` and one declared `outcome`; include concise `evidence`.",
+      "Use WorkflowCreate for named phase/outcome flows, not flat backlogs.",
+      "Give nonterminal states concise prompts and explicit outcomes.",
+      "WorkflowTransition settles linked state tasks; never terminally TaskUpdate them.",
+      "Model rework as outcome cycles bounded by maxAttempts; re-entry increments attempts.",
+      "On each wake call WorkflowTransition once with id, outcome, evidence, and active-task claimId.",
     ],
     parameters: Type.Object({
       goal: Type.String({ description: "Overall workflow goal" }),
@@ -207,10 +207,10 @@ The definition requires version: 1, a non-terminal initialState, and states. Eac
     label: "WorkflowTransition",
     renderCall: renderToolCall("Workflow", (args) => `transition · #${String(toolArg(args, "id") ?? "?")} → ${String(toolArg(args, "outcome") ?? "?")}`),
     renderResult: renderToolResult,
-    description: "Advance via one declared outcome. Pass claimId for a claimed state task so it closes before transition.",
+    description: "Advance one declared outcome and settle its linked task using the returned claimId; activeTaskId is invalid.",
     promptGuidelines: [
-      "WorkflowTransition uses `id`, not `loopId`.",
-      "Use an exact declared outcome and include evidence. Inspect LoopList when the current state is unclear.",
+      "WorkflowTransition uses `id`, not `loopId`, and accepts outcome, evidence, and claimId—not activeTaskId.",
+      "Use an exact outcome; inspect LoopList for state and attempt count.",
     ],
     parameters: Type.Object({
       id: Type.String({ description: "Workflow loop ID" }),

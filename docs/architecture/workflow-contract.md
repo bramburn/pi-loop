@@ -6,8 +6,9 @@ Workflow loops are a controller layer over dynamic loops and tasks. They are not
 
 - A `LoopEntry.workflow` owns the workflow definition and the persisted run state.
 - A task may carry a `TaskWorkflowLink` identifying the owning loop, state, and transition sequence.
-- Task status remains independent from workflow state. Completing a task never infers an outcome.
-- The model selects an outcome through `WorkflowTransition`; the runtime only validates and persists it.
+- Task status remains independent from workflow state. A linked state task never infers an outcome.
+- `WorkflowTransition` owns terminal settlement of the linked state task. Direct `TaskUpdate completed|closed` calls are rejected so the workflow cannot retain a terminal active-task link.
+- The model selects an outcome through `WorkflowTransition`; the runtime validates and persists it. A self-loop is an explicit retry: it increments `transitionSeq` and `attemptsByState`, settles the prior task, and creates a new task linked to the new transition sequence.
 
 ## Definition
 
@@ -21,7 +22,7 @@ Every declared outcome must target a named state. Terminal states may not declar
 - `transitionSeq` increases exactly once for every accepted transition.
 - `attemptsByState` increases when a state is entered.
 - `lastTransition` records source, destination, outcome, evidence, timestamp, and sequence.
-- `activeTaskId`, when present, belongs to the current state transition sequence.
+- `activeTaskId`, when present, belongs to the current state transition sequence and remains nonterminal until `WorkflowTransition` settles that attempt.
 
 ## Compatibility
 

@@ -341,6 +341,23 @@ describe("task-rpc completeWorkflowTask", () => {
       && event.payload.claimId === "external-claim")).toBe(true);
   });
 
+  it("accepts an already closed native workflow attempt for explicit transition recovery", async () => {
+    const { pi, emittedEvents } = createMockPi();
+    const store = new TaskStore();
+    const task = store.create("Investigate regression", "Find the cause.");
+    store.close(task.id);
+    const bridge = createTaskRuntimeBridge({
+      pi,
+      isTasksAvailable: () => false,
+      setTasksAvailable: vi.fn(),
+      getNativeTaskStore: () => store,
+    });
+
+    expect(await bridge.completeWorkflowTask(task.id)).toBe(true);
+    expect(store.get(task.id)?.status).toBe("closed");
+    expect(emittedEvents.filter((event) => event.name === "tasks:completed")).toHaveLength(0);
+  });
+
   it("does not re-emit completion for an already completed native task", async () => {
     const { pi, emittedEvents } = createMockPi();
     const store = new TaskStore();

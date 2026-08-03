@@ -266,7 +266,7 @@ A live claim owned by another runtime fails closed. Expired claims may be taken 
     label: "TaskUpdate",
     renderCall: renderToolCall("Task", (args) => `update · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Update task status or details. TaskClaim starts owned work and sets in_progress. Use completed when done or closed when intentionally abandoned.
+    description: `Update task status or details. TaskClaim starts owned work and sets in_progress. Use completed when done or closed when intentionally abandoned. Workflow-owned state tasks are settled by WorkflowTransition, not terminal TaskUpdate calls.
 
 Statuses: pending → in_progress → completed | closed
 Parameters: id, status, subject, description, claimId`,
@@ -274,6 +274,7 @@ Parameters: id, status, subject, description, claimId`,
       "TaskUpdate uses parameter `id`, not `taskId`.",
       "Accepted parameters: `id` (required), `status`, `subject`, `description`, `claimId`.",
       "TaskClaim already sets in_progress; do not repeat that update. Pass claimId when completing or closing claimed work.",
+      "Do not complete or close workflow-owned state tasks with TaskUpdate; pass their claimId to WorkflowTransition instead.",
       "When validation fails with 'must have required properties id', you passed `taskId` instead of `id`. Correct silently and retry.",
     ],
     parameters: Type.Object({
