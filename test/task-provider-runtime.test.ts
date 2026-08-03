@@ -14,21 +14,23 @@ function setup(respondToTaskPing = false) {
   let sessionId = "session-a";
   const mock = createMockPi({ respondToTaskPing });
   const evaluateTaskBacklog = vi.fn(async () => ({ created: false, cleaned: 0 }));
+  const onReady = vi.fn(async () => {});
   const runtime = createTaskProviderRuntime({
     pi: mock.pi,
     runtimeId: "runtime-a",
     resolveStorePath: () => undefined,
     getSessionId: () => sessionId,
     evaluateTaskBacklog,
+    onReady,
     updateWidget: vi.fn(),
     isStaleExtensionContextError: () => false,
   });
-  return { ...mock, runtime, evaluateTaskBacklog, setSessionId: (next: string) => { sessionId = next; } };
+  return { ...mock, runtime, evaluateTaskBacklog, onReady, setSessionId: (next: string) => { sessionId = next; } };
 }
 
 describe("task-provider-runtime", () => {
   it("registers native RPC immediately but delays colliding tools", async () => {
-    const { pi, toolMap, emittedEvents, runtime } = setup();
+    const { pi, toolMap, emittedEvents, runtime, onReady } = setup();
 
     pi.events.emit("tasks:rpc:ping", { requestId: "early" });
     await Promise.resolve();
@@ -40,15 +42,17 @@ describe("task-provider-runtime", () => {
     await vi.advanceTimersByTimeAsync(6_100);
     expect(toolMap.has("TaskCreate")).toBe(true);
     expect(runtime.isReady()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
   it("lets an external provider win without registering native tools", async () => {
-    const { toolMap, runtime } = setup(true);
+    const { toolMap, runtime, onReady } = setup(true);
     await vi.advanceTimersByTimeAsync(6_100);
 
     expect(toolMap.has("TaskCreate")).toBe(false);
     expect(runtime.isReady()).toBe(true);
     expect(runtime.summary()).toEqual({ count: 0 });
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
   it("keeps native ownership when an external provider appears after native tools register", async () => {

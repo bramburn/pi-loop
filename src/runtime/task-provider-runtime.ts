@@ -17,6 +17,7 @@ export interface TaskProviderRuntimeOptions {
   resolveStorePath: () => string | undefined;
   getSessionId: () => string | undefined;
   evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
+  onReady?: () => Promise<void> | void;
   updateWidget: () => void;
   isStaleExtensionContextError: (error: unknown) => boolean;
   debug?: (...args: unknown[]) => void;
@@ -42,6 +43,7 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     resolveStorePath,
     getSessionId,
     evaluateTaskBacklog,
+    onReady,
     updateWidget,
     isStaleExtensionContextError,
     debug,
@@ -53,6 +55,15 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
   let nativeTaskStore: TaskStore | undefined;
   const nativeTaskStores = new Map<string, TaskStore>();
   let nativeToolsRegistered = false;
+  let readyNotified = false;
+
+  function notifyReady(): void {
+    if (readyNotified) return;
+    readyNotified = true;
+    Promise.resolve()
+      .then(() => onReady?.())
+      .catch((error) => debug?.("task provider ready callback failed", error));
+  }
 
   function getOrCreateNativeTaskStore(): TaskStore | undefined {
     if (tasksAvailable) return undefined;
@@ -71,7 +82,10 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     pi,
     isTasksAvailable: () => tasksAvailable,
     setTasksAvailable: (available) => {
-      if (available && !nativeToolsRegistered) tasksAvailable = true;
+      if (available && !nativeToolsRegistered) {
+        tasksAvailable = true;
+        notifyReady();
+      }
     },
     getNativeTaskStore: () => nativeTaskStore ? getOrCreateNativeTaskStore() : undefined,
     onNativeTaskCreated: updateWidget,
@@ -139,6 +153,7 @@ export function createTaskProviderRuntime(options: TaskProviderRuntimeOptions): 
     }
 
     nativeToolsRegistered = true;
+    notifyReady();
     debug?.("native task tools registered (pi-tasks not detected)");
   }, fallbackDelayMs);
 

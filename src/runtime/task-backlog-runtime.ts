@@ -36,11 +36,12 @@ export function isAutoTaskWorkerPrompt(prompt: string): boolean {
 export interface TaskBacklogRuntimeOptions {
   getLoops: () => LoopEntry[];
   deleteLoop: (id: string) => void;
-  updateLoopPrompt: (id: string, prompt: string) => LoopEntry | undefined;
+  updateLoopWorker: (id: string, prompt: string) => LoopEntry | undefined;
   recordDeletionTombstone?: (id: string, tombstone: LoopDeletionTombstoneInput) => void;
   removeTrigger: (id: string) => void;
   updateWidget: () => void;
   hasPendingTasks: () => Promise<number>;
+  adoptLoop: (entry: LoopEntry) => Promise<void> | void;
   triggerHasEventSource: (trigger: Trigger | string, source: string) => boolean;
   emitLoopAutodeleted?: (payload: LoopAutodeletedPayload) => void;
   emitTaskBacklogEmpty?: (payload: TaskBacklogEmptyPayload) => void;
@@ -49,6 +50,7 @@ export interface TaskBacklogRuntimeOptions {
 
 export interface TaskBacklogRuntime {
   cleanupTaskBacklogLoops(): Promise<number>;
+  adoptTaskBacklogLoops(baselineFireCounts?: ReadonlyMap<string, number>): Promise<number>;
   evaluateTaskBacklog(taskStore?: TaskStore, pendingCount?: number): Promise<{ entry?: LoopEntry; created: boolean; cleaned: number }>;
   isAutoTaskWorkerLoop(entry: LoopEntry): boolean;
   isTaskBacklogLoop(entry: LoopEntry): boolean;
@@ -60,11 +62,12 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
   const {
     getLoops,
     deleteLoop,
-    updateLoopPrompt,
+    updateLoopWorker,
     recordDeletionTombstone,
     removeTrigger,
     updateWidget,
     hasPendingTasks,
+    adoptLoop,
     triggerHasEventSource,
     emitLoopAutodeleted,
     emitTaskBacklogEmpty,
@@ -90,9 +93,10 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
   function migrateAutoTaskWorkerPrompts(): number {
     let migrated = 0;
     for (const entry of getLoops()) {
-      if (!AUTO_TASK_WORKER_LEGACY_PROMPTS.includes(entry.prompt)) continue;
+      if (!isAutoTaskWorkerPrompt(entry.prompt)) continue;
       if (!triggerHasEventSource(entry.trigger, "tasks:created")) continue;
-      if (updateLoopPrompt(entry.id, AUTO_TASK_WORKER_PROMPT)) migrated++;
+      if (entry.prompt === AUTO_TASK_WORKER_PROMPT && entry.taskBacklog) continue;
+      if (updateLoopWorker(entry.id, AUTO_TASK_WORKER_PROMPT)) migrated++;
     }
     return migrated;
   }
@@ -103,6 +107,21 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
     recordDeletionTombstone?.(entry.id, { reason: "task_backlog_empty", pendingCount });
     deleteLoop(entry.id);
     emitLoopAutodeleted?.(buildLoopAutodeletedPayload(entry, pendingCount));
+  }
+
+  async function adoptTaskBacklogLoops(baselineFireCounts?: ReadonlyMap<string, number>): Promise<number> {
+    const backlogLoops = getLoops().filter((entry) => isTaskBacklogLoop(entry)
+      && (baselineFireCounts === undefined || (entry.fireCount ?? 0) <= (baselineFireCounts.get(entry.id) ?? 0)));
+    if (backlogLoops.length === 0) return 0;
+
+    const pending = await hasPendingTasks();
+    if (pending <= 0) return 0;
+
+    for (const entry of backlogLoops) {
+      debug?.(`task backlog loop #${entry.id} — adopting ${pending} unfinished task(s)`);
+      await adoptLoop(entry);
+    }
+    return backlogLoops.length;
   }
 
   async function cleanupTaskBacklogLoops(): Promise<number> {
@@ -157,6 +176,7 @@ export function createTaskBacklogRuntime(options: TaskBacklogRuntimeOptions): Ta
 
   return {
     cleanupTaskBacklogLoops,
+    adoptTaskBacklogLoops,
     evaluateTaskBacklog,
     isAutoTaskWorkerLoop,
     isTaskBacklogLoop,

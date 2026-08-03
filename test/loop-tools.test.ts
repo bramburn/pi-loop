@@ -14,6 +14,7 @@ function setup() {
   const createWorkflowTask = vi.fn(async (_entry: unknown) => undefined as string | undefined);
   const completeWorkflowTask = vi.fn(async (_taskId: string, _claimId?: string) => true);
   const closeWorkflowTask = vi.fn(async (_taskId: string, _claimId?: string) => true);
+  const maybeBootstrapTaskLoop = vi.fn(async () => false);
   registerLoopTools({
     pi,
     getStore: () => store as any,
@@ -21,7 +22,7 @@ function setup() {
     getScheduler: () => scheduler as any,
     getMonitorManager: () => monitorManager as any,
     updateWidget: vi.fn(),
-    maybeBootstrapTaskLoop: vi.fn(async () => false),
+    maybeBootstrapTaskLoop,
     isTaskSystemReady: () => true,
     onDynamicLoopActivated,
     closeWorkflowTask,
@@ -38,7 +39,7 @@ function setup() {
   });
   const result = async (name: string, args: any) => await toolMap.get(name)!.execute!("t", args);
   const text = async (name: string, args: any) => (await result(name, args)).content[0].text as string;
-  return { store, triggerSystem, text, result, toolMap, onDynamicLoopActivated, createWorkflowTask, completeWorkflowTask, closeWorkflowTask };
+  return { store, triggerSystem, text, result, toolMap, maybeBootstrapTaskLoop, onDynamicLoopActivated, createWorkflowTask, completeWorkflowTask, closeWorkflowTask };
 }
 
 describe("LoopCreate", () => {
@@ -66,6 +67,37 @@ describe("LoopCreate", () => {
     expect(out).toContain("event: tasks:created");
     expect(out).toContain("Recurring: false");
     expect(h.store.get("1")?.trigger).toEqual({ type: "event", source: "tasks:created" });
+  });
+
+  it("makes an explicit task-backlog event loop recurring when omitted", async () => {
+    const out = await h.text("LoopCreate", {
+      trigger: "tasks:created",
+      prompt: "adopt unfinished tasks",
+      triggerType: "event",
+      taskBacklog: true,
+    });
+
+    expect(out).toContain("Recurring: true");
+    expect(h.store.get("1")?.recurring).toBe(true);
+    expect(h.store.get("1")?.maxFires).toBe(25);
+    expect(h.maybeBootstrapTaskLoop).toHaveBeenCalledWith(h.store.get("1"));
+  });
+
+  it("rejects non-recurring or non-task event backlog loops", async () => {
+    expect(await h.text("LoopCreate", {
+      trigger: "tasks:created",
+      prompt: "one shot",
+      triggerType: "event",
+      taskBacklog: true,
+      recurring: false,
+    })).toContain("taskBacklog loops must be recurring");
+    expect(await h.text("LoopCreate", {
+      trigger: "tool_execution_start",
+      prompt: "wrong event",
+      triggerType: "event",
+      taskBacklog: true,
+    })).toContain('taskBacklog loops require a "tasks:created" event trigger');
+    expect(h.store.list()).toHaveLength(0);
   });
 
   it("creates a hybrid loop", async () => {

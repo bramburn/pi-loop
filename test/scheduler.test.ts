@@ -249,6 +249,30 @@ describe("CronScheduler", () => {
     expect(scheduler.nextFire(entry.id)).toBeUndefined();
   });
 
+  it("pauses maxed hybrid backlog workers instead of discarding unfinished ownership", () => {
+    scheduler = new CronScheduler(store, (entry) => {
+      fired.push(entry.id);
+      store.fire(entry.id);
+    });
+    const entry = store.create({
+      type: "hybrid",
+      cron: "*/5 * * * *",
+      event: { source: "tasks:created" },
+      debounceMs: 30_000,
+    }, "bounded backlog", {
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 1,
+    });
+    scheduler.add(entry);
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    scheduler.pump(Date.now());
+
+    expect(store.get(entry.id)?.status).toBe("paused");
+    expect(scheduler.nextFire(entry.id)).toBeUndefined();
+  });
+
   it("loads existing loops on start and fires via pump", () => {
     store.create(cronTrigger, "existing", { recurring: false });
     scheduler.start();

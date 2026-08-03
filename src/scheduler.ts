@@ -58,7 +58,7 @@ export class CronScheduler {
   }
 
   private retire(entry: LoopEntry): void {
-    if (entry.workflow) this.store.pause(entry.id);
+    if (entry.workflow || entry.taskBacklog) this.store.pause(entry.id);
     else this.store.delete(entry.id);
     this.fireTimes.delete(entry.id);
   }

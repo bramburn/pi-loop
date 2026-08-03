@@ -69,6 +69,7 @@ export default function (pi: ExtensionAPI) {
   triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
 
   let taskProvider: TaskProviderRuntime | undefined;
+  const activeTaskBacklogWakes = new Set<string>();
   const hasPendingTasks = () => taskProvider?.hasPendingTasks() ?? Promise.resolve(-1);
   const cleanDoneTasks = () => taskProvider?.cleanDoneTasks() ?? Promise.resolve();
 
@@ -101,24 +102,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function maybeBootstrapTaskLoop(entry: LoopEntry): Promise<boolean> {
-    if (!entry.recurring) return false;
+    if (!entry.recurring || !entry.taskBacklog) return false;
     if (!triggerHasEventSource(entry.trigger, "tasks:created")) return false;
 
     const pending = await hasPendingTasks();
     if (pending <= 0) return false;
 
     debug(`loop #${entry.id} — bootstrapping existing pending tasks (${pending})`);
-    await queueOrDeliverNotification({
-      loopId: entry.id,
-      prompt: entry.prompt,
-      trigger: entry.trigger,
-      timestamp: Date.now(),
-      readOnly: entry.readOnly,
-      recurring: false,
-      persistent: entry.recurring,
-      autoTask: true,
-      taskBacklog: entry.taskBacklog,
-    });
+    onLoopFire(entry);
     return true;
   }
 
@@ -127,7 +118,7 @@ export default function (pi: ExtensionAPI) {
     deleteLoop: (id) => {
       store.delete(id);
     },
-    updateLoopPrompt: (id, prompt) => store.updateMetadata(id, { prompt }).entry,
+    updateLoopWorker: (id, prompt) => store.updateMetadata(id, { prompt, taskBacklog: true }).entry,
     recordDeletionTombstone: (id, tombstone) => {
       store.recordDeletionTombstone(id, tombstone);
     },
@@ -138,6 +129,9 @@ export default function (pi: ExtensionAPI) {
       widget.update();
     },
     hasPendingTasks: () => hasPendingTasks(),
+    adoptLoop: (entry) => {
+      onLoopFire(entry);
+    },
     triggerHasEventSource,
     emitLoopAutodeleted: (payload) => {
       pi.events.emit("loops:autodeleted", payload);
@@ -154,6 +148,7 @@ export default function (pi: ExtensionAPI) {
   const discardMonitorStarted = notificationRuntime.discardMonitorStarted;
   const migrateTaskBacklogLoops = taskBacklogRuntime.migrateAutoTaskWorkerPrompts;
   const cleanupTaskBacklogLoops = taskBacklogRuntime.cleanupTaskBacklogLoops;
+  const adoptTaskBacklogLoops = taskBacklogRuntime.adoptTaskBacklogLoops;
   const evaluateTaskBacklog = taskBacklogRuntime.evaluateTaskBacklog;
 
   taskProvider = createTaskProviderRuntime({
@@ -162,6 +157,9 @@ export default function (pi: ExtensionAPI) {
     resolveStorePath: () => resolveTaskStorePath(getScopeOptions(), _sessionId),
     getSessionId: () => _sessionId,
     evaluateTaskBacklog,
+    onReady: async () => {
+      await adoptTaskBacklogLoops();
+    },
     updateWidget: () => {
       widget.update();
     },
@@ -175,14 +173,21 @@ export default function (pi: ExtensionAPI) {
   function onLoopFire(entry: LoopEntry): void {
     debug(`loop:fire #${entry.id}`, { prompt: entry.prompt.slice(0, 50) });
 
+    const isTaskBacklog = taskBacklogRuntime.isTaskBacklogLoop(entry);
+    if (isTaskBacklog && activeTaskBacklogWakes.has(entry.id)) {
+      debug(`task backlog loop #${entry.id} — wake already active, adopting event into current wake`);
+      return;
+    }
+
     if (atMaxFires(entry)) {
       debug(`loop #${entry.id} — reached maxFires ${entry.maxFires}, retiring`);
       triggerSystem.remove(entry.id);
-      if (entry.workflow) store.pause(entry.id);
+      if (entry.workflow || entry.taskBacklog) store.pause(entry.id);
       else store.delete(entry.id);
       widget.update();
       return;
     }
+    if (isTaskBacklog) activeTaskBacklogWakes.add(entry.id);
     store.fire(entry.id);
 
     const firedAt = Date.now();
@@ -254,6 +259,10 @@ export default function (pi: ExtensionAPI) {
     flushPendingNotifications,
     migrateTaskBacklogLoops,
     cleanupTaskBacklogLoops,
+    adoptTaskBacklogLoops,
+    releaseTaskBacklogWakes: () => {
+      activeTaskBacklogWakes.clear();
+    },
     hasPendingTasks,
     cleanDoneTasks,
   });
@@ -349,6 +358,7 @@ export default function (pi: ExtensionAPI) {
     updateWidget: () => {
       widget.update();
     },
+    maybeBootstrapTaskLoop,
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
     },

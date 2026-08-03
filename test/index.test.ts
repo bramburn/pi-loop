@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import extension from "../src/index.js";
 import { TASKS_RPC } from "../src/rpc/channels.js";
 import { resolveLoopStorePath, resolveTaskStorePath } from "../src/runtime/scope.js";
+import { LoopStore } from "../src/store.js";
 import { TaskStore } from "../src/task-store.js";
 import { createMockPi, flushAsync } from "./helpers/mock-pi.js";
 
@@ -754,6 +755,128 @@ describe("native task fallback", () => {
     expect(listResult.content[0].text).toContain("#1 [completed] Done 1");
   });
 
+  it("re-wakes an explicit task-backlog loop while unfinished work remains", async () => {
+    const { pi, toolMap, extensionHandlers, sentMessages } = createMockPi();
+    extension(pi as any);
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) await handler(null, ctx);
+    await vi.advanceTimersByTimeAsync(6100);
+
+    await toolMap.get("TaskCreate")!.execute!("task", { subject: "Unfinished task", description: "Keep working." });
+    await toolMap.get("LoopCreate")!.execute!("loop", {
+      trigger: "tasks:created",
+      prompt: "Adopt and finish unfinished tasks",
+      triggerType: "event",
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 5,
+    });
+    expect(sentMessages).toHaveLength(1);
+
+    for (const handler of extensionHandlers.get("agent_start") ?? []) await handler(null, ctx);
+    for (const handler of extensionHandlers.get("agent_end") ?? []) await handler(null, ctx);
+    await Promise.resolve();
+
+    expect(sentMessages).toHaveLength(2);
+    expect((sentMessages[1].message as { content: string }).content).toContain("Adopt and finish unfinished tasks");
+  });
+
+  it("adopts unfinished tasks from a persisted backlog loop when its provider becomes ready", async () => {
+    const sessionId = "persisted-backlog-session";
+    const loopPath = resolveLoopStorePath({ loopScope: "session", cwd }, sessionId)!;
+    const taskPath = resolveTaskStorePath({ loopScope: "session", cwd }, sessionId)!;
+    new LoopStore(loopPath).create({ type: "event", source: "tasks:created" }, "Resume unfinished tasks", {
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 5,
+    });
+    new TaskStore(taskPath).create("Persisted task", "Adopt after reload.");
+    await vi.advanceTimersByTimeAsync(1);
+
+    const { pi, extensionHandlers, sentMessages } = createMockPi();
+    extension(pi as any);
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => sessionId },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) await handler(null, ctx);
+    expect(sentMessages).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(6100);
+    await Promise.resolve();
+
+    expect(sentMessages).toHaveLength(1);
+    expect((sentMessages[0].message as { content: string }).content).toContain("Resume unfinished tasks");
+  });
+
+  it("coalesces task creation bursts so one worker wake adopts the whole backlog", async () => {
+    const { pi, toolMap, extensionHandlers, sentMessages } = createMockPi();
+    extension(pi as any);
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) await handler(null, ctx);
+    await vi.advanceTimersByTimeAsync(6100);
+    await toolMap.get("LoopCreate")!.execute!("loop", {
+      trigger: "tasks:created",
+      prompt: "Adopt the task burst",
+      triggerType: "event",
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 2,
+    });
+
+    for (const handler of extensionHandlers.get("agent_start") ?? []) await handler(null, ctx);
+    for (let index = 0; index < 3; index++) {
+      await toolMap.get("TaskCreate")!.execute!(`task-${index}`, {
+        subject: `Burst task ${index}`,
+        description: "Process in one adopted backlog.",
+      });
+    }
+    for (const handler of extensionHandlers.get("agent_end") ?? []) await handler(null, ctx);
+    await Promise.resolve();
+
+    expect(sentMessages).toHaveLength(1);
+    const loops = await toolMap.get("LoopList")!.execute!("list", {});
+    expect(loops.content[0].text).toContain("#1");
+    const loopPath = resolveLoopStorePath({ loopScope: "session", cwd }, "test-session")!;
+    expect(readJsonFile(loopPath).loops[0].fireCount).toBe(1);
+  });
+
+  it("does not double-fire adoption when a task event already queued the next wake", async () => {
+    const { pi, toolMap, extensionHandlers, sentMessages } = createMockPi();
+    extension(pi as any);
+    const ctx = {
+      ui: { setStatus: vi.fn(), setWidget: vi.fn() },
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "test-session" },
+    };
+    for (const handler of extensionHandlers.get("turn_start") ?? []) await handler(null, ctx);
+    await vi.advanceTimersByTimeAsync(6100);
+    await toolMap.get("LoopCreate")!.execute!("loop", {
+      trigger: "tasks:created",
+      prompt: "Process the task backlog",
+      triggerType: "event",
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 5,
+    });
+
+    for (const handler of extensionHandlers.get("agent_start") ?? []) await handler(null, ctx);
+    await toolMap.get("TaskCreate")!.execute!("task", { subject: "New task", description: "Created during work." });
+    for (const handler of extensionHandlers.get("agent_end") ?? []) await handler(null, ctx);
+    await Promise.resolve();
+
+    expect(sentMessages).toHaveLength(1);
+  });
+
   it("manual task-backlog loops auto-delete after the pending queue clears and emit explicit events", async () => {
     const { pi, toolMap, extensionHandlers, emittedEvents } = createMockPi();
 
@@ -860,7 +983,7 @@ describe("native task fallback", () => {
     expect(listResult.content[0].text).toContain("tasks:created");
   });
 
-  it("wakes immediately when a recurring tasks:created loop is bootstrapped against existing pending tasks", async () => {
+  it("does not bootstrap a plain tasks:created watcher against existing tasks", async () => {
     const { pi, toolMap, sentMessages: sentCustomMessages } = createMockPi();
 
     extension(pi as any);
@@ -881,10 +1004,8 @@ describe("native task fallback", () => {
       recurring: true,
     });
 
-    expect(result.content[0].text).toContain("Backlog: initial wake queued for existing pending tasks");
-    expect(sentCustomMessages).toHaveLength(1);
-    expect(sentCustomMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
-    expect((sentCustomMessages[0].message as { content: string }).content).toContain("Pick the next pending task and work on it");
+    expect(result.content[0].text).not.toContain("Backlog: initial wake queued");
+    expect(sentCustomMessages).toHaveLength(0);
   });
 
   it("wakes when a future native task creation matches a recurring tasks:created loop", async () => {

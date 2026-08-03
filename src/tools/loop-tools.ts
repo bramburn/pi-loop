@@ -223,13 +223,13 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     renderResult: renderToolResult,
     description: `Create a persistent cron, event, hybrid, or idle-driven loop. Use it for recurring checks, reminders, event reactions, or explicit task-backlog processing; never use shell sleep/while loops.
 
-Set triggerType to cron, event, hybrid, or idle. Polling loops need maxFires; observation-only loops should set readOnly. Use taskBacklog for an existing queue and autoTask only to create a new task per fire.
+Set triggerType to cron, event, hybrid, or idle. Polling loops need maxFires; observation-only loops should set readOnly. Use taskBacklog to adopt a queue until it drains; use autoTask to create one task per fire.
 
 A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Recurring loops persist; dynamic loops advance through LoopUpdate.`,
     promptGuidelines: [
       "Prefer event triggers over cron; use triggerType `idle` with trigger `idle` for agent-paced continuation.",
       "Always set maxFires on polling loops and readOnly for observation-only work.",
-      "For taskBacklog use triggerType `event`, trigger `tasks:created`, recurring true, and bounded maxFires; existing work bootstraps immediately. Do not use autoTask.",
+      "For autonomous backlogs use event `tasks:created`, recurring true, taskBacklog true, and bounded maxFires. It adopts unfinished tasks until terminal. Do not use autoTask.",
       "Recurring loops are persistent controllers. Do not call LoopDelete after a normal fire, an unchanged check, or one completed iteration; only delete when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
       "For taskBacklog loops, do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.",
       "Report the created loop ID to the user.",
@@ -290,13 +290,30 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
           expanded: [validationError],
         }));
       }
+      let backlogEventSource: string | undefined;
+      if (trigger.type === "event") backlogEventSource = trigger.source;
+      else if (trigger.type === "hybrid") backlogEventSource = trigger.event.source;
+      let backlogError: string | undefined;
+      if (taskBacklog && recurring === false) backlogError = "taskBacklog loops must be recurring.";
+      else if (taskBacklog && backlogEventSource !== "tasks:created") {
+        backlogError = 'taskBacklog loops require a "tasks:created" event trigger.';
+      }
+      if (backlogError) {
+        return Promise.resolve(textResult(backlogError, {
+          kind: "loop",
+          action: "create",
+          tone: "error",
+          summary: "Backlog loop was not created",
+          expanded: [backlogError],
+        }));
+      }
 
       const entry = getStore().create(trigger, prompt, {
-        recurring: recurring ?? (inferred !== "event"),
+        recurring: taskBacklog ? true : recurring ?? (inferred !== "event"),
         autoTask,
         taskBacklog,
         readOnly,
-        maxFires,
+        maxFires: maxFires ?? (taskBacklog ? 25 : undefined),
         dynamic: trigger.type === "dynamic"
           ? { goal: prompt, iteration: 0 }
           : undefined,

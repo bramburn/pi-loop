@@ -18,6 +18,12 @@ export class TriggerSystem {
 
   start(): void {
     this.scheduler.start();
+    for (const entry of this.store.list()) {
+      if (entry.status !== "active") continue;
+      if (entry.trigger.type !== "event" && entry.trigger.type !== "hybrid") continue;
+      const event = entry.trigger.type === "hybrid" ? entry.trigger.event : entry.trigger;
+      this.subscribeEvent(entry, event.source, event.filter);
+    }
   }
 
   stop(): void {
@@ -57,6 +63,7 @@ export class TriggerSystem {
       this.eventSubscriptions.set(source, new Map());
     }
     const subs = this.eventSubscriptions.get(source)!;
+    if (subs.has(entry.id)) return;
 
     const unsub = this.pi.events.on(source, (data: unknown) => {
       if (entry.trigger.type === "hybrid") {
@@ -97,7 +104,7 @@ export class TriggerSystem {
 
   private retire(entry: LoopEntry): void {
     this.remove(entry.id);
-    if (entry.workflow) this.store.pause(entry.id);
+    if (entry.workflow || entry.taskBacklog) this.store.pause(entry.id);
     else this.store.delete(entry.id);
   }
 

@@ -24,9 +24,12 @@ Or use the tools directly:
 ```text
 LoopCreate trigger="5m" prompt="Check if the build passed" maxFires=12
 LoopCreate trigger="tool_execution_start" prompt="Log the tool" triggerType="event" recurring=true
+LoopCreate trigger="tasks:created" prompt="Process unfinished tasks" triggerType="event" recurring=true taskBacklog=true maxFires=25
 LoopList
 LoopDelete id="1"
 ```
+
+`/loop event tasks:created ...` is treated as an explicit task-backlog worker: it adopts existing unfinished tasks, coalesces task-creation bursts, and re-wakes after each agent turn until the backlog drains. Tool callers opt into the same behavior with `taskBacklog=true`.
 
 Run work in the background and wake the agent when it succeeds, fails, or times out:
 

@@ -60,6 +60,31 @@ describe("TriggerSystem", () => {
     expect(pi.events.on).not.toHaveBeenCalled();
   });
 
+  it("restores persisted event subscriptions when the trigger system starts", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "persisted worker", {
+      recurring: true,
+      taskBacklog: true,
+    });
+
+    system.start();
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.fireCount).toBe(1);
+  });
+
+  it("does not duplicate persisted event subscriptions across repeated starts", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "persisted worker", {
+      recurring: true,
+      taskBacklog: true,
+    });
+
+    system.start();
+    system.start();
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.fireCount).toBe(1);
+  });
+
   it("adds event triggers as pi event subscriptions", () => {
     const eventTrigger: Trigger = { type: "event", source: "tool_execution_start" };
     const entry = store.create(eventTrigger, "event test", { recurring: true });
@@ -259,6 +284,21 @@ describe("TriggerSystem", () => {
       (c: string[]) => c[0] === "loop:fire"
     );
     expect(afterCalls).toHaveLength(1);
+  });
+
+  it("pauses task-backlog controllers when their fire budget is exhausted", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "bounded worker", {
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 1,
+    });
+    system.add(entry);
+
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.status).toBe("paused");
+    pi.events.emit("tasks:created", { taskId: "2" });
+    expect(store.get(entry.id)?.fireCount).toBe(1);
   });
 
   it("deletes recurring hybrid loops immediately when event-side final maxFires is reached", () => {

@@ -8,16 +8,18 @@ function setup() {
   const store = new LoopStore(); // memory mode, no file I/O
   const triggerSystem = { add: vi.fn(), remove: vi.fn() };
   const updateWidget = vi.fn();
+  const maybeBootstrapTaskLoop = vi.fn(async () => false);
   const onDynamicLoopActivated = vi.fn();
   registerLoopCommand({
     pi,
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
     updateWidget,
+    maybeBootstrapTaskLoop,
     onDynamicLoopActivated,
   });
   const command = commandMap.get("loop")!;
-  return { store, triggerSystem, updateWidget, onDynamicLoopActivated, command };
+  return { store, triggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated, command };
 }
 
 describe("registerLoopCommand", () => {
@@ -238,7 +240,20 @@ describe("registerLoopCommand", () => {
     expect(h.store.list()).toHaveLength(1);
     expect(h.store.get("1")?.trigger).toEqual({ type: "event", source: "tasks:created" });
     expect(h.store.get("1")?.prompt).toBe("process new tasks");
+    expect(h.store.get("1")?.taskBacklog).toBe(true);
+    expect(h.store.get("1")?.maxFires).toBe(25);
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+    expect(h.maybeBootstrapTaskLoop).toHaveBeenCalledWith(h.store.get("1"));
+  });
+
+  it("reports when a slash-created task worker adopts an existing backlog", async () => {
+    h.maybeBootstrapTaskLoop.mockResolvedValueOnce(true);
+    const ctx = createCtx();
+
+    await h.command.handler!("event tasks:created process existing tasks", ctx);
+
+    expect(ctx.notifications[0].message).toContain("adopts unfinished tasks");
+    expect(ctx.notifications[0].message).toContain("initial wake queued");
   });
 
   it("no-args 'View loops' -> select entry -> Delete removes the loop and its trigger", async () => {

@@ -28,6 +28,8 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     flushPendingNotifications: vi.fn(async () => {}),
     migrateTaskBacklogLoops: vi.fn(() => 0),
     cleanupTaskBacklogLoops: vi.fn(async () => 0),
+    adoptTaskBacklogLoops: vi.fn(async () => 0),
+    releaseTaskBacklogWakes: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
     cleanDoneTasks: vi.fn(async () => {}),
     ...overrides,

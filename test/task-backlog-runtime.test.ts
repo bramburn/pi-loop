@@ -50,16 +50,18 @@ function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
   const opts: TaskBacklogRuntimeOptions = {
     getLoops: () => loops,
     deleteLoop,
-    updateLoopPrompt: vi.fn((id: string, prompt: string) => {
+    updateLoopWorker: vi.fn((id: string, prompt: string) => {
       const entry = loops.find((loop) => loop.id === id);
       if (!entry) return undefined;
       entry.prompt = prompt;
+      entry.taskBacklog = true;
       return entry;
     }),
     recordDeletionTombstone: vi.fn(),
     removeTrigger: vi.fn(),
     updateWidget: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
+    adoptLoop: vi.fn(),
     triggerHasEventSource,
     emitLoopAutodeleted: vi.fn(),
     emitTaskBacklogEmpty: vi.fn(),
@@ -101,10 +103,15 @@ describe("task-backlog-runtime predicates", () => {
 
   it("migrates persisted worker prompts to the current recovery contract", () => {
     const { runtime, loops, opts } = setup();
-    loops.push(makeLoop({ id: "8", prompt: PREVIOUS_WORKER_PROMPT, fireCount: 7 }));
+    loops.push(
+      makeLoop({ id: "8", prompt: PREVIOUS_WORKER_PROMPT, fireCount: 7 }),
+      makeLoop({ id: "9", prompt: AUTO_TASK_WORKER_PROMPT, taskBacklog: undefined }),
+    );
 
-    expect(runtime.migrateAutoTaskWorkerPrompts()).toBe(1);
-    expect(opts.updateLoopPrompt).toHaveBeenCalledWith("8", AUTO_TASK_WORKER_PROMPT);
+    expect(runtime.migrateAutoTaskWorkerPrompts()).toBe(2);
+    expect(opts.updateLoopWorker).toHaveBeenCalledWith("8", AUTO_TASK_WORKER_PROMPT);
+    expect(opts.updateLoopWorker).toHaveBeenCalledWith("9", AUTO_TASK_WORKER_PROMPT);
+    expect(loops.every((entry) => entry.taskBacklog)).toBe(true);
     expect(loops[0]).toMatchObject({
       id: "8",
       prompt: AUTO_TASK_WORKER_PROMPT,
@@ -150,6 +157,49 @@ describe("task-backlog-runtime predicates", () => {
     await runtime.cleanupTaskBacklogLoops();
 
     expect(loops).toHaveLength(0);
+  });
+});
+
+describe("task backlog adoption", () => {
+  it("adopts every explicit or legacy worker while unfinished tasks remain", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 2) });
+    loops.push(
+      makeLoop({ id: "1", prompt: "explicit", taskBacklog: true }),
+      makeLoop({ id: "2", prompt: AUTO_TASK_WORKER_PROMPT }),
+      makeLoop({ id: "3", prompt: "plain watcher", taskBacklog: false }),
+    );
+
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(2);
+    expect(opts.adoptLoop).toHaveBeenCalledTimes(2);
+    expect(opts.adoptLoop).toHaveBeenNthCalledWith(1, loops[0]);
+    expect(opts.adoptLoop).toHaveBeenNthCalledWith(2, loops[1]);
+  });
+
+  it("skips workers that already fired after the agent turn began", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 1) });
+    loops.push(makeLoop({ taskBacklog: true, fireCount: 3 }));
+
+    expect(await runtime.adoptTaskBacklogLoops(new Map([["1", 2]]))).toBe(0);
+    expect(opts.adoptLoop).not.toHaveBeenCalled();
+  });
+
+  it("adopts a worker whose fire count did not change during the agent turn", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 1) });
+    loops.push(makeLoop({ taskBacklog: true, fireCount: 2 }));
+
+    expect(await runtime.adoptTaskBacklogLoops(new Map([["1", 2]]))).toBe(1);
+    expect(opts.adoptLoop).toHaveBeenCalledWith(loops[0]);
+  });
+
+  it("does not adopt when unfinished task state is empty or unavailable", async () => {
+    const hasPendingTasks = vi.fn(async () => 0);
+    const { runtime, opts, loops } = setup({ hasPendingTasks });
+    loops.push(makeLoop({ taskBacklog: true }));
+
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(0);
+    hasPendingTasks.mockResolvedValueOnce(-1);
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(0);
+    expect(opts.adoptLoop).not.toHaveBeenCalled();
   });
 });
 

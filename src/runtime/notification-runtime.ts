@@ -162,7 +162,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     }
 
     const lifecycle = data.taskBacklog
-      ? `Backlog lifecycle: Loop #${loopId} is managed automatically. Do not call LoopDelete; when no pending tasks remain, report that and end this iteration.`
+      ? `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not call LoopDelete; when no unfinished tasks remain, report that and end this iteration.`
       : (data.persistent ?? data.recurring)
         ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not call LoopDelete or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation.`
         : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not call LoopDelete.`;

@@ -296,7 +296,7 @@ describe("loop:fire custom message delivery", () => {
     await flushAsync();
 
     expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0].message.content).toContain("managed automatically");
+    expect(sentMessages[0].message.content).toContain("adopts unfinished tasks and re-wakes after this turn");
     expect(sentMessages[0].message.content).toContain("Do not call LoopDelete");
     expect(sentMessages[0].message.content).toContain("report that and end this iteration");
     expect(sentMessages[0].message.details.taskBacklog).toBe(true);

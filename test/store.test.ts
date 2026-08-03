@@ -182,14 +182,16 @@ describe("LoopStore (in-memory)", () => {
     s.create(eventTrigger, "event loop", { recurring: false });
     s.create(cronT, "cron loop", { recurring: true });
     s.create(eventTrigger, "another event", { recurring: true });
+    s.create({ type: "event", source: "tasks:created" }, "backlog worker", { recurring: true, taskBacklog: true });
 
     // sessionStartedAt is set after creation — simulating loop persisted from prior session
     const sessionStartedAt = Date.now() + 1;
     expect(s.expireEventLoops(sessionStartedAt)).toBe(2);
 
     expect(s.get("2")!.status).toBe("active"); // cron loop untouched
-    expect(s.get("1")).toBeUndefined(); // event loops deleted
+    expect(s.get("1")).toBeUndefined(); // ordinary event loops deleted
     expect(s.get("3")).toBeUndefined();
+    expect(s.get("4")?.status).toBe("active"); // backlog controller survives to adopt unfinished work
   });
 
   it("does not expire event loops created in current session", () => {

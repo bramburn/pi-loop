@@ -122,7 +122,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string }): { entry: LoopEntry | undefined; changedFields: string[] } {
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; taskBacklog?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] } {
     return this.withLock(() => {
       const current = this.entries.get(id);
       if (!current) return { entry: undefined, changedFields: [] };
@@ -134,9 +134,13 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
         current.trigger = fields.trigger;
         changedFields.push("trigger");
       }
-      if (fields.prompt !== undefined) {
+      if (fields.prompt !== undefined && fields.prompt !== current.prompt) {
         current.prompt = fields.prompt;
         changedFields.push("prompt");
+      }
+      if (fields.taskBacklog !== undefined && fields.taskBacklog !== current.taskBacklog) {
+        current.taskBacklog = fields.taskBacklog;
+        changedFields.push("taskBacklog");
       }
       if (changedFields.length > 0) {
         current.updatedAt = now;
@@ -357,6 +361,8 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       for (const [id, entry] of [...this.entries.entries()]) {
         if (entry.status !== "active") continue;
         if (entry.trigger.type !== "event" && entry.trigger.type !== "hybrid") continue;
+        const eventSource = entry.trigger.type === "event" ? entry.trigger.source : entry.trigger.event.source;
+        if (entry.taskBacklog && eventSource === "tasks:created") continue;
         if (entry.createdAt >= sessionStartedAt) continue;
         this.applyReducerEvent({
           type: "LOOP_EXPIRED",

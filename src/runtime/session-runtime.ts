@@ -27,6 +27,8 @@ export interface SessionRuntimeOptions {
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   migrateTaskBacklogLoops: () => number;
   cleanupTaskBacklogLoops: () => Promise<number>;
+  adoptTaskBacklogLoops: (baselineFireCounts?: ReadonlyMap<string, number>) => Promise<number>;
+  releaseTaskBacklogWakes: () => void;
   hasPendingTasks: () => Promise<number>;
   cleanDoneTasks: () => Promise<void>;
 }
@@ -48,6 +50,8 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     flushPendingNotifications,
     migrateTaskBacklogLoops,
     cleanupTaskBacklogLoops,
+    adoptTaskBacklogLoops,
+    releaseTaskBacklogWakes,
     hasPendingTasks,
     cleanDoneTasks,
   } = options;
@@ -55,6 +59,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   let storeUpgraded = false;
   let persistedShown = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let agentStartFireCounts: ReadonlyMap<string, number> | undefined;
 
   // The CronScheduler is pump-driven; without this heartbeat it only advances at
   // turn boundaries (turn_start/agent_end), so a loop whose fire time elapses
@@ -87,7 +92,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     storeUpgraded = true;
   }
 
-  function showPersistedLoops(_isResume = false) {
+  async function showPersistedLoops(_isResume = false) {
     if (persistedShown) return;
     persistedShown = true;
     const sessionStartedAt = Date.now();
@@ -99,6 +104,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       getTriggerSystem().start();
       ensureHeartbeat();
     }
+    await adoptTaskBacklogLoops();
   }
 
   async function pumpLoops(): Promise<void> {
@@ -121,7 +127,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    showPersistedLoops();
+    await showPersistedLoops();
     widget.update();
   });
 
@@ -131,6 +137,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
+    await showPersistedLoops();
     widget.update();
     await pumpLoops();
   });
@@ -140,7 +147,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    showPersistedLoops();
+    await showPersistedLoops();
     widget.update();
   });
 
@@ -151,6 +158,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     });
     setLatestCtx(ctx);
     widget.setUICtx(ctx.ui);
+    agentStartFireCounts = new Map(getStore().list().map((entry) => [entry.id, entry.fireCount ?? 0]));
   });
 
   pi.on("agent_end", async (_event, ctx) => {
@@ -160,13 +168,17 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       agentRunning: false,
       hasPendingMessages: ctx.hasPendingMessages(),
     });
-    await flushPendingNotifications({ ignorePendingMessages: true });
+    releaseTaskBacklogWakes();
     await cleanupTaskBacklogLoops();
+    await adoptTaskBacklogLoops(agentStartFireCounts);
+    agentStartFireCounts = undefined;
+    await flushPendingNotifications({ ignorePendingMessages: true });
     await pumpLoops();
   });
 
   pi.on("session_shutdown", async () => {
     stopHeartbeat();
+    releaseTaskBacklogWakes();
     notificationRuntime.clear("session_shutdown");
   });
 
@@ -176,6 +188,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getTriggerSystem().stop();
     stopHeartbeat();
     notificationRuntime.clear("session_switch");
+    releaseTaskBacklogWakes();
     setSessionId(undefined);
 
     const isResume = event?.reason === "resume";
@@ -185,7 +198,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     setSessionId(ctx.sessionManager.getSessionId());
     upgradeStoreIfNeeded(ctx);
     if (!isResume && getLoopScope() === "memory") clearAllLoops();
-    showPersistedLoops(isResume);
+    await showPersistedLoops(isResume);
     widget.update();
   });
 

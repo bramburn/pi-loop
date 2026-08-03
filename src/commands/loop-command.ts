@@ -34,6 +34,7 @@ export interface LoopCommandOptions {
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
   updateWidget: () => void;
+  maybeBootstrapTaskLoop?: (entry: LoopEntry) => Promise<boolean>;
   onDynamicLoopActivated?: (entry: LoopEntry) => void;
 }
 
@@ -76,7 +77,7 @@ function parseLoopCommandRoute(input: string): LoopCommandRoute {
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, updateWidget, onDynamicLoopActivated } = options;
+  const { pi, getStore, getTriggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated } = options;
 
   function createCronLoop(ui: ExtensionUIContext, interval: string, prompt: string, notifyEvery: boolean) {
     let entry: LoopEntry | undefined;
@@ -116,10 +117,19 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (!source) return;
 
     const trigger: Trigger = { type: "event", source };
-    const entry = getStore().create(trigger, p, { recurring: true });
+    const taskBacklog = source === "tasks:created";
+    const entry = getStore().create(trigger, p, {
+      recurring: true,
+      taskBacklog,
+      maxFires: taskBacklog ? 25 : undefined,
+    });
     getTriggerSystem().add(entry);
     updateWidget();
-    ui.notify(`Event loop #${entry.id} created: fires on "${source}"`, "info");
+    const bootstrapped = taskBacklog ? await maybeBootstrapTaskLoop?.(entry) : false;
+    const adoption = taskBacklog
+      ? `; adopts unfinished tasks${bootstrapped ? " (initial wake queued)" : ""}`
+      : "";
+    ui.notify(`Event loop #${entry.id} created: fires on "${source}"${adoption}`, "info");
   }
 
   function dynamicLoop(ui: ExtensionUIContext, goal: string) {
