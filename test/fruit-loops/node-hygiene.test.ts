@@ -1,12 +1,16 @@
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const TEST_STATE_FILE = join(".pi", "fruit-loops", "test_loop5_state.json");
+const TEST_STATE_DIR = join(".pi", "fruit-loops");
 
 describe("Node Hygiene State Management", () => {
   beforeEach(() => {
     process.env.NODE_HYGIENE_STATE = TEST_STATE_FILE;
+    // .pi/ is gitignored and does not exist on fresh CI checkouts, so the
+    // writeFileSync calls below need the parent directory created first.
+    mkdirSync(TEST_STATE_DIR, { recursive: true });
     if (existsSync(TEST_STATE_FILE)) {
       rmSync(TEST_STATE_FILE);
     }
