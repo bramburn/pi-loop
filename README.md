@@ -1,6 +1,6 @@
 <p align="center">
 <h1 align="center">@bramburn/pi-loop</h1>
-<h6 align="center">Cron and event loops for the pi coding agent. Background monitors, scheduled re-wakes, pi-tasks integration, and native task fallback.</h6>
+<h6 align="center">Cron and event loops for the pi coding agent. Scheduled re-wakes, idle-driven dynamic goal loops, event-triggered agents, and per-session bindings.</h6>
 </p>
 
 ## Install
@@ -18,22 +18,6 @@ LoopList
 LoopDelete id="1"
 ```
 
-```text
-MonitorCreate command="tail -n0 -f build.log" description="Watch build"
-MonitorCreate command="python train.py" onDone="Analyze results and report best loss"
-MonitorList
-MonitorStop monitorId="1"
-```
-
-When `pi-tasks` is not installed, `pi-loop` also exposes native task tools after startup detection:
-
-```text
-TaskCreate subject="Fix deploy polling" description="Switch deploy check to event-driven loop"
-TaskList
-TaskUpdate id="1" status="in_progress"
-TaskDelete id="1"
-```
-
 ## Commands
 
 `/loop [interval] [prompt]` — interactive loop creation.
@@ -43,43 +27,30 @@ TaskDelete id="1"
 /loop 5m check the deploy     # 5-minute cron loop
 ```
 
-`/loop-resume <id>` — re-arm a stored loop AND bind it to the current session in a single call. After this, the loop fires only in this terminal — other pi sessions in the same repo will not see it. Use this after a session/process restart when a project-scoped event/hybrid loop's trigger subscription was lost.
+`/loop-resume <id>` — re-arm a stored loop by ID and re-add it to the trigger system. Use this after a session/process restart when a stored event/hybrid loop's trigger subscription was lost. Idempotent: re-arming an already-active loop just refreshes the trigger.
 
 ```text
 /loop-resume 5        # re-arm loop #5 by id
-/loop-resume          # open the governor picker (see below)
+/loop-resume          # open a single-select picker of all stored loops
 ```
 
-`/loop-resume` (no args) — open the **governor** picker. Every stored loop is shown as a checkbox row `[x] #N [status] prompt (trigger)` where `[x]` reflects this session's current binding. Toggle rows to change which loops this terminal arms; the three sentinels at the bottom commit or discard:
-
-```text
-< OK            commit pending toggles, write bindings file, apply trigger arm/disarm
-< Continue      open a ui.confirm preview ("Arm: #5, #9 / Disarm: #7"); OK applies, Cancel returns
-< Cancel        discard pending toggles, exit
-```
-
-Use the governor when running two or three pi terminals in the same repo and you want each terminal to fire only a disjoint subset of stored loops. Each terminal writes its own `.pi/loops/bindings-<sessionId>.json` file so parallel sessions do not interfere.
-`/tasks` — interactive native task viewer/manager, only registered when `pi-tasks` is absent.
-
-```text
-/tasks                        # open native task viewer
-/tasks Write README updates   # quick-create native task
-```
+`/loop-resume` (no args) — open a simple picker listing every stored loop as `* #N [status] prompt (trigger)`. Pick a row to re-arm it, or `< Back` to exit without changing anything. Each terminal reads and writes its own `.pi/loops/bindings-<sessionId>.json` so parallel sessions do not interfere.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `LoopCreate` | Schedule a prompt on a cron timer, a pi event, or both with debounce |
+| `LoopUpdate` | Update progress for a dynamic goal loop (self-paced mode) |
 | `LoopList` | Show active loops with IDs, triggers, and next-fire times |
 | `LoopDelete` | Delete or pause a loop |
-| `MonitorCreate` | Run a background command, stream output as `monitor:output` events. Use `onDone` for auto-notify on completion |
-| `MonitorList` | Show monitors with status, uptime, and output line count |
-| `MonitorStop` | Stop a monitor (SIGTERM → 5s → SIGKILL) |
-| `TaskCreate` | Create a native fallback task when `pi-tasks` is absent |
-| `TaskList` | List native fallback tasks |
-| `TaskUpdate` | Update native fallback task status/details |
-| `TaskDelete` | Delete a native fallback task |
+| `MonitorCreate` | _(retired — see [Retired tools](#retired-tools))_ |
+| `MonitorList` | _(retired)_ |
+| `MonitorStop` | _(retired)_ |
+| `TaskCreate` | _(retired — see [Retired tools](#retired-tools))_ |
+| `TaskList` | _(retired)_ |
+| `TaskUpdate` | _(retired)_ |
+| `TaskDelete` | _(retired)_ |
 
 Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event source), or `hybrid` (both, debounced).
 
@@ -97,6 +68,7 @@ If `pi-tasks` does not respond during startup detection, `pi-loop` registers a n
 - `TaskCreate`, `TaskList`, `TaskUpdate`, `TaskDelete`
 - `/tasks` interactive viewer
 - compact status-line task tracking
+
 
 This fallback is session-sticky: `pi-loop` decides once at startup whether `pi-tasks` or native tasks own task management for that session.
 
@@ -148,7 +120,7 @@ Cron loops re-arm themselves automatically **only if they are bound to this sess
 If you run two or three pi terminals in the same repo and want each one to fire a different subset of loops, use the bindings mechanism:
 
 - Each terminal has its own `.pi/loops/bindings-<sessionId>.json` file listing the loop IDs it has chosen to arm.
-- A fresh session (no bindings file yet) starts with **zero** loops armed (strict isolation). Run `/loop-resume <id>` or open the governor to bind loops for this terminal.
+- A fresh session (no bindings file yet) starts with **zero** loops armed (strict isolation). Run `/loop-resume <id>` to bind loops for this terminal.
 - Terminal A binding loop #5 does **not** cause Terminal B to fire #5, because each session reads only its own bindings file and its trigger subscriptions are process-local.
 
 This is a deliberate behavior change from previous versions, where every session armed every active loop on start.
@@ -184,6 +156,20 @@ The DSN itself is a *public* client identifier (it's shipped to browsers in Sent
 For the wider design rationale see [`docs/SENTRY.md`](docs/SENTRY.md).
 
 
+
+## Retired tools
+
+The Loop family is now active (see [Status](#install) and [Quick start](#quick-start)). The following tools and commands remain present in source but **not registered** in `src/index.ts` to keep the extension footprint minimal:
+
+| File | What's in it |
+|---|---|
+| `src/tools/monitor-tools.ts` | `MonitorCreate`, `MonitorList`, `MonitorStop`, `MonitorDelete` |
+| `src/tools/native-task-tools.ts` | `TaskCreate`, `TaskList`, `TaskGet`, `TaskClaim`, `TaskHeartbeat`, `TaskUpdate`, `TaskDelete`, `TaskPrune` |
+| `src/tools/workflow-tools.ts` | Workflow step-execution tools |
+| `src/commands/monitors-command.ts` | `/monitors` command |
+| `src/commands/tasks-command.ts` | `/tasks` command |
+
+The infrastructure that would back these tools is still in place: `src/monitor-manager.ts`, `src/task-store.ts`, `src/runtime/task-*.ts` coordinators. To re-enable any of them, add the matching `register*()` call to `src/index.ts` and provide the runtime stubs that the registered tools depend on.
 
 ## Limits
 

@@ -13,7 +13,7 @@
 ## Architecture
 ```
 src/
-├── index.ts              # Extension entry: 6 tools + /loop /loops commands + widget
+├── index.ts              # Extension entry: 4 loop tools + /loop + /loop-resume + widget
 ├── types.ts              # LoopKind, Trigger spec, LoopEntry, MonitorEntry, LoopConfig
 ├── store.ts              # File-backed CRUD (.pi/loops/loops.json) with file locking
 ├── scheduler.ts          # Timer-based cron scheduler with jitter + 7-day expiry
@@ -66,10 +66,10 @@ Multiple pi terminals in the same repo each pick a disjoint subset of stored loo
 
 - **Fresh-session default is strict isolation**: if the bindings file does not exist on first start, the session arms **zero** loops and emits a one-time notify: `'No bindings for this session — run /loop-resume to choose which loops this terminal arms.'`. This is a deliberate behavior change — the extension no longer auto-arms every active loop in the project store on session start.
 - **`/loop-resume <id>` (one-shot)**: re-arms the loop and writes the id into the bindings file in a single call.
-- **`/loop-resume` (no args)** opens the **governor** picker: every stored loop is shown as `[x] #N [status] prompt (trigger)` where the checkbox reflects THIS session's binding state. Selecting a row toggles its in-memory binding; `< OK` commits and exits; `< Continue` opens a `ui.confirm` diff preview (`Arm: #5, #9 / Disarm: #7`); `< Cancel` discards pending changes and exits.
+- **`/loop-resume` (no args)** opens a simple picker: every stored loop is shown as `* #N [status] prompt (trigger)`. Selecting a row re-arms that loop; `< Back` exits without changing anything.
 - **Concurrent-session invariant**: two terminals in the same repo write only their own bindings files; the shared `.pi/loops/loops.json` registry is read by all sessions and written through the existing `LoopStore.withLock`. Trigger subscriptions are process-local — terminal A's `triggerSystem.add(#5)` does NOT cause terminal B to fire `#5`.
 
-Implementation: `src/runtime/bindings-store.ts` (BindingsStore class), `src/runtime/scope.ts` (`resolveBindingsPath`), `src/runtime/session-runtime.ts` (`showPersistedLoops` filters arm-list by bindings), `src/commands/loop-command.ts` (governor + bindings-aware one-shot).
+Implementation: `src/runtime/bindings-store.ts` (BindingsStore class), `src/runtime/scope.ts` (`resolveBindingsPath`), `src/runtime/session-runtime.ts` (`showPersistedLoops` filters arm-list by bindings), `src/commands/loop-command.ts` (simple picker + bindings-aware one-shot).
 ## Trigger Types
 Three trigger types, all stored as `LoopEntry.trigger`:
 - `{ type: "cron", schedule: "*/5 * * * *" }` — timer-based
