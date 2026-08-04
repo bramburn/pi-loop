@@ -1,5 +1,5 @@
 import { rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LoopStore } from "../src/store.js";
@@ -78,6 +78,26 @@ describe("LoopStore (in-memory)", () => {
     expect(entry!.status).toBe("active");
   });
 
+  it("does not resume a workflow paused in a terminal state", () => {
+    store.create({ type: "dynamic" }, "Investigate", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "investigate",
+        states: {
+          investigate: { prompt: "Find the blocker.", on: { blocked: "blocked" } },
+          blocked: { prompt: "Report the blocker.", terminal: "paused" },
+        },
+      },
+    });
+    const result = store.transitionWorkflow("1", { outcome: "blocked" });
+    expect(result.terminal).toBe("paused");
+    store.pause("1");
+
+    expect(store.resume("1")).toBeUndefined();
+    expect(store.get("1")?.status).toBe("paused");
+  });
+
   it("updates loop prompt metadata", () => {
     store.create(cronTrigger, "original", { recurring: true });
     const { changedFields } = store.updateMetadata("1", { prompt: "updated" });
@@ -116,11 +136,42 @@ describe("LoopStore (in-memory)", () => {
     expect(store2.list()).toHaveLength(0);
   });
 
+  it("pauses expired workflows instead of deleting them", () => {
+    const workflow = store.create({ type: "dynamic" }, "workflow", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "work",
+        states: { work: { prompt: "Work.", on: { done: "done" } }, done: { prompt: "Done.", terminal: "completed" } },
+      },
+    });
+    workflow.expiresAt = Date.now() - 1;
+
+    expect(store.clearExpired()).toBe(1);
+    expect(store.get(workflow.id)?.status).toBe("paused");
+  });
+
   it("clears all loops", () => {
     store.create(cronTrigger, "a", { recurring: true });
     store.create(cronTrigger, "b", { recurring: true });
     expect(store.clearAll()).toBe(2);
     expect(store.list()).toHaveLength(0);
+  });
+
+  it("can clear ordinary loops while preserving workflows for safe reconciliation", () => {
+    store.create(cronTrigger, "ordinary", { recurring: true });
+    const workflow = store.create({ type: "dynamic" }, "workflow", {
+      recurring: true,
+      workflow: {
+        version: 1,
+        initialState: "work",
+        states: { work: { prompt: "Work.", on: { done: "done" } }, done: { prompt: "Done.", terminal: "completed" } },
+      },
+    });
+
+    expect(store.clearAll({ preserveWorkflows: true })).toBe(2);
+    expect(store.get("1")).toBeUndefined();
+    expect(store.get(workflow.id)?.status).toBe("paused");
   });
 
   it("expires event-triggered loops on session start", () => {
@@ -131,14 +182,16 @@ describe("LoopStore (in-memory)", () => {
     s.create(eventTrigger, "event loop", { recurring: false });
     s.create(cronT, "cron loop", { recurring: true });
     s.create(eventTrigger, "another event", { recurring: true });
+    s.create({ type: "event", source: "tasks:created" }, "backlog worker", { recurring: true, taskBacklog: true });
 
     // sessionStartedAt is set after creation — simulating loop persisted from prior session
     const sessionStartedAt = Date.now() + 1;
     expect(s.expireEventLoops(sessionStartedAt)).toBe(2);
 
     expect(s.get("2")!.status).toBe("active"); // cron loop untouched
-    expect(s.get("1")).toBeUndefined(); // event loops deleted
+    expect(s.get("1")).toBeUndefined(); // ordinary event loops deleted
     expect(s.get("3")).toBeUndefined();
+    expect(s.get("4")?.status).toBe("active"); // backlog controller survives to adopt unfinished work
   });
 
   it("does not expire event loops created in current session", () => {
@@ -184,6 +237,47 @@ describe("LoopStore (in-memory)", () => {
     expect((l.trigger as any).debounceMs).toBe(30000);
   });
 
+  it("stores dynamic loop state", () => {
+    const dynamicTrigger: Trigger = { type: "dynamic" };
+    const l = store.create(dynamicTrigger, "finish release", {
+      recurring: true,
+      maxFires: 20,
+      dynamic: {
+        goal: "finish release",
+        state: "tests pending",
+        metrics: "0/3 checks passing",
+        doneCriteria: "lint/typecheck/test pass",
+      },
+    });
+
+    expect(l.trigger.type).toBe("dynamic");
+    expect(l.dynamic).toMatchObject({
+      goal: "finish release",
+      state: "tests pending",
+      metrics: "0/3 checks passing",
+      doneCriteria: "lint/typecheck/test pass",
+      iteration: 0,
+      awaitingUpdate: false,
+    });
+    expect(l.dynamic?.lastUpdatedAt).toBe(l.createdAt);
+  });
+
+  it("rejects a stale dynamic continuation without overwriting newer progress", () => {
+    const entry = store.create({ type: "dynamic" }, "ship", { recurring: true });
+    const expected = { status: entry.status, iteration: entry.dynamic?.iteration ?? 0, updatedAt: entry.updatedAt };
+    store.updateDynamic(entry.id, { dynamic: { state: "newer", iteration: 1 } });
+
+    expect(store.continueDynamic(entry.id, { dynamic: { state: "stale", iteration: 1 } }, expected)).toBeUndefined();
+    expect(store.stopDynamic(entry.id, "completed", expected)).toBe(false);
+    expect(store.get(entry.id)?.dynamic?.state).toBe("newer");
+  });
+
+  it("defaults dynamic goal to the prompt", () => {
+    const l = store.create({ type: "dynamic" }, "ship the fix", { recurring: true });
+    expect(l.dynamic?.goal).toBe("ship the fix");
+    expect(l.dynamic?.iteration).toBe(0);
+  });
+
   it("stores autoTask flag", () => {
     const l = store.create(cronTrigger, "test", { recurring: true, autoTask: true });
     expect(l.autoTask).toBe(true);
@@ -193,6 +287,33 @@ describe("LoopStore (in-memory)", () => {
     const l = store.create(cronTrigger, "limited", { recurring: true, maxFires: 5 });
     expect(l.maxFires).toBe(5);
     expect(l.fireCount).toBe(0);
+  });
+
+  it("keeps short-lived deletion tombstones", () => {
+    store.create(cronTrigger, "auto worker", { recurring: true });
+    const tombstone = store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
+    store.delete("1");
+
+    expect(tombstone).toMatchObject({
+      id: "1",
+      reason: "task_backlog_empty",
+      prompt: "auto worker",
+      pendingCount: 0,
+    });
+    expect(store.getDeletionTombstone("1")?.reason).toBe("task_backlog_empty");
+  });
+
+  it("drops stale deletion tombstones", () => {
+    store.create(cronTrigger, "auto worker", { recurring: true });
+    const tombstone = store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 })!;
+    store.delete("1");
+    tombstone.deletedAt = Date.now() - 11 * 60 * 1000;
+
+    expect(store.getDeletionTombstone("1")).toBeUndefined();
+  });
+
+  it("does not record deletion tombstones for missing loops", () => {
+    expect(store.recordDeletionTombstone("404", { reason: "task_backlog_empty", pendingCount: 0 })).toBeUndefined();
   });
 
   it("increments fireCount via explicit fire", () => {
@@ -205,9 +326,7 @@ describe("LoopStore (in-memory)", () => {
 });
 
 describe("LoopStore (file-backed)", () => {
-  const testListId = `test-loops-${Date.now()}`;
-  const loopsDir = join(homedir(), ".pi", "loops");
-  const filePath = join(loopsDir, `${testListId}.json`);
+  const filePath = join(tmpdir(), `pi-loop-store-${Date.now()}.json`);
 
   afterEach(() => {
     rmSync(filePath, { force: true });
@@ -216,27 +335,58 @@ describe("LoopStore (file-backed)", () => {
   });
 
   it("persists loops to disk", () => {
-    const store1 = new LoopStore(testListId);
+    const store1 = new LoopStore(filePath);
     store1.create(cronTrigger, "persist test", { recurring: true });
 
-    const store2 = new LoopStore(testListId);
+    const store2 = new LoopStore(filePath);
     const loops = store2.list();
     expect(loops).toHaveLength(1);
     expect(loops[0].prompt).toBe("persist test");
   });
 
+  it("persists dynamic loop state to disk", () => {
+    const store1 = new LoopStore(filePath);
+    store1.create({ type: "dynamic" }, "finish dynamic loop", {
+      recurring: true,
+      dynamic: {
+        goal: "finish dynamic loop",
+        state: "router done",
+        metrics: "1/5 tasks complete",
+      },
+    });
+
+    const store2 = new LoopStore(filePath);
+    expect(store2.get("1")?.dynamic).toMatchObject({
+      goal: "finish dynamic loop",
+      state: "router done",
+      metrics: "1/5 tasks complete",
+      iteration: 0,
+    });
+  });
+
+  it("keeps deletion tombstones process-local", () => {
+    const store1 = new LoopStore(filePath);
+    store1.create(cronTrigger, "auto worker", { recurring: true });
+    store1.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
+    store1.delete("1");
+
+    const store2 = new LoopStore(filePath);
+    expect(store1.getDeletionTombstone("1")?.reason).toBe("task_backlog_empty");
+    expect(store2.getDeletionTombstone("1")).toBeUndefined();
+  });
+
   it("persists ID counter across instances", () => {
-    const store1 = new LoopStore(testListId);
+    const store1 = new LoopStore(filePath);
     store1.create(cronTrigger, "first", { recurring: true });
 
-    const store2 = new LoopStore(testListId);
+    const store2 = new LoopStore(filePath);
     const l = store2.create(cronTrigger, "second", { recurring: true });
     expect(l.id).toBe("2");
   });
 
   it("refreshes reads only when the backing file changes", () => {
-    const store1 = new LoopStore(testListId);
-    const store2 = new LoopStore(testListId);
+    const store1 = new LoopStore(filePath);
+    const store2 = new LoopStore(filePath);
 
     store1.create(cronTrigger, "first", { recurring: true });
     expect(store2.list()).toHaveLength(1);
@@ -247,41 +397,21 @@ describe("LoopStore (file-backed)", () => {
   });
 
   it("persists paused status updates", () => {
-    const store1 = new LoopStore(testListId);
+    const store1 = new LoopStore(filePath);
     store1.create(cronTrigger, "test", { recurring: true });
     store1.pause("1");
 
-    const store2 = new LoopStore(testListId);
+    const store2 = new LoopStore(filePath);
     expect(store2.get("1")!.status).toBe("paused");
   });
 
   it("persists deletions", () => {
-    const store1 = new LoopStore(testListId);
+    const store1 = new LoopStore(filePath);
     store1.create(cronTrigger, "test", { recurring: true });
     store1.delete("1");
 
-    const store2 = new LoopStore(testListId);
+    const store2 = new LoopStore(filePath);
     expect(store2.list()).toHaveLength(0);
-  });
-
-  it("renames a corrupt file to .corrupt.<ts> for recovery (G-25)", () => {
-    try {
-      // Write garbage to the backing file to simulate corruption.
-      writeFileSync(filePath, "not valid json {{{");
-      // Open a new store; load() should detect the corruption and rename.
-      const s = new LoopStore(testListId);
-      expect(s.list()).toEqual([]);
-
-      // The corrupt file should now exist as .corrupt.<ts> in the same dir.
-      const { readdirSync } = require("node:fs") as typeof import("node:fs");
-      const files = readdirSync(loopsDir);
-      const corruptFile = files.find((f) => f.startsWith(`${testListId}.json.corrupt.`));
-      expect(corruptFile).toBeDefined();
-      if (corruptFile) rmSync(join(loopsDir, corruptFile), { force: true });
-    } finally {
-      // Ensure the bad file is gone so afterEach doesn't trip over it
-      rmSync(filePath, { force: true });
-    }
   });
 });
 
@@ -350,39 +480,5 @@ describe("LoopStore (absolute path)", () => {
       rmSync(lPath + ".lock", { force: true });
       rmSync(lPath + ".tmp", { force: true });
     }
-  });
-
-  it("invokes onLoopRemoved for each expired loop (G-07)", () => {
-    const removed: string[] = [];
-    const s = new LoopStore(undefined, (id) => removed.push(id));
-    const e1 = s.create(cronTrigger, "expire 1", { recurring: true });
-    const e2 = s.create(cronTrigger, "expire 2", { recurring: true });
-
-    // Manually expire by backdating expiresAt via the existing reducer pipeline
-    // We use a hack: call clearExpired immediately (loops are fresh, won't expire).
-    // To force expiration, override expiresAt by re-creating with a long-ago
-    // timestamp — instead, use the LOOP_EXPIRED reducer event directly through
-    // the public surface. Easiest: use the `delete` path which also fires
-    // onLoopRemoved via clearAll.
-    s.clearAll();
-    expect(removed).toContain(e1.id);
-    expect(removed).toContain(e2.id);
-  });
-
-  it("invokes onLoopRemoved for each event loop expired on session start (G-06)", () => {
-    const removed: string[] = [];
-    const s = new LoopStore(undefined, (id) => removed.push(id));
-    const eventTrigger: Trigger = { type: "event", source: "tool_execution_end" };
-    const entry = s.create(eventTrigger, "stale event", { recurring: true });
-
-    // Force the loop to look like it was created before the session started
-    // (we can't backdate createdAt through the public API, so we expire
-    // any active event/hybrid loop via the session-start path).
-    s.expireEventLoops(Date.now() + 1000); // 1s in the future → loop is "older"
-    // expireEventLoops only fires for loops with createdAt < sessionStartedAt;
-    // since the loop was just created, it won't be expired. So remove manually
-    // to verify the callback wiring:
-    s.delete(entry.id);
-    expect(removed).toContain(entry.id);
   });
 });

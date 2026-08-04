@@ -1,4 +1,4 @@
-import type { TaskEntry } from "./task-types.js";
+import type { TaskEntry, TaskWorkflowLink } from "./task-types.js";
 
 export interface TaskReducerState {
   nextId: number;
@@ -15,14 +15,12 @@ export type TaskReducerEvent =
     payload: {
       subject: string;
       description: string;
-      activeForm?: string;
-      owner?: string;
-      agentType?: string;
       metadata?: Record<string, unknown>;
+      workflow?: TaskWorkflowLink;
     };
   }
   | {
-    type: "TASK_STARTED" | "TASK_COMPLETED" | "TASK_REOPENED" | "TASK_DELETED";
+    type: "TASK_STARTED" | "TASK_COMPLETED" | "TASK_CLOSED" | "TASK_REOPENED" | "TASK_DELETED";
     at: number;
     source: "tool" | "command" | "scheduler" | "eventbus" | "monitor" | "session" | "coordinator" | "system";
     entityType?: "task";
@@ -39,14 +37,6 @@ export type TaskReducerEvent =
       id: string;
       subject?: string;
       description?: string;
-      activeForm?: string;
-      owner?: string;
-      agentType?: string;
-      metadata?: Record<string, unknown>;
-      addBlocks?: string[];
-      removeBlocks?: string[];
-      addBlockedBy?: string[];
-      removeBlockedBy?: string[];
     };
   }
   | {
@@ -95,14 +85,11 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
       subject: event.payload.subject,
       description: event.payload.description,
       status: "pending",
-      activeForm: event.payload.activeForm,
-      owner: event.payload.owner,
-      agentType: event.payload.agentType,
-      metadata: event.payload.metadata ?? {},
-      blocks: [],
-      blockedBy: [],
       createdAt: event.at,
       updatedAt: event.at,
+      revision: 0,
+      metadata: event.payload.metadata,
+      workflow: event.payload.workflow,
     };
     next.tasksById[id] = task;
     return {
@@ -115,7 +102,7 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     const next = cloneState(state);
     const effects: TaskReducerEffect[] = [];
     for (const [id, task] of Object.entries(next.tasksById)) {
-      if (task.status !== "completed") continue;
+      if (task.status !== "completed" && task.status !== "closed") continue;
       delete next.tasksById[id];
       effects.push({ type: "DELETE_TASK", entityType: "task", entityId: id, payload: { id } });
     }
@@ -128,16 +115,22 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
 
   if (event.type === "TASK_DELETED") {
     const next = cloneState(state);
-    // Clean up dependency edges pointing to the deleted task
-    for (const t of Object.values(next.tasksById)) {
-      t.blocks = (t.blocks ?? []).filter((b) => b !== id);
-      t.blockedBy = (t.blockedBy ?? []).filter((b) => b !== id);
-    }
     delete next.tasksById[id];
     return {
       state: next,
       effects: [{ type: "DELETE_TASK", entityType: "task", entityId: id, payload: { id } }],
     };
+  }
+
+  if (event.type === "TASK_STARTED" && (current.status === "completed" || current.status === "closed")) {
+    return { state, effects: [] };
+  }
+  if ((event.type === "TASK_COMPLETED" || event.type === "TASK_CLOSED")
+    && (current.status === "completed" || current.status === "closed")) {
+    return { state, effects: [] };
+  }
+  if (event.type === "TASK_REOPENED" && current.status !== "completed" && current.status !== "closed") {
+    return { state, effects: [] };
   }
 
   const next = cloneState(state);
@@ -152,11 +145,21 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
     task.status = "completed";
     task.updatedAt = event.at;
     task.completedAt = event.at;
+    task.claim = undefined;
+  }
+
+  if (event.type === "TASK_CLOSED") {
+    task.status = "closed";
+    task.updatedAt = event.at;
+    task.closedAt = event.at;
+    task.claim = undefined;
   }
 
   if (event.type === "TASK_REOPENED") {
     task.status = "pending";
     task.updatedAt = event.at;
+    task.reopenedAt = event.at;
+    task.claim = undefined;
     // `completedAt` is intentionally retained: it records the most recent
     // completion, not "is currently complete" (use `status` for that). A
     // reopened task keeps the timestamp of when it was last completed.
@@ -165,23 +168,10 @@ export function reduceTaskState(state: TaskReducerState, event: TaskReducerEvent
   if (event.type === "TASK_UPDATED") {
     if (event.payload.subject !== undefined) task.subject = event.payload.subject;
     if (event.payload.description !== undefined) task.description = event.payload.description;
-    if (event.payload.activeForm !== undefined) task.activeForm = event.payload.activeForm;
-    if (event.payload.owner !== undefined) task.owner = event.payload.owner;
-    if (event.payload.agentType !== undefined) task.agentType = event.payload.agentType;
-    if (event.payload.metadata !== undefined) {
-      Object.assign(task.metadata, event.payload.metadata);
-      // null values in payload are intentional deletes
-      for (const key of Object.keys(event.payload.metadata)) {
-        if (event.payload.metadata[key] === null) delete task.metadata[key];
-      }
-    }
-    if (event.payload.addBlocks) task.blocks = [...new Set([...task.blocks, ...event.payload.addBlocks])];
-    if (event.payload.removeBlocks) task.blocks = task.blocks.filter((b) => !event.payload.removeBlocks!.includes(b));
-    if (event.payload.addBlockedBy) task.blockedBy = [...new Set([...task.blockedBy, ...event.payload.addBlockedBy])];
-    if (event.payload.removeBlockedBy) task.blockedBy = task.blockedBy.filter((b) => !event.payload.removeBlockedBy!.includes(b));
     task.updatedAt = event.at;
   }
 
+  task.revision = (current.revision ?? 0) + 1;
   next.tasksById[id] = task;
   return {
     state: next,

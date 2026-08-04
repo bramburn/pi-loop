@@ -1,16 +1,28 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
 import { reduceTaskState, type TaskReducerEvent, type TaskReducerState } from "./task-reducer.js";
-import type { TaskEntry, TaskStoreData } from "./task-types.js";
+import type { TaskClaim, TaskEntry, TaskStoreData, TaskWorkflowLink } from "./task-types.js";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const MAX_TASKS = 200;
 
-export interface TaskWarnings {
-  selfDependency?: boolean;
-  danglingReference?: string[];
-  cycle?: boolean;
+const MAX_TASK_LEASE_MS = 60 * 60 * 1000;
+
+export interface TaskClaimInput {
+  claimId?: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  now?: number;
+  leaseMs: number;
+}
+
+export interface TaskClaimResult {
+  entry: TaskEntry;
+  claim: TaskClaim;
+  takenOver: boolean;
+  renewed: boolean;
 }
 
 export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, TaskReducerEvent, TaskStoreData> {
@@ -28,12 +40,7 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     );
   }
 
-  create(
-    subject: string,
-    description: string,
-    metadata?: Record<string, unknown>,
-    extra?: { activeForm?: string; owner?: string; agentType?: string },
-  ): TaskEntry {
+  create(subject: string, description: string, metadata?: Record<string, unknown>, workflow?: TaskWorkflowLink): TaskEntry {
     return this.withLock(() => {
       if (this.entries.size >= MAX_TASKS) {
         throw new Error(`Maximum of ${MAX_TASKS} tasks reached. Delete some before creating new ones.`);
@@ -44,16 +51,86 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
         at: now,
         source: "tool",
         entityType: "task",
-        payload: { subject, description, metadata, ...extra },
+        payload: { subject, description, metadata, workflow },
       });
       return this.entries.get(String(this.nextId - 1))!;
+    });
+  }
+
+  claim(id: string, input: TaskClaimInput): TaskClaimResult | undefined {
+    if (!input.ownerSessionId || !input.ownerRuntimeId || !Number.isSafeInteger(input.leaseMs)
+      || input.leaseMs <= 0 || input.leaseMs > MAX_TASK_LEASE_MS) {
+      return undefined;
+    }
+    return this.withLock(() => {
+      const current = this.entries.get(id);
+      if (!current || current.status === "completed" || current.status === "closed") return undefined;
+      const now = input.now ?? Date.now();
+      const existing = current.claim;
+      const existingIsLive = existing !== undefined && existing.leaseExpiresAt > now;
+      const sameLiveOwner = existingIsLive
+        && existing.ownerSessionId === input.ownerSessionId
+        && existing.ownerRuntimeId === input.ownerRuntimeId;
+      if (existingIsLive && !sameLiveOwner) return undefined;
+
+      const takenOver = current.status === "in_progress" && existing !== undefined
+        && (existing.ownerSessionId !== input.ownerSessionId || existing.ownerRuntimeId !== input.ownerRuntimeId);
+      const claim: TaskClaim = sameLiveOwner && existing
+        ? {
+            ...existing,
+            heartbeatAt: now,
+            leaseExpiresAt: now + input.leaseMs,
+          }
+        : {
+            claimId: input.claimId ?? randomUUID(),
+            ownerSessionId: input.ownerSessionId,
+            ownerRuntimeId: input.ownerRuntimeId,
+            claimedAt: now,
+            heartbeatAt: now,
+            leaseExpiresAt: now + input.leaseMs,
+            attempt: (existing?.attempt ?? 0) + 1,
+          };
+      const entry: TaskEntry = {
+        ...current,
+        status: "in_progress",
+        updatedAt: now,
+        revision: (current.revision ?? 0) + 1,
+        claim,
+      };
+      this.entries.set(id, entry);
+      return { entry, claim, takenOver, renewed: sameLiveOwner };
+    });
+  }
+
+  heartbeat(id: string, claimId: string, now = Date.now(), leaseMs = 30 * 60 * 1000): TaskEntry | undefined {
+    if (!claimId || !Number.isSafeInteger(leaseMs) || leaseMs <= 0 || leaseMs > MAX_TASK_LEASE_MS) return undefined;
+    return this.withLock(() => {
+      const current = this.entries.get(id);
+      if (!current?.claim
+        || current.claim.claimId !== claimId
+        || current.claim.leaseExpiresAt <= now
+        || current.status !== "in_progress") {
+        return undefined;
+      }
+      const entry: TaskEntry = {
+        ...current,
+        updatedAt: now,
+        revision: (current.revision ?? 0) + 1,
+        claim: {
+          ...current.claim,
+          heartbeatAt: now,
+          leaseExpiresAt: now + leaseMs,
+        },
+      };
+      this.entries.set(id, entry);
+      return entry;
     });
   }
 
   start(id: string): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry || entry.status === "completed" || entry.status === "closed" || entry.claim) return undefined;
       this.applyReducerEvent({
         type: "TASK_STARTED",
         at: Date.now(),
@@ -66,13 +143,37 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
-  complete(id: string): TaskEntry | undefined {
+  complete(id: string, claimId?: string, now = Date.now()): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry
+        || (entry.status !== "pending" && entry.status !== "in_progress")
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return undefined;
+      }
       this.applyReducerEvent({
         type: "TASK_COMPLETED",
-        at: Date.now(),
+        at: now,
+        source: "tool",
+        entityType: "task",
+        entityId: id,
+        payload: { id },
+      });
+      return this.entries.get(id);
+    });
+  }
+
+  close(id: string, claimId?: string, now = Date.now()): TaskEntry | undefined {
+    return this.withLock(() => {
+      const entry = this.entries.get(id);
+      if (!entry
+        || (entry.status !== "pending" && entry.status !== "in_progress")
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return undefined;
+      }
+      this.applyReducerEvent({
+        type: "TASK_CLOSED",
+        at: now,
         source: "tool",
         entityType: "task",
         entityId: id,
@@ -85,7 +186,7 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
   reopen(id: string): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return undefined;
+      if (!entry || (entry.status !== "completed" && entry.status !== "closed")) return undefined;
       this.applyReducerEvent({
         type: "TASK_REOPENED",
         at: Date.now(),
@@ -98,222 +199,35 @@ export class TaskStore extends ReducerBackedStore<TaskEntry, TaskReducerState, T
     });
   }
 
-  updateDetails(
-    id: string,
-    fields: {
-      subject?: string;
-      description?: string;
-      activeForm?: string;
-      owner?: string;
-      agentType?: string;
-      metadata?: Record<string, unknown>;
-    },
-  ): TaskEntry | undefined {
+  updateDetails(id: string, fields: { subject?: string; description?: string }): TaskEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
       if (!entry) return undefined;
-      if (
-        fields.subject === undefined &&
-        fields.description === undefined &&
-        fields.activeForm === undefined &&
-        fields.owner === undefined &&
-        fields.agentType === undefined &&
-        fields.metadata === undefined
-      ) {
-        return entry;
-      }
+      if (fields.subject === undefined && fields.description === undefined) return entry;
       this.applyReducerEvent({
         type: "TASK_UPDATED",
         at: Date.now(),
         source: "tool",
         entityType: "task",
         entityId: id,
-        payload: { id, ...fields },
-      });
-      return this.entries.get(id);
-    });
-  }
-
-  /**
-   * Add blocking relationships: this task blocks `targetIds`.
-   * Bidirectional: adds targetId to this task's blocks AND targetId's blockedBy.
-   * Returns warnings for cycles, self-dependency, or dangling references.
-   */
-  addBlocks(id: string, targetIds: string[]): { entry: TaskEntry | undefined; warnings: TaskWarnings } {
-    return this.withLock(() => {
-      const entry = this.entries.get(id);
-      if (!entry) return { entry: undefined, warnings: {} };
-
-      const dangling: string[] = [];
-      let hasSelfDep = false;
-      for (const tid of targetIds) {
-        if (tid === id) hasSelfDep = true;
-        else if (!this.entries.has(tid)) dangling.push(tid);
-      }
-
-      // Filter valid targets (not dangling, not self)
-      const validIds = targetIds.filter((t) => t !== id && !dangling.includes(t));
-      const validAndNoCycle = validIds.filter((tid) => !this._wouldCreateCycle(id, tid));
-
-      const now = Date.now();
-
-      // Apply valid, non-cycling edges
-      if (validAndNoCycle.length > 0) {
-        // A.blocks ← targetIds
-        this.applyReducerEvent({
-          type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: id,
-          payload: { id, addBlocks: validAndNoCycle },
-        });
-        // For each target: target.blockedBy ← id
-        for (const tid of validAndNoCycle) {
-          this.applyReducerEvent({
-            type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: tid,
-            payload: { id: tid, addBlockedBy: [id] },
-          });
-        }
-      }
-
-      const _hasWarnings = dangling.length > 0 || hasSelfDep || validAndNoCycle.length < validIds.length;
-      return {
-        entry: this.entries.get(id),
-        warnings: {
-          ...(hasSelfDep ? { selfDependency: true } : {}),
-          ...(dangling.length > 0 ? { danglingReference: dangling } : {}),
-          ...(validAndNoCycle.length < validIds.length ? { cycle: true } : {}),
+        payload: {
+          id,
+          subject: fields.subject,
+          description: fields.description,
         },
-      };
-    });
-  }
-
-  /**
-   * Remove blocking relationships: this task no longer blocks `targetIds`.
-   */
-  removeBlocks(id: string, targetIds: string[]): TaskEntry | undefined {
-    return this.withLock(() => {
-      const entry = this.entries.get(id);
-      if (!entry) return undefined;
-      const now = Date.now();
-      // Remove from this task's blocks
-      this.applyReducerEvent({
-        type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: id,
-        payload: { id, removeBlocks: targetIds },
       });
-      // Remove from each target's blockedBy
-      for (const tid of targetIds) {
-        this.applyReducerEvent({
-          type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: tid,
-          payload: { id: tid, removeBlockedBy: [id] },
-        });
-      }
       return this.entries.get(id);
     });
   }
 
-  /**
-   * Add blocked-by relationships: this task is blocked by `blockerIds`.
-   * Bidirectional: adds blockerId to this task's blockedBy AND blockerId's blocks.
-   * Returns warnings for cycles, self-dependency, or dangling references.
-   */
-  addBlockedBy(id: string, blockerIds: string[]): { entry: TaskEntry | undefined; warnings: TaskWarnings } {
+  delete(id: string, claimId?: string, now = Date.now()): boolean {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry) return { entry: undefined, warnings: {} };
-
-      const dangling: string[] = [];
-      let hasSelfDep = false;
-      for (const tid of blockerIds) {
-        if (tid === id) hasSelfDep = true;
-        else if (!this.entries.has(tid)) dangling.push(tid);
+      if (!entry
+        || (entry.workflow && (entry.status === "pending" || entry.status === "in_progress"))
+        || (entry.claim && (entry.claim.claimId !== claimId || entry.claim.leaseExpiresAt <= now))) {
+        return false;
       }
-
-      const validIds = blockerIds.filter((t) => t !== id && !dangling.includes(t));
-      const validAndNoCycle = validIds.filter((tid) => !this._wouldCreateCycle(tid, id));
-
-      const now = Date.now();
-
-      if (validAndNoCycle.length > 0) {
-        // B.blockedBy ← blockers
-        this.applyReducerEvent({
-          type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: id,
-          payload: { id, addBlockedBy: validAndNoCycle },
-        });
-        // For each blocker: blocker.blocks ← id
-        for (const tid of validAndNoCycle) {
-          this.applyReducerEvent({
-            type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: tid,
-            payload: { id: tid, addBlocks: [id] },
-          });
-        }
-      }
-
-      return {
-        entry: this.entries.get(id),
-        warnings: {
-          ...(hasSelfDep ? { selfDependency: true } : {}),
-          ...(dangling.length > 0 ? { danglingReference: dangling } : {}),
-          ...(validAndNoCycle.length < validIds.length ? { cycle: true } : {}),
-        },
-      };
-    });
-  }
-
-  /**
-   * Remove blocked-by relationships: this task is no longer blocked by `blockerIds`.
-   */
-  removeBlockedBy(id: string, blockerIds: string[]): TaskEntry | undefined {
-    return this.withLock(() => {
-      const entry = this.entries.get(id);
-      if (!entry) return undefined;
-      const now = Date.now();
-      // Remove from this task's blockedBy
-      this.applyReducerEvent({
-        type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: id,
-        payload: { id, removeBlockedBy: blockerIds },
-      });
-      // Remove from each blocker's blocks
-      for (const tid of blockerIds) {
-        this.applyReducerEvent({
-          type: "TASK_UPDATED", at: now, source: "tool", entityType: "task", entityId: tid,
-          payload: { id: tid, removeBlocks: [id] },
-        });
-      }
-      return this.entries.get(id);
-    });
-  }
-
-  /** Returns true if adding edge from `from` to `to` (from blocks to) would create a cycle. */
-  private _wouldCreateCycle(from: string, to: string): boolean {
-    // Check if `to` already blocks `from` (directly or transitively)
-    const visited = new Set<string>();
-    const stack = [to];
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      if (current === from) return true;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      const task = this.entries.get(current);
-      if (task) stack.push(...task.blocks);
-    }
-    return false;
-  }
-
-  /**
-   * Get a task with its open (non-completed) blockers included.
-   */
-  getWithDependencies(id: string): { entry: TaskEntry | undefined; openBlockers: TaskEntry[] } {
-    const entry = this.entries.get(id);
-    if (!entry) return { entry: undefined, openBlockers: [] };
-    const openBlockers: TaskEntry[] = [];
-    for (const blockerId of entry.blockedBy) {
-      const blocker = this.entries.get(blockerId);
-      if (blocker && blocker.status !== "completed") openBlockers.push(blocker);
-    }
-    return { entry, openBlockers };
-  }
-
-  delete(id: string): boolean {
-    return this.withLock(() => {
-      if (!this.entries.has(id)) return false;
       this.applyReducerEvent({
         type: "TASK_DELETED",
         at: Date.now(),

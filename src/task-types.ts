@@ -1,19 +1,35 @@
-export type TaskStatus = "pending" | "in_progress" | "completed";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "closed";
+
+export interface TaskWorkflowLink {
+  loopId: string;
+  stateId: string;
+  transitionSeq: number;
+}
+
+export interface TaskClaim {
+  claimId: string;
+  ownerSessionId: string;
+  ownerRuntimeId: string;
+  claimedAt: number;
+  heartbeatAt: number;
+  leaseExpiresAt: number;
+  attempt: number;
+}
 
 export interface TaskEntry {
   id: string;
   subject: string;
   description: string;
   status: TaskStatus;
-  activeForm?: string;
-  owner?: string;
-  agentType?: string;
-  metadata: Record<string, unknown>;
-  blocks: string[];
-  blockedBy: string[];
   createdAt: number;
   updatedAt: number;
+  revision?: number;
+  claim?: TaskClaim;
   completedAt?: number;
+  reopenedAt?: number;
+  closedAt?: number;
+  metadata?: Record<string, unknown>;
+  workflow?: TaskWorkflowLink;
 }
 
 export interface TaskStoreData {

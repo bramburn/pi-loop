@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  AUTO_TASK_WORKER_LEGACY_PROMPTS,
   AUTO_TASK_WORKER_PROMPT,
   createTaskBacklogRuntime,
   type TaskBacklogRuntimeOptions,
@@ -19,6 +20,12 @@ function triggerHasEventSource(trigger: Trigger | string, source: string): boole
 
 const tasksCreatedTrigger: Trigger = { type: "event", source: "tasks:created" };
 
+const LEGACY_WORKER_PROMPT =
+  "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+
+const PREVIOUS_WORKER_PROMPT =
+  "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Resume an eligible in_progress task before claiming new work. If a dependent task is blocked, follow its prerequisite chain to the earliest unfinished task and resume it when it is in_progress. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: resume it, verify evidence and complete it, or report why it is actively owned or blocked and what recovery is required. Mark newly claimed work in_progress, implement it, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+
 function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
   return {
     id: "1",
@@ -36,32 +43,83 @@ function makeLoop(overrides: Partial<LoopEntry> = {}): LoopEntry {
 
 function setup(overrides: Partial<TaskBacklogRuntimeOptions> = {}) {
   const loops: LoopEntry[] = [];
-  let nextId = 1;
-  const createLoop = vi.fn((trigger: Trigger, prompt: string, o: { recurring: boolean; taskBacklog?: boolean; maxFires?: number }) => {
-    const entry = makeLoop({ id: String(nextId++), trigger, prompt, taskBacklog: o.taskBacklog, maxFires: o.maxFires });
-    loops.push(entry);
-    return entry;
-  });
   const deleteLoop = vi.fn((id: string) => {
     const i = loops.findIndex((l) => l.id === id);
     if (i >= 0) loops.splice(i, 1);
   });
   const opts: TaskBacklogRuntimeOptions = {
     getLoops: () => loops,
-    createLoop,
     deleteLoop,
-    addTrigger: vi.fn(),
+    updateLoopWorker: vi.fn((id: string, prompt: string) => {
+      const entry = loops.find((loop) => loop.id === id);
+      if (!entry) return undefined;
+      entry.prompt = prompt;
+      entry.taskBacklog = true;
+      return entry;
+    }),
+    recordDeletionTombstone: vi.fn(),
     removeTrigger: vi.fn(),
     updateWidget: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
-    bootstrapTaskLoop: vi.fn(async () => true),
+    adoptLoop: vi.fn(),
     triggerHasEventSource,
+    emitLoopAutodeleted: vi.fn(),
+    emitTaskBacklogEmpty: vi.fn(),
     ...overrides,
   };
   return { runtime: createTaskBacklogRuntime(opts), opts, loops };
 }
 
 describe("task-backlog-runtime predicates", () => {
+  it("teaches the worker to honor task descriptions and next-task sequencing", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("read each pending task's description");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/next task/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/prefer/i);
+  });
+
+  it("teaches the worker to use TaskGet for full descriptions", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/TaskGet/i);
+  });
+
+  it("orders a prerequisite A before its dependent B", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("no unresolved prerequisite");
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("complete A before B");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never.*dependent.*prerequisite/i);
+  });
+
+  it("resumes unfinished work instead of waiting forever on in-progress tasks", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/inspect.*in_progress.*before.*pending/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/resume.*in_progress/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/follow.*prerequisite.*chain/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/never report.*no eligible.*in_progress/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("TaskClaim");
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("TaskHeartbeat");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/pass claimId to TaskUpdate/i);
+  });
+
+  it("retains the immediately previous worker prompt for persisted loops", () => {
+    expect(AUTO_TASK_WORKER_LEGACY_PROMPTS).toContain(PREVIOUS_WORKER_PROMPT);
+  });
+
+  it("migrates persisted worker prompts to the current recovery contract", () => {
+    const { runtime, loops, opts } = setup();
+    loops.push(
+      makeLoop({ id: "8", prompt: PREVIOUS_WORKER_PROMPT, fireCount: 7 }),
+      makeLoop({ id: "9", prompt: AUTO_TASK_WORKER_PROMPT, taskBacklog: undefined }),
+    );
+
+    expect(runtime.migrateAutoTaskWorkerPrompts()).toBe(2);
+    expect(opts.updateLoopWorker).toHaveBeenCalledWith("8", AUTO_TASK_WORKER_PROMPT);
+    expect(opts.updateLoopWorker).toHaveBeenCalledWith("9", AUTO_TASK_WORKER_PROMPT);
+    expect(loops.every((entry) => entry.taskBacklog)).toBe(true);
+    expect(loops[0]).toMatchObject({
+      id: "8",
+      prompt: AUTO_TASK_WORKER_PROMPT,
+      fireCount: 7,
+      recurring: true,
+    });
+  });
+
   it("identifies an auto-task worker loop", () => {
     const { runtime } = setup();
     expect(runtime.isAutoTaskWorkerLoop(makeLoop())).toBe(true);
@@ -83,57 +141,109 @@ describe("task-backlog-runtime predicates", () => {
     loops.push(makeLoop({ id: "8" }));
     expect(runtime.findAutoTaskWorkerLoop()?.id).toBe("8");
   });
+
+  it("still recognizes a worker loop persisted with the legacy prompt", () => {
+    const { runtime, loops } = setup();
+    loops.push(makeLoop({ id: "7", prompt: LEGACY_WORKER_PROMPT }));
+    expect(runtime.isAutoTaskWorkerLoop(loops[0]!)).toBe(true);
+    expect(runtime.findAutoTaskWorkerLoop()?.id).toBe("7");
+  });
+
+  it("auto-deletes a legacy-prompt worker loop when the queue drains", async () => {
+    const { runtime, opts, loops } = setup();
+    loops.push(makeLoop({ id: "7", prompt: LEGACY_WORKER_PROMPT }));
+    opts.hasPendingTasks = vi.fn(async () => 0);
+
+    await runtime.cleanupTaskBacklogLoops();
+
+    expect(loops).toHaveLength(0);
+  });
 });
 
-describe("ensureAutoTaskWorkerLoop", () => {
-  let taskStore: TaskStore;
-  beforeEach(() => {
-    taskStore = new TaskStore();
+describe("task backlog adoption", () => {
+  it("adopts every explicit or legacy worker while unfinished tasks remain", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 2) });
+    loops.push(
+      makeLoop({ id: "1", prompt: "explicit", taskBacklog: true }),
+      makeLoop({ id: "2", prompt: AUTO_TASK_WORKER_PROMPT }),
+      makeLoop({ id: "3", prompt: "plain watcher", taskBacklog: false }),
+    );
+
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(2);
+    expect(opts.adoptLoop).toHaveBeenCalledTimes(2);
+    expect(opts.adoptLoop).toHaveBeenNthCalledWith(1, loops[0]);
+    expect(opts.adoptLoop).toHaveBeenNthCalledWith(2, loops[1]);
   });
 
-  it("does nothing below the threshold", async () => {
-    const { runtime, opts } = setup();
-    for (let i = 0; i < 4; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result).toEqual({ created: false });
-    expect(opts.createLoop).not.toHaveBeenCalled();
+  it("skips workers that already fired after the agent turn began", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 1) });
+    loops.push(makeLoop({ taskBacklog: true, fireCount: 3 }));
+
+    expect(await runtime.adoptTaskBacklogLoops(new Map([["1", 2]]))).toBe(0);
+    expect(opts.adoptLoop).not.toHaveBeenCalled();
   });
 
-  it("creates a hybrid worker loop at/above the threshold", async () => {
-    const { runtime, opts } = setup();
+  it("adopts a worker whose fire count did not change during the agent turn", async () => {
+    const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 1) });
+    loops.push(makeLoop({ taskBacklog: true, fireCount: 2 }));
+
+    expect(await runtime.adoptTaskBacklogLoops(new Map([["1", 2]]))).toBe(1);
+    expect(opts.adoptLoop).toHaveBeenCalledWith(loops[0]);
+  });
+
+  it("does not adopt when unfinished task state is empty or unavailable", async () => {
+    const hasPendingTasks = vi.fn(async () => 0);
+    const { runtime, opts, loops } = setup({ hasPendingTasks });
+    loops.push(makeLoop({ taskBacklog: true }));
+
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(0);
+    hasPendingTasks.mockResolvedValueOnce(-1);
+    expect(await runtime.adoptTaskBacklogLoops()).toBe(0);
+    expect(opts.adoptLoop).not.toHaveBeenCalled();
+  });
+});
+
+describe("explicit backlog policy", () => {
+  it("does not create an autonomous worker when five tasks are pending", async () => {
+    const taskStore = new TaskStore();
+    const { runtime, loops } = setup();
     for (let i = 0; i < 5; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result.created).toBe(true);
-    expect(result.entry?.trigger).toEqual({
-      type: "hybrid",
-      cron: "*/5 * * * *",
-      event: { source: "tasks:created" },
-      debounceMs: 30000,
-    });
-    expect(result.entry?.maxFires).toBe(30);
-    expect(opts.addTrigger).toHaveBeenCalledTimes(1);
-    expect(opts.bootstrapTaskLoop).toHaveBeenCalledTimes(1);
-    expect(opts.updateWidget).toHaveBeenCalled();
-  });
 
-  it("dedups — does not create a second worker loop when one exists", async () => {
-    const { runtime, opts, loops } = setup();
-    loops.push(makeLoop({ id: "9" }));
-    for (let i = 0; i < 6; i++) taskStore.create(`t${i}`, "d");
-    const result = await runtime.ensureAutoTaskWorkerLoop(taskStore);
-    expect(result).toEqual({ entry: loops[0], created: false });
-    expect(opts.createLoop).not.toHaveBeenCalled();
+    const result = await runtime.evaluateTaskBacklog(taskStore, 5);
+
+    expect(result).toEqual({ created: false, cleaned: 0 });
+    expect(loops).toHaveLength(0);
   });
 });
 
 describe("cleanupTaskBacklogLoops", () => {
-  it("deletes backlog loops when zero tasks are pending", async () => {
+  it("deletes backlog loops when zero tasks are pending and emits explicit signals", async () => {
     const { runtime, opts, loops } = setup({ hasPendingTasks: vi.fn(async () => 0) });
     loops.push(makeLoop({ id: "1" }));
     const cleaned = await runtime.cleanupTaskBacklogLoops();
     expect(cleaned).toBe(1);
     expect(opts.removeTrigger).toHaveBeenCalledWith("1");
+    expect(opts.recordDeletionTombstone).toHaveBeenCalledWith("1", { reason: "task_backlog_empty", pendingCount: 0 });
     expect(opts.deleteLoop).toHaveBeenCalledWith("1");
+    expect(opts.emitTaskBacklogEmpty).toHaveBeenCalledWith({
+      pendingCount: 0,
+      deletedLoopIds: ["1"],
+      source: "task_backlog_runtime",
+    });
+    expect(opts.emitLoopAutodeleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loopId: "1",
+        reason: "task_backlog_empty",
+        source: "task_backlog_runtime",
+        pendingCount: 0,
+      }),
+    );
+
+    const callOrder = (fn: unknown) => (fn as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0];
+    expect(callOrder(opts.emitTaskBacklogEmpty)).toBeLessThan(callOrder(opts.removeTrigger));
+    expect(callOrder(opts.removeTrigger)).toBeLessThan(callOrder(opts.recordDeletionTombstone));
+    expect(callOrder(opts.recordDeletionTombstone)).toBeLessThan(callOrder(opts.deleteLoop));
+    expect(callOrder(opts.deleteLoop)).toBeLessThan(callOrder(opts.emitLoopAutodeleted));
   });
 
   it("keeps backlog loops when tasks are still pending", async () => {
@@ -158,13 +268,11 @@ describe("cleanupTaskBacklogLoops", () => {
 });
 
 describe("evaluateTaskBacklog", () => {
-  it("creates a worker loop when pendingCount is at/above threshold", async () => {
+  it("leaves a non-empty backlog for an explicitly created worker", async () => {
     const taskStore = new TaskStore();
     for (let i = 0; i < 5; i++) taskStore.create(`t${i}`, "d");
     const { runtime } = setup();
-    const result = await runtime.evaluateTaskBacklog(taskStore, 5);
-    expect(result.created).toBe(true);
-    expect(result.entry).toBeDefined();
+    expect(await runtime.evaluateTaskBacklog(taskStore, 5)).toEqual({ created: false, cleaned: 0 });
   });
 
   it("cleans up worker loops when pendingCount is zero", async () => {

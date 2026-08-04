@@ -18,6 +18,12 @@ export class TriggerSystem {
 
   start(): void {
     this.scheduler.start();
+    for (const entry of this.store.list()) {
+      if (entry.status !== "active") continue;
+      if (entry.trigger.type !== "event" && entry.trigger.type !== "hybrid") continue;
+      const event = entry.trigger.type === "hybrid" ? entry.trigger.event : entry.trigger;
+      this.subscribeEvent(entry, event.source, event.filter);
+    }
   }
 
   stop(): void {
@@ -31,12 +37,11 @@ export class TriggerSystem {
   }
 
   add(entry: LoopEntry): void {
-    if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
+    if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid" || entry.trigger.type === "dynamic") {
       this.scheduler.add(entry);
     }
     if (entry.trigger.type === "event" || entry.trigger.type === "hybrid") {
       const ev = entry.trigger.type === "hybrid" ? entry.trigger.event : entry.trigger;
-      if (this.eventSubscriptions.get(ev.source)?.has(entry.id)) return;
       this.subscribeEvent(entry, ev.source, ev.filter);
     }
   }
@@ -53,24 +58,14 @@ export class TriggerSystem {
     this.lastFireTime.delete(id);
   }
 
-  /**
-   * Returns true if the loop was fired (by either the cron or the event
-   * path) within the past `windowMs`. Used by the scheduler's pump to
-   * skip cron fires that would double up with a recent event-driven
-   * fire. Closes G-08.
-   */
-  wasRecentlyFired(id: string, windowMs: number): boolean {
-    const last = this.lastFireTime.get(id);
-    return last !== undefined && Date.now() - last < windowMs;
-  }
-
   private subscribeEvent(entry: LoopEntry, source: string, filter?: string): void {
     if (!this.eventSubscriptions.has(source)) {
       this.eventSubscriptions.set(source, new Map());
     }
     const subs = this.eventSubscriptions.get(source)!;
+    if (subs.has(entry.id)) return;
 
-    const unsub = this.pi.events.on(source as any, (data: any) => {
+    const unsub = this.pi.events.on(source, (data: unknown) => {
       if (entry.trigger.type === "hybrid") {
         this.handleHybridFire(entry, data);
       } else {
@@ -83,7 +78,7 @@ export class TriggerSystem {
     subs.set(entry.id, unsub);
   }
 
-  private handleHybridFire(entry: LoopEntry, _data: any): void {
+  private handleHybridFire(entry: LoopEntry, _data: unknown): void {
     const now = Date.now();
     const last = this.lastFireTime.get(entry.id) ?? 0;
     const debounceMs = entry.trigger.type === "hybrid" ? entry.trigger.debounceMs : 0;
@@ -107,19 +102,16 @@ export class TriggerSystem {
     this.hybridTimers.set(entry.id, timer);
   }
 
+  private retire(entry: LoopEntry): void {
+    this.remove(entry.id);
+    if (entry.workflow || entry.taskBacklog) this.store.pause(entry.id);
+    else this.store.delete(entry.id);
+  }
+
   private fireLoop(entry: LoopEntry): void {
     const current = this.store.get(entry.id);
-    if (current?.status !== "active") {
+    if (!current || current.status !== "active") {
       this.remove(entry.id);
-      return;
-    }
-
-    // Closes G-17: skip the fire if maxFires cap is already reached. Without
-    // this, the Nth call where fireCount === maxFires would still call
-    // onFire() (off-by-one) before the atMaxFires check ran.
-    if (atMaxFires(current)) {
-      this.remove(current.id);
-      this.store.delete(current.id);
       return;
     }
 
@@ -132,19 +124,15 @@ export class TriggerSystem {
       return;
     }
 
-    if (atMaxFires(fresh)) {
-      this.remove(fresh.id);
-      this.store.delete(fresh.id);
+    if (fresh.recurring && atMaxFires(fresh)) {
+      this.retire(fresh);
       return;
     }
 
-    if (!fresh.recurring) {
-      this.remove(fresh.id);
-      this.store.delete(fresh.id);
-    }
+    if (!fresh.recurring) this.retire(fresh);
   }
 
-  private matchesFilter(data: any, filter?: string): boolean {
+  private matchesFilter(data: unknown, filter?: string): boolean {
     if (!filter) return true;
 
     if (filter.startsWith("regex:")) {
@@ -159,7 +147,7 @@ export class TriggerSystem {
     try {
       const parsed = JSON.parse(filter);
       for (const [key, value] of Object.entries(parsed)) {
-        const dataValue = data?.[key];
+        const dataValue = (data as Record<string, unknown> | undefined)?.[key];
         if (dataValue === undefined) return false;
         if (typeof value === "object" && typeof dataValue === "object") {
           if (JSON.stringify(value) !== JSON.stringify(dataValue)) return false;

@@ -71,7 +71,7 @@ describe("monitor reducer", () => {
       source: "monitor",
       entityType: "monitor",
       entityId: "1",
-      payload: { id: "1", line: "stdout line" },
+      payload: { id: "1", lines: ["stdout line"] },
     });
 
     expect(state.monitorsById["1"].outputLines).toBe(1);
@@ -105,12 +105,13 @@ describe("monitor reducer", () => {
       source: "monitor",
       entityType: "monitor",
       entityId: "1",
-      payload: { id: "1", line: "overflow" },
+      payload: { id: "1", lines: ["overflow"] },
     });
 
     expect(state.monitorsById["1"].outputLines).toBe(201);
     expect(state.monitorsById["1"].outputBuffer).toHaveLength(200);
-    expect(state.monitorsById["1"].outputBuffer.at(-1)).toBe("line-199");
+    expect(state.monitorsById["1"].outputBuffer[0]).toBe("line-1");
+    expect(state.monitorsById["1"].outputBuffer.at(-1)).toBe("overflow");
   });
 
   it("completes a monitor and records exit code", () => {

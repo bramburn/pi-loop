@@ -3,14 +3,41 @@ import { TaskStore } from "../src/task-store.js";
 import { type NativeTaskToolsOptions, registerNativeTaskTools } from "../src/tools/native-task-tools.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
+const theme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as any;
+
 function setup(backlog: NativeTaskToolsOptions["evaluateTaskBacklog"] = vi.fn(async () => ({ created: false }))) {
   const { pi, toolMap, emittedEvents } = createMockPi();
   const taskStore = new TaskStore();
-  registerNativeTaskTools({ pi, taskStore, evaluateTaskBacklog: backlog, updateWidget: vi.fn() });
+  registerNativeTaskTools({
+    pi,
+    getTaskStore: () => taskStore,
+    evaluateTaskBacklog: backlog,
+    getTaskOwner: () => ({ sessionId: "session-a", runtimeId: "runtime-a" }),
+    updateWidget: vi.fn(),
+  });
   const tool = (name: string) => toolMap.get(name)!;
-  const text = async (name: string, args: any) => (await tool(name).execute!("t", args)).content[0].text as string;
-  return { taskStore, tool, text, emittedEvents };
+  const result = async (name: string, args: any) => await tool(name).execute!("t", args);
+  const text = async (name: string, args: any) => (await result(name, args)).content[0].text as string;
+  return { taskStore, tool, text, result, emittedEvents };
 }
+
+describe("task tool call renderers", () => {
+  it("summarizes the action and task identifier", () => {
+    const { tool } = setup();
+    const render = (name: string, args: Record<string, unknown>) =>
+      (tool(name) as any).renderCall(args, theme).render(120).map((line: string) => line.trimEnd());
+
+    expect(render("TaskCreate", { subject: "Fix a failing check" })).toEqual(["Task create · Fix a failing check"]);
+    expect(render("TaskList", {})).toEqual(["Task status"]);
+    expect(render("TaskClaim", { id: "7" })).toEqual(["Task claim · #7"]);
+    expect(render("TaskHeartbeat", { id: "7" })).toEqual(["Task heartbeat · #7"]);
+    expect(render("TaskUpdate", { id: "7" })).toEqual(["Task update · #7"]);
+    expect(render("TaskDelete", { id: "7" })).toEqual(["Task delete · #7"]);
+  });
+});
 
 describe("TaskCreate", () => {
   it("creates a task and emits tasks:created", async () => {
@@ -19,6 +46,7 @@ describe("TaskCreate", () => {
     expect(out).toBe("Task #1 created: Fix bug");
     expect(taskStore.get("1")?.subject).toBe("Fix bug");
     expect(emittedEvents.some((e) => e.name === "tasks:created" && e.payload.taskId === "1")).toBe(true);
+    expect((setup().tool("TaskCreate") as any).renderResult).toBeTypeOf("function");
   });
 
   it("appends a backlog-worker note when one is created", async () => {
@@ -40,127 +68,145 @@ describe("TaskList", () => {
     const t2 = taskStore.create("b", "d");
     taskStore.start(t2.id);
     const out = await text("TaskList", {});
-    expect(out).toContain("2 tasks (1 pending, 1 in progress, 0 done)");
+    expect(out).toContain("2 tasks (1 pending, 1 in progress, 0 done, 0 closed)");
     expect(out).toContain("#1");
     expect(out).toContain("[in_progress]");
   });
 
-  it("shows blockedBy dependency in list rows", async () => {
-    const { taskStore, text } = setup();
-    taskStore.create("a", "d");
-    taskStore.create("b", "d");
-    taskStore.addBlockedBy("1", ["2"]);
-    const out = await text("TaskList", {});
-    expect(out).toContain("[blocked by #2]");
+  it("keeps a 200-task display result compact while preserving the full text result", async () => {
+    const { taskStore, result } = setup();
+    for (let index = 0; index < 200; index++) taskStore.create(`task ${index + 1}`, "d");
+
+    const output = await result("TaskList", {});
+    const details = output.details as { summary: string; expanded: string[] };
+
+    expect(output.content[0].text).toContain("#200");
+    expect(details.summary).toBe("200 tasks · 200 pending · 0 active");
+    expect(details.expanded).toHaveLength(9);
+    expect(details.expanded.at(-1)).toBe("… 392 more");
   });
 
-  it("sortOrder=id (default) sorts by id", async () => {
-    const { taskStore, text } = setup();
-    taskStore.create("z", "d");
-    taskStore.create("a", "d");
-    const out = await text("TaskList", { sortOrder: "id" });
-    const idx1 = out.indexOf("#1");
-    const idx2 = out.indexOf("#2");
-    expect(idx1).toBeLessThan(idx2); // id order
+  it("surfaces descriptions and workflow links so a fresh agent can reconstruct context", async () => {
+    const { taskStore, result } = setup();
+    taskStore.create(
+      "Investigate regression",
+      "Find the root cause; next: implement fix (task #2).",
+      undefined,
+      { loopId: "3", stateId: "investigate", transitionSeq: 0 },
+    );
+
+    const output = await result("TaskList", {});
+    const content = output.content[0].text;
+    const details = output.details as { summary: string; expanded: string[] };
+    const expanded = details.expanded.join("\n");
+    expect(content).toContain("Investigate regression");
+    expect(content).toContain("Find the root cause; next: implement fix (task #2).");
+    expect(content).toContain("workflow #3");
+    expect(expanded).toContain("Investigate regression");
+    expect(expanded).toContain("Find the root cause; next: implement fix (task #2).");
+    expect(expanded).toContain("workflow #3");
   });
 
-  it("sortOrder=status groups completed first", async () => {
-    const { taskStore, text } = setup();
-    taskStore.create("a", "d");
-    taskStore.create("b", "d");
-    taskStore.complete("1");
-    const out = await text("TaskList", { sortOrder: "status" });
-    const idx1 = out.indexOf("#1");
-    const idx2 = out.indexOf("#2");
-    expect(idx1).toBeLessThan(idx2); // completed first
-  });
-
-  it("sortOrder=recent puts newest first (distinct from id order)", async () => {
-    const { taskStore, text } = setup();
-    taskStore.create("a", "d"); // #1
-    taskStore.create("b", "d"); // #2
-    taskStore.complete("1"); // #1 updated more recently than #2
-    const out = await text("TaskList", { sortOrder: "recent" });
-    // #1 completed more recently → appears before #2
-    expect(out.indexOf("#1")).toBeLessThan(out.indexOf("#2"));
-  });
-
-  it("TaskCreate accepts activeForm, owner, agentType, metadata", async () => {
-    const { taskStore, text } = setup();
-    const out = await text("TaskCreate", {
-      subject: "Run tests",
-      description: "Full test suite",
-      activeForm: "Running tests",
-      owner: "agent-1",
-      agentType: "general-purpose",
-      metadata: { priority: "high" },
-    });
-    expect(out).toContain("Task #1 created: Run tests");
-    expect(taskStore.get("1")!.activeForm).toBe("Running tests");
-    expect(taskStore.get("1")!.owner).toBe("agent-1");
-    expect(taskStore.get("1")!.agentType).toBe("general-purpose");
-    expect(taskStore.get("1")!.metadata).toEqual({ priority: "high" });
+  it("guides state-based task flows with goal-state and next-step conventions", () => {
+    const guidelines = (setup().tool("TaskCreate") as any).promptGuidelines as string[];
+    expect(guidelines.some((g) => g.includes("goal state"))).toBe(true);
+    expect(guidelines.some((g) => g.includes("next task"))).toBe(true);
+    expect(guidelines.some((g) => g.toLowerCase().includes("workflowcreate"))).toBe(true);
   });
 });
 
 describe("TaskGet", () => {
-  it("returns not found for unknown id", async () => {
+  it("returns full untruncated context for a known task", async () => {
+    const { taskStore, result } = setup();
+    const description =
+      "Goal state: tests pass. Increment: apply the fix found in task #1 and run targeted validation. Next: task #3 validate the full suite.";
+    taskStore.create("Implement fix", description, { loopId: "9" }, { loopId: "9", stateId: "fix", transitionSeq: 1 });
+
+    const output = await result("TaskGet", { id: "1" });
+    const text = output.content[0].text;
+    expect(text).toContain("Task #1");
+    expect(text).toContain("Implement fix");
+    expect(text).toContain("[pending]");
+    expect(text).toContain(description);
+
+    const details = output.details as { summary: string; expanded: string[] };
+    expect(details.expanded.join("\n")).toContain("workflow #9 · state fix");
+  });
+
+  it("reports not found for an unknown id", async () => {
     const { text } = setup();
     expect(await text("TaskGet", { id: "99" })).toBe("Task #99 not found");
   });
 
-  it("shows id, subject, status, description, timestamps", async () => {
-    const { taskStore, text } = setup();
-    const t = taskStore.create("Design the flux capacitor", "Build it in the DeLorean");
-    const out = await text("TaskGet", { id: t.id });
-    expect(out).toContain(`Task #${t.id}: Design the flux capacitor`);
-    expect(out).toContain("Status: pending");
-    expect(out).toContain("Build it in the DeLorean");
-    expect(out).toContain("Created:");
-    expect(out).toContain("Updated:");
+  it("documents the id parameter convention in its guidelines", () => {
+    const guidelines = (setup().tool("TaskGet") as any).promptGuidelines as string[];
+    expect(guidelines.some((g) => g.includes("`id`, not `taskId`"))).toBe(true);
+  });
+});
+
+describe("TaskClaim and TaskHeartbeat", () => {
+  it("claims work, exposes ownership, and renews the lease", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+
+    const claimOutput = await h.text("TaskClaim", { id: "1", leaseSeconds: 60 });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+    expect(claimOutput).toContain("Task #1 claimed");
+    expect(claimId).toBeTruthy();
+    expect(await h.text("TaskList", {})).toContain(`claim ${claimId}`);
+    expect(await h.text("TaskGet", { id: "1" })).toContain(`Claim: ${claimId}`);
+
+    const heartbeat = await h.text("TaskHeartbeat", { id: "1", claimId, leaseSeconds: 120 });
+    expect(heartbeat).toContain("lease renewed");
   });
 
-  it("shows owner and activeForm when set", async () => {
-    const { taskStore, text } = setup();
-    const t = taskStore.create("Run tests", "desc", {}, { owner: "agent-1", activeForm: "Running tests" });
-    const out = await text("TaskGet", { id: t.id });
-    expect(out).toContain("Owner: agent-1");
-    expect(out).toContain("Active form: Running tests");
+  it("rejects a wrong heartbeat and distinguishes missing from mismatched completion claims", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+    await h.text("TaskClaim", { id: "1" });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+
+    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "wrong" })).toContain("Claim token does not match");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("claimId is required");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId: "wrong" })).toContain("Claim token does not match");
+    expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId })).toContain("→ completed");
   });
 
-  it("shows blocks and blockedBy dependency edges", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    const c = taskStore.create("c", "desc");
-    // a is blocked by b and c (b and c both block a)
-    taskStore.addBlockedBy(a.id, [b.id, c.id]);
-    // b blocks c (separate dependency chain)
-    taskStore.addBlocks(b.id, [c.id]);
-    const out = await text("TaskGet", { id: a.id });
-    expect(out).toContain("Blocked by: #2, #3");
-    // b.blocks = [#a, #c] (from both addBlockedBy(a,[b]) and addBlocks(b,[c]))
-    const bOut = await text("TaskGet", { id: b.id });
-    expect(bOut).toMatch(/Blocks: #1, #3/);
+  it("explains a heartbeat sent before claiming", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+
+    expect(await h.text("TaskHeartbeat", { id: "1", claimId: "stale" })).toContain("has no live claim; claim the task");
   });
 
-  it("marks completed blockers as (completed) in blockedBy", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    taskStore.addBlockedBy(a.id, [b.id]);
-    taskStore.complete(b.id);
-    const out = await text("TaskGet", { id: a.id });
-    expect(out).toContain("#2 (completed)");
+  it("treats TaskClaim followed by in_progress as idempotent", async () => {
+    const h = setup();
+    h.taskStore.create("subject", "desc");
+    await h.text("TaskClaim", { id: "1" });
+    const claimed = h.taskStore.get("1")!;
+
+    const output = await h.text("TaskUpdate", { id: "1", status: "in_progress" });
+
+    expect(output).toContain("already in_progress");
+    expect(output).toContain("ownership unchanged");
+    expect(h.taskStore.get("1")).toEqual(claimed);
   });
 
-  it("shows metadata as JSON", async () => {
-    const { taskStore, text } = setup();
-    const t = taskStore.create("t", "desc", { priority: "high", tags: ["bug", "auth"] });
-    const out = await text("TaskGet", { id: t.id });
-    expect(out).toContain('"priority": "high"');
-    expect(out).toContain('"tags"');
-    expect(out).toContain("Metadata:");
+  it("reports an expired completion lease instead of a token mismatch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const h = setup();
+      h.taskStore.create("subject", "desc");
+      await h.text("TaskClaim", { id: "1", leaseSeconds: 60 });
+      const claimId = h.taskStore.get("1")?.claim?.claimId;
+      vi.advanceTimersByTime(60_001);
+
+      expect(await h.text("TaskHeartbeat", { id: "1", claimId })).toContain("claim lease expired; reclaim the task");
+      expect(await h.text("TaskUpdate", { id: "1", status: "completed", claimId })).toContain("lease expired; reclaim the task");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -177,10 +223,15 @@ describe("TaskUpdate", () => {
     expect(await h.text("TaskUpdate", { id: "1", status: "completed" })).toContain("→ completed");
     expect(h.taskStore.get("1")?.status).toBe("completed");
     expect(await h.text("TaskUpdate", { id: "1", status: "pending" })).toContain("→ pending");
+    expect(await h.text("TaskUpdate", { id: "1", status: "closed" })).toContain("→ closed");
+    expect(h.taskStore.get("1")?.status).toBe("closed");
+    expect(h.taskStore.get("1")?.completedAt).toBeDefined();
+    expect(await h.text("TaskUpdate", { id: "1", status: "pending" })).toContain("→ pending");
     expect(h.taskStore.get("1")?.status).toBe("pending");
 
     expect(h.emittedEvents.some((e) => e.name === "tasks:started" && e.payload.taskId === "1")).toBe(true);
     expect(h.emittedEvents.some((e) => e.name === "tasks:completed" && e.payload.taskId === "1")).toBe(true);
+    expect(h.emittedEvents.some((e) => e.name === "tasks:closed" && e.payload.taskId === "1")).toBe(true);
     expect(h.emittedEvents.some((e) => e.name === "tasks:reopened" && e.payload.taskId === "1")).toBe(true);
   });
 
@@ -190,6 +241,59 @@ describe("TaskUpdate", () => {
     expect(h.emittedEvents.some((e) => e.name === "tasks:updated" && e.payload.taskId === "1")).toBe(true);
   });
 
+  it("rejects an update with no requested changes", async () => {
+    const before = h.taskStore.get("1");
+    expect(await h.text("TaskUpdate", { id: "1" })).toContain("No update fields were provided");
+    expect(h.taskStore.get("1")).toEqual(before);
+  });
+
+  it.each([
+    ["pending", "pending", true],
+    ["pending", "in_progress", true],
+    ["pending", "completed", true],
+    ["pending", "closed", true],
+    ["in_progress", "pending", false],
+    ["in_progress", "in_progress", true],
+    ["in_progress", "completed", true],
+    ["in_progress", "closed", true],
+    ["completed", "pending", true],
+    ["completed", "in_progress", false],
+    ["completed", "completed", false],
+    ["completed", "closed", false],
+    ["closed", "pending", true],
+    ["closed", "in_progress", false],
+    ["closed", "completed", false],
+    ["closed", "closed", false],
+  ] as const)("models %s → %s as applied=%s", async (from, to, applied) => {
+    const matrix = setup();
+    matrix.taskStore.create("subject", "desc");
+    if (from === "in_progress") matrix.taskStore.start("1");
+    if (from === "completed") matrix.taskStore.complete("1");
+    if (from === "closed") matrix.taskStore.close("1");
+
+    const output = await matrix.text("TaskUpdate", { id: "1", status: to });
+
+    if (applied) {
+      expect(output).not.toContain("rejected");
+      expect(matrix.taskStore.get("1")?.status).toBe(to);
+    } else {
+      expect(output).toContain(`Transition from ${from} to ${to} is not allowed`);
+      expect(matrix.taskStore.get("1")?.status).toBe(from);
+    }
+  });
+
+  it("rejects direct terminal updates for workflow-owned state tasks", async () => {
+    const task = h.taskStore.create("workflow attempt", "Use WorkflowTransition.", undefined, {
+      loopId: "9",
+      stateId: "fix",
+      transitionSeq: 1,
+    });
+
+    expect(await h.text("TaskUpdate", { id: task.id, status: "closed" })).toContain("managed by workflow #9");
+    expect(await h.text("TaskUpdate", { id: task.id, status: "completed" })).toContain("managed by workflow #9");
+    expect(h.taskStore.get(task.id)?.status).toBe("pending");
+  });
+
   it("reports not found for an unknown id", async () => {
     expect(await h.text("TaskUpdate", { id: "99", status: "completed" })).toBe("Task #99 not found");
   });
@@ -197,69 +301,6 @@ describe("TaskUpdate", () => {
   it("documents the taskId→id correction in its guidelines", () => {
     const guidelines = (h.tool("TaskUpdate") as any).promptGuidelines as string[];
     expect(guidelines.some((g) => g.includes("`id`, not `taskId`"))).toBe(true);
-  });
-
-  it("updates activeForm and owner", async () => {
-    const { taskStore, text } = setup();
-    const t = taskStore.create("task", "desc");
-    const out = await text("TaskUpdate", {
-      id: t.id, activeForm: "Running tests", owner: "agent-1",
-    });
-    expect(out).toContain("updated");
-    expect(taskStore.get(t.id)!.activeForm).toBe("Running tests");
-    expect(taskStore.get(t.id)!.owner).toBe("agent-1");
-  });
-
-  it("shallow-merges metadata; null deletes a key", async () => {
-    const { taskStore, text } = setup();
-    const t = taskStore.create("task", "desc", { a: "1", b: "2" });
-    await text("TaskUpdate", { id: t.id, metadata: { b: null, c: "3" } });
-    const meta = taskStore.get(t.id)!.metadata;
-    expect(meta.a).toBe("1");
-    expect(meta.b).toBeUndefined();
-    expect(meta.c).toBe("3");
-  });
-
-  it("addBlocks: adds bidirectional edge and returns warning for dangling refs", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    const out = await text("TaskUpdate", { id: a.id, addBlocks: [b.id, "999"] });
-    expect(out).toContain("updated");
-    expect(taskStore.get(a.id)!.blocks).toContain(b.id);
-    expect(taskStore.get(b.id)!.blockedBy).toContain(a.id); // bidirectional
-    expect(out).toContain("warning: non-existent tasks: #999");
-  });
-
-  it("addBlockedBy: adds bidirectional edge and returns warning for self-dep", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    const out = await text("TaskUpdate", { id: a.id, addBlockedBy: [b.id, a.id] });
-    expect(out).toContain("updated");
-    expect(taskStore.get(a.id)!.blockedBy).toContain(b.id);
-    expect(taskStore.get(b.id)!.blocks).toContain(a.id); // bidirectional
-    expect(out).toContain("warning: self-dependency");
-  });
-
-  it("addBlocks: warns on cycle", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    taskStore.addBlocks(a.id, [b.id]); // a blocks b
-    const out = await text("TaskUpdate", { id: b.id, addBlocks: [a.id] }); // b blocks a = cycle
-    expect(out).toContain("warning: cycle detected");
-    expect(taskStore.get(b.id)!.blocks).not.toContain(a.id); // cycle edge not added
-  });
-
-  it("removeBlocks: removes the edge from both sides", async () => {
-    const { taskStore, text } = setup();
-    const a = taskStore.create("a", "desc");
-    const b = taskStore.create("b", "desc");
-    taskStore.addBlocks(a.id, [b.id]);
-    await text("TaskUpdate", { id: a.id, removeBlocks: [b.id] });
-    expect(taskStore.get(a.id)!.blocks).not.toContain(b.id);
-    expect(taskStore.get(b.id)!.blockedBy).not.toContain(a.id);
   });
 });
 
@@ -272,42 +313,27 @@ describe("TaskDelete", () => {
     expect(h.emittedEvents.some((e) => e.name === "tasks:deleted" && e.payload.taskId === "1")).toBe(true);
   });
 
+  it("rejects deletion of live claimed work without its token", async () => {
+    const h = setup();
+    h.taskStore.create("claimed", "d");
+    await h.text("TaskClaim", { id: "1" });
+    const claimId = h.taskStore.get("1")?.claim?.claimId;
+
+    expect(await h.text("TaskDelete", { id: "1" })).toContain("claimId is required");
+    expect(h.taskStore.get("1")).toBeDefined();
+    expect(await h.text("TaskDelete", { id: "1", claimId })).toBe("Task #1 deleted");
+  });
+
+  it("rejects deletion of active workflow-owned work", async () => {
+    const h = setup();
+    h.taskStore.create("workflow", "d", undefined, { loopId: "9", stateId: "fix", transitionSeq: 1 });
+
+    expect(await h.text("TaskDelete", { id: "1" })).toContain("managed by workflow #9");
+    expect(h.taskStore.get("1")).toBeDefined();
+  });
+
   it("reports not found for an unknown id", async () => {
     const h = setup();
     expect(await h.text("TaskDelete", { id: "5" })).toBe("Task #5 not found");
-  });
-});
-
-describe("TaskPrune", () => {
-  it("removes all completed tasks and reports the count", async () => {
-    const h = setup();
-    h.taskStore.create("a", "d");
-    h.taskStore.create("b", "d");
-    h.taskStore.create("c", "d");
-    h.taskStore.start("2");
-    h.taskStore.complete("2");
-    h.taskStore.start("3");
-    h.taskStore.complete("3");
-    const out = await h.text("TaskPrune", {});
-    expect(out).toMatch(/Pruned 2 completed task/);
-    expect(h.taskStore.get("2")).toBeUndefined();
-    expect(h.taskStore.get("3")).toBeUndefined();
-    expect(h.taskStore.get("1")).toBeDefined();
-  });
-
-  it("reports zero when no completed tasks exist", async () => {
-    const h = setup();
-    h.taskStore.create("a", "d");
-    const out = await h.text("TaskPrune", {});
-    expect(out).toMatch(/Pruned 0 completed task/);
-    expect(h.taskStore.get("1")).toBeDefined();
-  });
-
-  it("includes the reason in the result message", async () => {
-    const h = setup();
-    h.taskStore.create("a", "d");
-    h.taskStore.complete("1");
-    const out = await h.text("TaskPrune", { reason: "git_commit" });
-    expect(out).toContain("reason: git_commit");
   });
 });

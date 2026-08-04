@@ -1,7 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { formatTrigger } from "../loop-format.js";
 import { parseInterval } from "../loop-parse.js";
 import type { LoopEntry, Trigger } from "../types.js";
+import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
+import { displayRows, textResult } from "./tool-result.js";
+import { formatWorkflowSummary } from "./workflow-tools.js";
 
 interface LoopStoreLike {
   list(): LoopEntry[];
@@ -12,27 +16,26 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
-    createdBy?: string;
-    runOnCreate?: boolean;
+    dynamic?: Partial<NonNullable<LoopEntry["dynamic"]>>;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
-  resume(id: string): LoopEntry | undefined;
+  continueDynamic(
+    id: string,
+    fields: { prompt?: string; dynamic: Partial<NonNullable<LoopEntry["dynamic"]>> },
+    expected?: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): LoopEntry | undefined;
+  stopDynamic(
+    id: string,
+    status: "completed" | "paused",
+    expected: { status: LoopEntry["status"]; iteration: number; updatedAt: number },
+  ): boolean;
+  getDeletionTombstone(id: string): { reason: string; pendingCount?: number } | undefined;
   delete(id: string): boolean;
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; runOnCreate?: boolean }): {
-    entry: LoopEntry | undefined;
-    changedFields: string[];
-  };
 }
 
 interface TriggerSystemLike {
   add(entry: LoopEntry): void;
   remove(id: string): void;
-}
-
-interface BindingsStoreLike {
-  add(id: string): void;
-  has(id: string): boolean;
-  readonly sessionId: string | undefined;
 }
 
 interface SchedulerLike {
@@ -48,39 +51,17 @@ interface MonitorManagerLike {
   get(id: string): MonitorLike | undefined;
 }
 
-interface NotificationRuntimeLike {
-  queueOrDeliverNotification(data: {
-    loopId: string;
-    prompt: string;
-    trigger: Trigger | string;
-    timestamp: number;
-    readOnly?: boolean;
-    recurring?: boolean;
-    autoTask?: boolean;
-  }): Promise<void>;
-}
-
-interface WidgetLike {
-  setFiringStatus(loopId: string, prompt: string): void;
-  update(): void;
-}
-
 export interface LoopToolsOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
-  getBindingsStore: () => BindingsStoreLike;
   getScheduler: () => SchedulerLike;
   getMonitorManager: () => MonitorManagerLike;
-  getNotificationRuntime: () => NotificationRuntimeLike;
-  getWidget: () => WidgetLike;
   updateWidget: () => void;
   maybeBootstrapTaskLoop: (entry: LoopEntry) => Promise<boolean>;
   isTaskSystemReady: () => boolean;
-}
-
-function textResult(msg: string) {
-  return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+  onDynamicLoopActivated?: (entry: LoopEntry) => void;
+  closeWorkflowTask: (taskId: string, claimId?: string) => Promise<boolean>;
 }
 
 function validateTrigger(trigger: Trigger): string | null {
@@ -118,11 +99,107 @@ function formatRemaining(ms: number): string {
   return `${Math.round(ms / 3600000)}h`;
 }
 
-function isUserVisibleLoop(loop: LoopEntry): boolean {
-  // Hide the internal monitor:done completion loops. They are stored for
-  // delivery via MonitorOnDoneRuntime but not user-configured.
-  if (loop.recurring) return true;
-  return !(loop.trigger.type === "event" && loop.trigger.source === "monitor:done");
+function parseDelayMs(input: string): number | undefined {
+  const match = input.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+  if (!match) return undefined;
+  const value = Number.parseInt(match[1] ?? "", 10);
+  const unit = (match[2] ?? "").toLowerCase();
+  const multiplier = unit === "s" ? 1000 : unit === "m" ? 60000 : unit === "h" ? 3600000 : 86400000;
+  const delayMs = value * multiplier;
+  if (!Number.isSafeInteger(delayMs) || delayMs <= 0 || delayMs > 7 * 24 * 60 * 60 * 1000) return undefined;
+  return delayMs;
+}
+
+interface LoopUpdateParams {
+  id: string;
+  status: "continue" | "completed" | "paused";
+  state?: string;
+  metrics?: string;
+  doneCriteria?: string;
+  nextInterval?: string;
+  prompt?: string;
+}
+
+function resolveNextWakeAt(nextInterval?: string): { nextWakeAt?: number; error?: string } {
+  if (!nextInterval) return { nextWakeAt: undefined };
+  const parsedDelayMs = parseDelayMs(nextInterval);
+  if (!parsedDelayMs) return { error: `Invalid nextInterval "${nextInterval}". Use formats like 3m, 30s, or 1h.` };
+  return { nextWakeAt: Date.now() + parsedDelayMs };
+}
+
+
+function formatDynamicUpdateResult(id: string, iteration: number | undefined, nextWakeAt: number | undefined, resumed: boolean): string {
+  const mode = nextWakeAt === undefined
+    ? "Next wake: when idle"
+    : `Next wake: ${formatRemaining(Math.max(0, nextWakeAt - Date.now()))}`;
+  return `Dynamic loop #${id} ${resumed ? "resumed and updated" : "updated"}\n` +
+    `Iteration: ${iteration ?? "?"}` +
+    `\n${mode}`;
+}
+
+function formatDeletionTombstone(id: string, tombstone: { reason: string; pendingCount?: number }): string {
+  const detail = tombstone.pendingCount === undefined ? "" : ` (pending: ${tombstone.pendingCount})`;
+  return `Loop #${id} already auto-deleted: ${tombstone.reason}${detail}`;
+}
+
+function continueDynamicLoop(
+  params: LoopUpdateParams,
+  entry: LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> },
+  store: LoopStoreLike,
+  triggerSystem: TriggerSystemLike,
+): { applied: boolean; message: string } {
+  const { nextWakeAt, error } = resolveNextWakeAt(params.nextInterval);
+  if (error) return { applied: false, message: error };
+  if (nextWakeAt !== undefined && nextWakeAt > entry.expiresAt) {
+    return { applied: false, message: `nextInterval exceeds loop #${params.id}'s remaining lifetime.` };
+  }
+
+  const resumed = entry.status === "paused";
+  const updated = store.continueDynamic(params.id, {
+    prompt: params.prompt,
+    dynamic: {
+      goal: params.prompt ?? entry.dynamic.goal,
+      state: params.state,
+      metrics: params.metrics,
+      doneCriteria: params.doneCriteria,
+      iteration: (entry.dynamic.iteration ?? 0) + 1,
+      nextWakeAt,
+      awaitingUpdate: false,
+      lastUpdatedAt: Date.now(),
+    },
+  }, {
+    status: entry.status,
+    iteration: entry.dynamic.iteration ?? 0,
+    updatedAt: entry.updatedAt,
+  });
+  if (!updated) {
+    return { applied: false, message: `Loop #${params.id} changed while the update was applied; inspect LoopList and retry.` };
+  }
+  triggerSystem.remove(params.id);
+  triggerSystem.add(updated);
+  return { applied: true, message: formatDynamicUpdateResult(params.id, updated.dynamic?.iteration, nextWakeAt, resumed) };
+}
+
+function stopDynamicLoop(
+  params: LoopUpdateParams,
+  entry: LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> },
+  store: LoopStoreLike,
+  triggerSystem: TriggerSystemLike,
+): { applied: boolean; message: string } {
+  const status = params.status === "completed" ? "completed" : "paused";
+  const applied = store.stopDynamic(params.id, status, {
+    status: entry.status,
+    iteration: entry.dynamic.iteration ?? 0,
+    updatedAt: entry.updatedAt,
+  });
+  if (!applied) {
+    return { applied: false, message: `Loop #${params.id} changed while the update was applied; inspect LoopList and retry.` };
+  }
+  triggerSystem.remove(params.id);
+  return {
+    applied: true,
+    message: status === "completed" ? `Dynamic loop #${params.id} completed and deleted` : `Dynamic loop #${params.id} paused`,
+  };
 }
 
 export function registerLoopTools(options: LoopToolsOptions): void {
@@ -130,96 +207,63 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     pi,
     getStore,
     getTriggerSystem,
-    getBindingsStore,
     getScheduler,
     getMonitorManager,
-    getNotificationRuntime,
-    getWidget,
     updateWidget,
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
+    onDynamicLoopActivated,
+    closeWorkflowTask,
   } = options;
 
   pi.registerTool({
     name: "LoopCreate",
     label: "LoopCreate",
-    description: `Create a scheduled repeating task (loop) that runs a prompt on a timer or when an event fires.
+    renderCall: renderToolCall("Loop", (args) => `create · ${String(toolArg(args, "prompt") ?? "scheduled work").slice(0, 56)}`),
+    renderResult: renderToolResult,
+    description: `Create a persistent cron, event, hybrid, or idle-driven loop. Use it for recurring checks, reminders, event reactions, or explicit task-backlog processing; never use shell sleep/while loops.
 
-Use this tool whenever the user asks to:
-- "create a loop" to check something periodically
-- "run every X seconds/minutes/hours"
-- "remind me to check..."
-- "watch for..." or "when X happens, do Y"
-- "schedule a recurring check"
-- set up a periodic monitor or poller
-- has a task list with open items — create a loop to work through tasks automatically
+Set triggerType to cron, event, hybrid, or idle. Polling loops need maxFires; observation-only loops should set readOnly. Use taskBacklog to adopt a queue until it drains; use autoTask to create one task per fire.
 
-DO NOT use raw Bash loops (for/sleep/while). Use LoopCreate instead — it integrates with the session lifecycle, survives across turns, and the scheduler handles timing.
-
-## When NOT to Use
-
-Skip this tool when the task is a one-off check (just do it directly) or when the user wants a purely reactive hook.
-
-## Trigger Types
-
-- **cron**: time-based. "30s" (rounded to 1m), "5m", "2h", "1d", or full cron like "0 9 * * 1-5"
-- **event**: fires on pi events like "tool_execution_start", "before_agent_start".
-- **hybrid**: both cron + event with debounce. Event filters support:
-  - regex:pattern - regex test against JSON-stringified event data (e.g., "regex:.*deploy.*")
-  - {"key":"value"} - exact key-value match (e.g., {"toolName":"LoopCreate"})
-
-  Example hybrid with filter: {"type":"hybrid","cron":"5m","event":{"source":"tool_execution_end","filter":"regex:.*build.*"},"debounceMs":30000}
-
-## Parameters
-
-- **trigger**: interval like "30s", "5m", "2h", event source, or hybrid spec
-- **prompt**: what to do when the loop fires (e.g., "check if the build passed")
-- **recurring**: repeat or fire once (default: true)
-- **autoTask**: when pi-tasks is loaded or native task fallback is active, auto-create a task on each fire
-- **taskBacklog**: mark this as a task-backlog worker loop so it auto-deletes when pending tasks reach zero
-- **readOnly**: restrict the agent to read-only tools when this loop fires (default: false)
-- **runOnCreate**: fire the loop immediately on creation if the agent is idle (default: true). Set to false to only start from the next scheduled interval.
-- **maxFires**: auto-stop after N fires — prevents infinite token burn on polling loops`,
+A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Recurring loops persist; dynamic loops advance through LoopUpdate.`,
     promptGuidelines: [
-      "Use LoopCreate when the user asks for a repeating task, periodic check, scheduled reminder, or 'every X' — never use raw Bash for/sleep/while.",
-      "## Choosing trigger type",
-      "Prefer event triggers over cron when possible — they fire exactly when needed instead of polling.",
-      "Use event triggers for: tool completion ('tool_execution_end'), task creation ('tasks:created'), monitor completion ('monitor:done').",
-      "Use cron triggers only when: the user explicitly asks for a time interval, or there's no relevant pi event to subscribe to.",
-      "Hybrid triggers (cron + event) give you both: event-driven responsiveness with a cron safety-net fallback.",
-      "## Choosing an interval",
-      "Default to 5m unless the user specifies differently. Use shorter intervals only when time-sensitive.",
-      "## maxFires — prevent infinite token burn",
-      "Always set maxFires on polling loops so they don't run forever. For task-continuation loops, use maxFires: 20-50.",
-      "When a loop fires and finds nothing to do, call LoopDelete on its own ID to stop it — don't keep polling.",
-      "## readOnly mode",
-      "Set readOnly: true for loops that only observe and report (checks, status polls). This prevents unintended changes.",
-      "## Task-driven workflows",
-      "Do not rely on a past 'tasks:created' event to replay. If tasks already exist, bootstrap the first pass in the current turn or use a hybrid/event loop that can catch future task creation and a cron safety-net.",
-      "Use autoTask only when you want the loop itself to create a task on each fire. For processing an existing task backlog, leave autoTask off and have the loop run TaskList to pick the next pending task.",
-      "Set taskBacklog: true for backlog worker loops that process the existing pending queue. Backlog worker loops bootstrap against existing pending tasks and auto-delete when the queue reaches zero.",
-      "When no tasks are pending, the loop should stop itself or skip the wake entirely — no tokens burned on empty polls.",
-      "After creating a loop, tell the user the loop ID so they can cancel it with LoopDelete.",
+      "Prefer event triggers over cron; use triggerType `idle` with trigger `idle` for agent-paced continuation.",
+      "Always set maxFires on polling loops and readOnly for observation-only work.",
+      "For autonomous backlogs use event `tasks:created`, recurring true, taskBacklog true, and bounded maxFires. It adopts unfinished tasks until terminal. Do not use autoTask.",
+      "Recurring loops are persistent controllers. Do not call LoopDelete after a normal fire, an unchanged check, or one completed iteration; only delete when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
+      "For taskBacklog loops, do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.",
+      "Report the created loop ID to the user.",
     ],
     parameters: Type.Object({
-      trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), or JSON hybrid spec" }),
+      trigger: Type.String({ description: "Cron expression (e.g., '5m', '1h', '0 9 * * 1-5'), event source (e.g., 'tool_execution_start'), hybrid spec, or literal 'idle' with triggerType='idle'" }),
       prompt: Type.String({ description: "Prompt to run when the loop fires" }),
       recurring: Type.Optional(Type.Boolean({ description: "Whether loop repeats (default: true)", default: true })),
       autoTask: Type.Optional(Type.Boolean({ description: "Auto-create pi-tasks task on fire", default: false })),
       taskBacklog: Type.Optional(Type.Boolean({ description: "Mark as a task-backlog worker loop that auto-deletes when pending tasks reach zero", default: false })),
-      triggerType: Type.Optional(Type.String({ description: "cron, event, or hybrid (inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid"] })),
+      triggerType: Type.Optional(Type.String({ description: "cron, event, hybrid, or idle (cron/event inferred from trigger string if omitted)", enum: ["cron", "event", "hybrid", "idle"] })),
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
-      runOnCreate: Type.Optional(Type.Boolean({ description: "Fire immediately on creation if the agent is idle (default: true). Set to false to only start from the next interval.", default: true })),
-      maxFires: Type.Optional(Type.Number({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops." })),
+      maxFires: Type.Optional(Type.Integer({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops.", minimum: 1 })),
     }),
     async execute(_toolCallId, params) {
-      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, runOnCreate, maxFires } = params;
+      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires } = params;
 
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
 
-      if (inferred === "cron") {
+      if (inferred === "idle") {
+        if (triggerInput.trim().toLowerCase() !== "idle") {
+          const message = 'Idle loops require trigger "idle" with triggerType "idle".';
+          return Promise.resolve(textResult(message, {
+            kind: "loop",
+            action: "create",
+            tone: "error",
+            summary: "Idle loop was not created",
+            expanded: [message],
+          }));
+        }
+        trigger = { type: "dynamic" };
+      } else if (inferred === "cron") {
         const parsed = parseInterval(triggerInput);
         trigger = { type: "cron", schedule: parsed.cron };
       } else if (inferred === "event") {
@@ -237,36 +281,46 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       }
 
       const validationError = validateTrigger(trigger);
-      if (validationError) return Promise.resolve(textResult(validationError));
+      if (validationError) {
+        return Promise.resolve(textResult(validationError, {
+          kind: "loop",
+          action: "create",
+          tone: "error",
+          summary: "Loop was not created",
+          expanded: [validationError],
+        }));
+      }
+      let backlogEventSource: string | undefined;
+      if (trigger.type === "event") backlogEventSource = trigger.source;
+      else if (trigger.type === "hybrid") backlogEventSource = trigger.event.source;
+      let backlogError: string | undefined;
+      if (taskBacklog && recurring === false) backlogError = "taskBacklog loops must be recurring.";
+      else if (taskBacklog && backlogEventSource !== "tasks:created") {
+        backlogError = 'taskBacklog loops require a "tasks:created" event trigger.';
+      }
+      if (backlogError) {
+        return Promise.resolve(textResult(backlogError, {
+          kind: "loop",
+          action: "create",
+          tone: "error",
+          summary: "Backlog loop was not created",
+          expanded: [backlogError],
+        }));
+      }
 
       const entry = getStore().create(trigger, prompt, {
-        recurring: recurring ?? (inferred !== "event"),
+        recurring: taskBacklog ? true : recurring ?? (inferred !== "event"),
         autoTask,
         taskBacklog,
         readOnly,
-        maxFires,
-        createdBy: getBindingsStore().sessionId,
-        runOnCreate,
+        maxFires: maxFires ?? (taskBacklog ? 25 : undefined),
+        dynamic: trigger.type === "dynamic"
+          ? { goal: prompt, iteration: 0 }
+          : undefined,
       });
 
       getTriggerSystem().add(entry);
-      getBindingsStore().add(entry.id);
-
-      // Fire-on-create: if runOnCreate is true (default), immediately queue
-      // the first iteration for delivery once the agent is idle and flash the
-      // status bar so the user sees an immediate visual cue.
-      if (entry.runOnCreate) {
-        getWidget().setFiringStatus(entry.id, entry.prompt);
-        await getNotificationRuntime().queueOrDeliverNotification({
-          loopId: entry.id,
-          prompt: entry.prompt,
-          trigger: entry.trigger,
-          timestamp: Date.now(),
-          readOnly: entry.readOnly,
-          recurring: entry.recurring,
-          autoTask: entry.autoTask,
-        });
-      }
+      if (trigger.type === "dynamic") onDynamicLoopActivated?.(entry);
 
       if (trigger.type === "event" && trigger.source === "monitor:done" && trigger.filter) {
         try {
@@ -287,22 +341,29 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
       const bootstrapped = await maybeBootstrapTaskLoop(entry);
       updateWidget();
 
-      const triggerDesc = trigger.type === "cron"
-        ? `schedule: ${trigger.schedule}`
-        : trigger.type === "event"
-          ? `event: ${trigger.source}`
-          : `hybrid: cron ${trigger.cron} + event ${trigger.event.source}`;
+      const triggerDesc = trigger.type === "dynamic" ? "idle-driven" : formatTrigger(trigger, "create");
 
       return Promise.resolve(textResult(
         `Loop #${entry.id} created: ${entry.prompt.slice(0, 60)}\n` +
         `Trigger: ${triggerDesc}\n` +
         `Recurring: ${entry.recurring}\n` +
+        (trigger.type === "dynamic" ? "Wake: when idle (first wake queued now)\n" : "") +
         (entry.autoTask ? "Auto-create task: enabled\n" : "") +
         (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
         (bootstrapped ? "Backlog: initial wake queued for existing pending tasks\n" : "") +
         (isTaskSystemReady() ? "" : "Task system: not ready yet — autoTask may not fire until native fallback or pi-tasks becomes available\n") +
-        "Bound to this session. Will auto-rearm on session restart.\n" +
-        `ID: ${entry.id} (use LoopDelete to cancel)`
+        `ID: ${entry.id} (persists until explicitly canceled or a configured stop condition is met)`,
+        {
+          kind: "loop",
+          action: "create",
+          tone: "success",
+          summary: `Loop #${entry.id} active · ${triggerDesc}`,
+          expanded: [
+            `Goal: ${entry.prompt}`,
+            `Trigger: ${triggerDesc}`,
+            entry.autoTask ? "Auto-task: enabled" : "Auto-task: off",
+          ],
+        },
       ));
     },
   });
@@ -310,27 +371,25 @@ Skip this tool when the task is a one-off check (just do it directly) or when th
   pi.registerTool({
     name: "LoopList",
     label: "LoopList",
+    renderCall: renderToolCall("Loop", () => "status"),
+    renderResult: renderToolResult,
     description: `List all active scheduled loops with their IDs, triggers, and next-fire times.
 
 Use this before creating new loops to avoid duplicates, or to find IDs for LoopDelete.`,
     parameters: Type.Object({}),
     execute() {
-      // Closes G-20: filter out internal `monitor:done` one-shot loops so
-      // they don't pollute the user's loop list. They are still in the
-      // store and can be deleted via LoopDelete if needed, but LoopList
-      // only shows loops the user actually configured.
-      const loops = getStore().list().filter(isUserVisibleLoop);
-      if (loops.length === 0) return Promise.resolve(textResult("No loops configured. Use LoopCreate to set up a schedule."));
+      const loops = getStore().list();
+      if (loops.length === 0) {
+        return Promise.resolve(textResult("No loops configured. Use LoopCreate to set up a schedule.", {
+          kind: "loop", action: "list", tone: "info", summary: "No loops", expanded: ["Use LoopCreate to set up a schedule."],
+        }));
+      }
 
       const lines: string[] = [];
       for (const entry of loops) {
-        const triggerDesc = entry.trigger.type === "cron"
-          ? `cron: ${entry.trigger.schedule}`
-          : entry.trigger.type === "event"
-            ? `event: ${entry.trigger.source}`
-            : `hybrid: ${entry.trigger.cron} + ${entry.trigger.event.source}`;
+        const triggerDesc = formatTrigger(entry.trigger, "list");
 
-        const nextFire = entry.trigger.type !== "event" ? getScheduler().nextFire(entry.id) : undefined;
+        const nextFire = entry.trigger.type === "cron" || entry.trigger.type === "hybrid" || entry.dynamic?.nextWakeAt !== undefined ? getScheduler().nextFire(entry.id) : undefined;
         const statusIcon = entry.status === "active" ? "*" : entry.status === "paused" ? "-" : "x";
         let line = `${statusIcon} #${entry.id} [${entry.status}] ${entry.prompt.slice(0, 60)}`;
         line += ` (${triggerDesc})`;
@@ -338,149 +397,159 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
           const remaining = Math.max(0, nextFire - Date.now());
           line += ` next: ${formatRemaining(remaining)}`;
         }
+        if (entry.status === "active") {
+          line += ` age: ${formatRemaining(Math.max(0, Date.now() - entry.createdAt))}`;
+        }
         if (entry.autoTask) line += " [auto-task]";
         if (entry.taskBacklog) line += " [backlog-worker]";
-        lines.push(line);
+        if (entry.workflow) {
+          line += ` [workflow:${entry.workflow.currentState}]`;
+          lines.push(formatWorkflowSummary(entry, line));
+        } else {
+          lines.push(line);
+        }
       }
 
-      return Promise.resolve(textResult(lines.join("\n")));
-    },
-  });
-
-  pi.registerTool({
-    name: "LoopDelete",
-    label: "LoopDelete",
-    description: `Delete or pause a loop by its ID.
-
-Use "pause" to temporarily stop a loop without removing it. Use "delete" to permanently remove it.`,
-    parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to delete, pause, or resume" }),
-      action: Type.Optional(Type.String({
-        description: "delete, pause, or resume (default: delete)",
-        enum: ["delete", "pause", "resume"],
-        default: "delete",
-      })),
-    }),
-    execute(_toolCallId, params) {
-      const { id, action } = params;
-
-      if (action === "pause") {
-        const entry = getStore().pause(id);
-        if (!entry) return Promise.resolve(textResult(`Loop #${id} not found`));
-        getTriggerSystem().remove(id);
-        updateWidget();
-        return Promise.resolve(textResult(`Loop #${id} paused`));
-      }
-
-      if (action === "resume") {
-        const before = getStore().get(id);
-        const entry = getStore().resume(id);
-        if (!entry) return Promise.resolve(textResult(`Loop #${id} not found`));
-        // Always re-arm the trigger on resume — this is what makes
-        // `/loop-resume <id>` (and LoopDelete { action: "resume" }) the
-        // canonical way to re-attach event/hybrid subscriptions after a
-        // session restart in project scope. The cron scheduler already
-        // re-arms itself on start(), so for cron loops this is a no-op.
-        getTriggerSystem().add(entry);
-        const transitioned = before?.status === "paused" && entry.status === "active";
-        updateWidget();
-        const tag = transitioned ? "resumed" : "re-armed";
-        return Promise.resolve(textResult(`Loop #${id} ${tag} (status: ${entry.status})`));
-      }
-
-      getTriggerSystem().remove(id);
-      const deleted = getStore().delete(id);
-      updateWidget();
-      if (deleted) return Promise.resolve(textResult(`Loop #${id} deleted`));
-      return Promise.resolve(textResult(`Loop #${id} not found`));
+      return Promise.resolve(textResult(lines.join("\n"), {
+        kind: "loop",
+        action: "list",
+        tone: "info",
+        summary: `${loops.length} loop${loops.length === 1 ? "" : "s"} · ${loops.filter((entry) => entry.status === "active").length} active`,
+        expanded: displayRows(lines),
+      }));
     },
   });
 
   pi.registerTool({
     name: "LoopUpdate",
     label: "LoopUpdate",
-    description: `Update an existing loop's trigger, prompt, or metadata.
+    renderCall: renderToolCall("Loop", (args) => `update · #${String(toolArg(args, "id") ?? "?")} · ${String(toolArg(args, "status") ?? "continue")}`),
+    renderResult: renderToolResult,
+    description: `Update progress for a dynamic loop.
 
-Use this when the user wants to:
-- change a loop's interval (e.g., "change loop 5 from 5m to 10m")
-- rewrite a loop's prompt
-- enable/disable fire-on-create (runOnCreate)
-- change maxFires or other settings
-
-The change is in-place; the loop ID stays the same. If you change the trigger, the old trigger subscription is removed and the new one is registered.
-
-## When NOT to Use
-
-This tool does NOT support changing readOnly, autoTask, or taskBacklog (those are runtime-bound at create time). Delete and recreate the loop if you need to change those. This tool does support changing runOnCreate to enable or disable the immediate-first-fire behaviour.`,
+Use this exactly once after each dynamic loop wake. Mark status as "continue" with updated state/metrics and optional nextInterval whenever any work remains, "completed" only when the overall goal and done criteria are satisfied, or "paused" when genuinely blocked. Do not use LoopDelete to finish an iteration.`,
     parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to update" }),
-      trigger: Type.Optional(Type.String({ description: "New trigger (cron, event source, or hybrid spec). Replaces the existing trigger." })),
-      prompt: Type.Optional(Type.String({ description: "New prompt text" })),
-      runOnCreate: Type.Optional(Type.Boolean({ description: "Enable (true) or disable (false) fire-on-create for this loop." })),
-      maxFires: Type.Optional(Type.Number({ description: "New maxFires cap. Only enforced for recurring loops." })),
+      id: Type.String({ description: "Dynamic loop ID to update" }),
+      status: Type.String({ description: "continue, completed, or paused", enum: ["continue", "completed", "paused"] }),
+      state: Type.Optional(Type.String({ description: "Current progress/state summary" })),
+      metrics: Type.Optional(Type.String({ description: "Current metrics/check results" })),
+      doneCriteria: Type.Optional(Type.String({ description: "Definition of done for the dynamic loop" })),
+      nextInterval: Type.Optional(Type.String({ description: "When to wake next, e.g. 3m, 30s, 1h" })),
+      prompt: Type.Optional(Type.String({ description: "Optional updated goal/prompt text" })),
+    }),
+    execute(_toolCallId, params: LoopUpdateParams) {
+      const store = getStore();
+      const triggerSystem = getTriggerSystem();
+      const entry = store.get(params.id);
+      if (!entry) {
+        return Promise.resolve(textResult(`Loop #${params.id} not found`, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+        }));
+      }
+      if (entry.workflow) {
+        const message = `Loop #${params.id} is workflow-owned. Use WorkflowTransition for state changes or LoopDelete to cancel it.`;
+        return Promise.resolve(textResult(message, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} update rejected`, expanded: [message],
+        }));
+      }
+      if (entry.trigger.type !== "dynamic" || !entry.dynamic) {
+        return Promise.resolve(textResult(`Loop #${params.id} is not a dynamic loop`, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} is not dynamic`, expanded: ["Use LoopUpdate only for dynamic loops."],
+        }));
+      }
+
+      const dynamicEntry = entry as LoopEntry & { dynamic: NonNullable<LoopEntry["dynamic"]> };
+      const outcome = params.status === "continue"
+        ? continueDynamicLoop(params, dynamicEntry, store, triggerSystem)
+        : stopDynamicLoop(params, dynamicEntry, store, triggerSystem);
+      if (!outcome.applied) {
+        return Promise.resolve(textResult(outcome.message, {
+          kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} update rejected`, expanded: [outcome.message],
+        }));
+      }
+      const message = outcome.message;
+      updateWidget();
+      const tone = params.status === "paused" ? "warning" : "success";
+      const summary = params.status === "completed"
+        ? `Loop #${params.id} completed`
+        : params.status === "paused"
+          ? `Loop #${params.id} paused`
+          : `Loop #${params.id} updated`;
+      return Promise.resolve(textResult(message, {
+        kind: "loop",
+        action: "update",
+        tone,
+        summary,
+        expanded: params.status === "continue"
+          ? [`State: ${params.state ?? entry.dynamic.state ?? "unchanged"}`, `Next wake: ${params.nextInterval ?? "when idle"}`]
+          : [],
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "LoopDelete",
+    label: "LoopDelete",
+    renderCall: renderToolCall("Loop", (args) => `${String(toolArg(args, "action") ?? "delete")} · #${String(toolArg(args, "id") ?? "?")}`),
+    renderResult: renderToolResult,
+    description: `Delete or pause a loop by its ID.
+
+Use "pause" to temporarily stop a loop without removing it. Use "delete" to permanently remove it.
+
+Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Delete only when the user explicitly asks to cancel the loop or its stated stop condition is satisfied.`,
+    parameters: Type.Object({
+      id: Type.String({ description: "Loop ID to delete or pause" }),
+      action: Type.Optional(Type.String({ description: "delete or pause (default: delete)", enum: ["delete", "pause"], default: "delete" })),
+      claimId: Type.Optional(Type.String({ description: "Claim token for an active workflow task" })),
     }),
     async execute(_toolCallId, params) {
-      const { id, trigger: triggerInput, prompt, runOnCreate, maxFires } = params;
+      const { id, action } = params;
 
-      const existing = getStore().get(id);
-      if (!existing) return Promise.resolve(textResult(`Loop #${id} not found`));
-
-      if (triggerInput === undefined && prompt === undefined && runOnCreate === undefined && maxFires === undefined) {
-        return Promise.resolve(textResult(`No changes provided for loop #${id}. Specify trigger, prompt, runOnCreate, or maxFires.`));
-      }
-
-      // Validate + parse the new trigger if provided
-      let parsedTrigger: Trigger | undefined;
-      if (triggerInput !== undefined) {
-        const inferred = inferTriggerType(triggerInput);
-        if (inferred === "cron") {
-          const parsed = parseInterval(triggerInput);
-          parsedTrigger = { type: "cron", schedule: parsed.cron };
-        } else if (inferred === "event") {
-          parsedTrigger = { type: "event", source: triggerInput };
-        } else {
-          const cronPart = triggerInput.match(/cron:?\s*(\S+)/)?.[1] || triggerInput;
-          const eventPart = triggerInput.match(/event:?\s*(\S+)/)?.[1];
-          const parsed = parseInterval(cronPart);
-          parsedTrigger = {
-            type: "hybrid",
-            cron: parsed.cron,
-            event: { source: eventPart || "tool_execution_start" },
-            debounceMs: 30000,
-          };
+      if (action === "pause") {
+        const entry = getStore().pause(id);
+        if (!entry) {
+          const tombstone = getStore().getDeletionTombstone(id);
+          if (tombstone) {
+            return Promise.resolve(textResult(formatDeletionTombstone(id, tombstone), {
+              kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [formatDeletionTombstone(id, tombstone)],
+            }));
+          }
+          return Promise.resolve(textResult(`Loop #${id} not found`, {
+            kind: "loop", action: "pause", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+          }));
         }
-        const validationError = validateTrigger(parsedTrigger);
-        if (validationError) return Promise.resolve(textResult(validationError));
+        getTriggerSystem().remove(id);
+        updateWidget();
+        return Promise.resolve(textResult(`Loop #${id} paused`, {
+          kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} paused`, expanded: ["Use LoopList to inspect paused loops."],
+        }));
       }
 
-      // Remove old trigger before applying the new one so the TriggerSystem
-      // re-subscribes with the new trigger (especially for cron → event changes).
+      const current = getStore().get(id);
+      const activeTaskId = current?.workflow?.activeTaskId;
+      if (activeTaskId && !await closeWorkflowTask(activeTaskId, params.claimId)) {
+        const message = `Loop #${id} could not close active task #${activeTaskId}; reclaim the task and pass claimId before retrying deletion.`;
+        return textResult(message, {
+          kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} deletion blocked by task #${activeTaskId}`, expanded: [message],
+        });
+      }
       getTriggerSystem().remove(id);
-
-      const { entry, changedFields } = getStore().updateMetadata(id, {
-        trigger: parsedTrigger,
-        prompt,
-        runOnCreate,
-      });
-
-      // Apply maxFires (separate field, not in updateMetadata signature)
-      if (maxFires !== undefined && entry) {
-        entry.maxFires = maxFires;
-        changedFields.push("maxFires");
-      }
-
-      if (entry) {
-        getTriggerSystem().add(entry);
-      }
-
+      const deleted = getStore().delete(id);
       updateWidget();
-
-      if (changedFields.length === 0) {
-        return Promise.resolve(textResult(`Loop #${id} unchanged.`));
+      if (deleted) {
+        return Promise.resolve(textResult(`Loop #${id} deleted`, {
+          kind: "loop", action: "delete", tone: "success", summary: `Loop #${id} deleted`, expanded: [],
+        }));
       }
-      return Promise.resolve(textResult(
-        `Loop #${id} updated: ${changedFields.join(", ")}`,
-      ));
+      const tombstone = getStore().getDeletionTombstone(id);
+      if (tombstone) {
+        return Promise.resolve(textResult(formatDeletionTombstone(id, tombstone), {
+          kind: "loop", action: "delete", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [formatDeletionTombstone(id, tombstone)],
+        }));
+      }
+      return Promise.resolve(textResult(`Loop #${id} not found`, {
+        kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+      }));
     },
   });
 }

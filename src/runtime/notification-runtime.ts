@@ -5,14 +5,15 @@ import {
   type ReducerEvent,
   type ReducerHandler,
 } from "../coordinator.js";
+import { formatLastTransitionLines, formatTrigger } from "../loop-format.js";
 import {
   type NotificationReducerEvent,
   type NotificationReducerState,
   type ReducerNotification,
   reduceNotificationState,
 } from "../notification-reducer.js";
-import { addBreadcrumb } from "../telemetry/sentry.js";
-import type { Trigger } from "../types.js";
+import type { DynamicLoopState, Trigger, WorkflowRunState } from "../types.js";
+import { getWorkflowOutcomeAvailability } from "../workflow-reducer.js";
 
 export interface LoopFireEvent {
   loopId: string;
@@ -21,12 +22,23 @@ export interface LoopFireEvent {
   timestamp: number;
   readOnly?: boolean;
   recurring?: boolean;
+  persistent?: boolean;
   autoTask?: boolean;
+  taskBacklog?: boolean;
+  dynamic?: DynamicLoopState;
+  workflow?: WorkflowRunState;
 }
 
 export interface PendingNotification extends LoopFireEvent {
   key: string;
   message: string;
+}
+
+export interface MonitorStartedEvent {
+  monitorId: string;
+  command: string;
+  description?: string;
+  timestamp: number;
 }
 
 export interface NotificationRuntimeOptions {
@@ -40,6 +52,8 @@ export interface NotificationRuntimeOptions {
 export interface NotificationRuntime {
   syncRuntimeState(options?: { agentRunning?: boolean; hasPendingMessages?: boolean }): void;
   queueOrDeliverNotification(data: LoopFireEvent): Promise<void>;
+  queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void>;
+  discardMonitorStarted(monitorId: string): void;
   flushPendingNotifications(options?: { ignorePendingMessages?: boolean }): Promise<void>;
   clear(reason: "session_shutdown" | "session_switch"): void;
 }
@@ -53,8 +67,11 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     hasPendingMessages: false,
   };
   let flushPromise: Promise<void> | undefined;
-  let _notificationCoordinatorDelivered = false;
-  let _notificationCoordinatorDeliveredSuccessfully = false;
+
+  type NotificationDispatchResult = {
+    kind: "delivery";
+    delivered: boolean;
+  };
 
   const notificationReducerHandler: ReducerHandler = (incoming: ReducerEvent) => {
     const result = reduceNotificationState(notificationState, incoming as NotificationReducerEvent);
@@ -62,16 +79,16 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     return result.effects;
   };
 
-  const notificationCoordinator = createCoordinator({
+  const notificationCoordinator = createCoordinator<NotificationDispatchResult>({
     reducers: [notificationReducerHandler],
     effectHandlers: {
       REQUEST_NOTIFICATION_FLUSH: () => {},
-      DELIVER_NOTIFICATION: async (effect: ReducerEffect) => {
-        _notificationCoordinatorDelivered = true;
-        _notificationCoordinatorDeliveredSuccessfully = await deliverNotification(
+      DELIVER_NOTIFICATION: async (effect: ReducerEffect) => ({
+        kind: "delivery",
+        delivered: await deliverNotification(
           (effect.payload as { notification: ReducerNotification }).notification,
-        );
-      },
+        ),
+      }),
     },
   });
 
@@ -95,13 +112,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   }
 
   function buildLoopFireMessage(data: LoopFireEvent): string {
-    const triggerInfo = typeof data.trigger === "string"
-      ? data.trigger
-      : data.trigger?.type === "cron"
-        ? `schedule: ${data.trigger.schedule}`
-        : data.trigger?.type === "event"
-          ? `event: ${data.trigger.source}`
-          : "hybrid";
+    const triggerInfo = formatTrigger(data.trigger, "notification");
 
     const loopId = data.loopId || "?";
     const prompt = data.prompt || "loop fired";
@@ -109,18 +120,94 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       ? "\n\nREAD-ONLY MODE — use only read tools (Read, TaskList, LoopList, MonitorList, etc.). No file writes, shell execution, or destructive changes."
       : "";
 
+    if (data.workflow) {
+      const state = data.workflow.definition.states[data.workflow.currentState];
+      const availability = getWorkflowOutcomeAvailability(data.workflow);
+      const outcomes = availability.available;
+      const attempt = data.workflow.attemptsByState[data.workflow.currentState] ?? 1;
+      const attemptLabel = state?.maxAttempts ? `${attempt}/${state.maxAttempts}` : String(attempt);
+      const lines = [
+        `[pi-loop] Loop #${loopId} fired (workflow).${constraint}`,
+        `Goal: ${data.prompt || data.workflow.definition.initialState}`,
+        `State: ${data.workflow.currentState}`,
+        `Attempt: ${attemptLabel}`,
+      ];
+      if (data.workflow.lastTransition) {
+        lines.push(...formatLastTransitionLines(data.workflow.lastTransition));
+      }
+      if (state?.prompt) lines.push(`State instructions: ${state.prompt}`);
+      if (data.workflow.activeTaskId) {
+        lines.push(
+          `Active task: #${data.workflow.activeTaskId}`,
+          `State task lifecycle: Task #${data.workflow.activeTaskId} is workflow-owned. Claim it before work and retain the returned claimId. Do not complete or close it with TaskUpdate; call WorkflowTransition with claimId: "<returned claimId>". WorkflowTransition settles this attempt and creates the next linked task.`,
+        );
+      }
+      if (outcomes.length > 0) lines.push(`Allowed outcomes: ${outcomes.join(", ")}`);
+      if (availability.unavailable.length > 0) {
+        lines.push(`Unavailable outcomes: ${availability.unavailable.map((item) => item.outcome).join(", ")} (attempt limit reached)`);
+      }
+      if (state?.terminal) {
+        lines.push(`Terminal: ${state.terminal} — this workflow state is terminal; no transition is needed.`);
+      } else {
+        lines.push(
+          `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not call LoopDelete after this state.`,
+          "Before ending this turn, call WorkflowTransition exactly once with id, one allowed outcome, evidence, and the returned claimId when an active task exists. WorkflowTransition does not accept activeTaskId. Terminal outcomes complete or pause the workflow automatically.",
+        );
+      }
+      return lines.join("\n");
+    }
+
+    if (data.dynamic || (typeof data.trigger !== "string" && data.trigger?.type === "dynamic")) {
+      const dynamic = data.dynamic;
+      const lines = [
+        `[pi-loop] Loop #${loopId} fired (dynamic).${constraint}`,
+        `Goal: ${dynamic?.goal ?? prompt}`,
+        `Iteration: ${dynamic?.iteration ?? 0}`,
+      ];
+      if (dynamic?.state) lines.push(`State: ${dynamic.state}`);
+      if (dynamic?.metrics) lines.push(`Metrics: ${dynamic.metrics}`);
+      if (dynamic?.doneCriteria) lines.push(`Done criteria: ${dynamic.doneCriteria}`);
+      lines.push(
+        `Loop lifecycle: Loop #${loopId} is the persistent controller for the overall goal. Do not call LoopDelete after this iteration.`,
+        "Before ending this turn, call LoopUpdate exactly once: use status=\"completed\" only when the overall goal and done criteria are satisfied; use status=\"continue\" when any work remains, with state/metrics and optional nextInterval; use status=\"paused\" only when genuinely blocked. Omit nextInterval for an idle-driven rewake.",
+      );
+      return lines.join("\n");
+    }
+
+    const lifecycle = data.taskBacklog
+      ? `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not call LoopDelete; when no unfinished tasks remain, report that and end this iteration.`
+      : (data.persistent ?? data.recurring)
+        ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not call LoopDelete or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation.`
+        : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not call LoopDelete.`;
+
     return [
       `[pi-loop] Loop #${loopId} fired (${triggerInfo}).${constraint}`,
       prompt,
+      lifecycle,
     ].join("\n");
   }
 
   function buildPendingNotification(data: LoopFireEvent): PendingNotification {
-    const key = `loop:${data.loopId}:${data.timestamp}`;
+    const key = data.recurring ? `loop:${data.loopId}` : `loop:${data.loopId}:${data.timestamp}`;
     return {
       ...data,
       key,
       message: buildLoopFireMessage(data),
+    };
+  }
+
+  function buildMonitorStartedNotification(data: MonitorStartedEvent): PendingNotification {
+    const label = data.description ?? data.command.slice(0, 80);
+    return {
+      loopId: `monitor:${data.monitorId}`,
+      prompt: label,
+      trigger: { type: "event", source: "monitor:started" },
+      timestamp: data.timestamp,
+      key: `monitor:${data.monitorId}:started`,
+      message: [
+        `[pi-loop] Monitor #${data.monitorId} started: ${label}`,
+        "The session is idle. Use MonitorList to inspect its current status or buffered output if needed.",
+      ].join("\n"),
     };
   }
 
@@ -143,8 +230,12 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
         loopId: notification.loopId,
         trigger: notification.trigger,
         recurring: notification.recurring,
+        persistent: notification.persistent,
         readOnly: notification.readOnly,
         autoTask: notification.autoTask,
+        taskBacklog: notification.taskBacklog,
+        dynamic: notification.dynamic,
+        workflow: notification.workflow,
         timestamp: notification.timestamp,
       },
     }, {
@@ -161,16 +252,15 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       syncRuntimeState({ hasPendingMessages: getHasPendingMessages() });
 
       while (true) {
-        if (Object.keys(notificationState.notificationsByKey).length === 0) return;
-        _notificationCoordinatorDelivered = false;
-        _notificationCoordinatorDeliveredSuccessfully = false;
-        await notificationCoordinator.dispatch({
+        const results = await notificationCoordinator.dispatch({
           type: "NOTIFICATION_FLUSH_REQUESTED",
           at: Date.now(),
           source: "system",
           entityType: "notification",
           payload: { ignorePendingMessages: options?.ignorePendingMessages },
         });
+        const delivery = results.find((result) => result.kind === "delivery");
+        if (!delivery || delivery.delivered) return;
       }
     })().finally(() => {
       flushPromise = undefined;
@@ -180,7 +270,6 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   }
 
   async function queueOrDeliverNotification(data: LoopFireEvent): Promise<void> {
-    addBreadcrumb("loop_fire", { loopId: data.loopId, trigger: data.trigger });
     const notification = buildPendingNotification(data);
     applyNotificationEvent({
       type: "NOTIFICATION_QUEUED",
@@ -190,7 +279,31 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       entityId: notification.key,
       payload: { notification },
     });
-    await flushPendingNotifications({ ignorePendingMessages: true });
+    await flushPendingNotifications();
+  }
+
+  async function queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void> {
+    const notification = buildMonitorStartedNotification(data);
+    await notificationCoordinator.dispatch({
+      type: "NOTIFICATION_QUEUED",
+      at: notification.timestamp,
+      source: "monitor",
+      entityType: "notification",
+      entityId: notification.key,
+      payload: { notification },
+    });
+  }
+
+  function discardMonitorStarted(monitorId: string): void {
+    const key = `monitor:${monitorId}:started`;
+    applyNotificationEvent({
+      type: "NOTIFICATION_DROPPED",
+      at: Date.now(),
+      source: "monitor",
+      entityType: "notification",
+      entityId: key,
+      payload: { key, reason: "superseded" },
+    });
   }
 
   function clear(reason: "session_shutdown" | "session_switch") {
@@ -207,6 +320,8 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   return {
     syncRuntimeState,
     queueOrDeliverNotification,
+    queueOrDeliverMonitorStarted,
+    discardMonitorStarted,
     flushPendingNotifications,
     clear,
   };

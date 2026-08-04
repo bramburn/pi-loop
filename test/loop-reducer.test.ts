@@ -7,9 +7,19 @@ import {
   reduceLoopState,
 } from "../src/loop-reducer.js";
 import type { LoopEntry, Trigger } from "../src/types.js";
+import type { WorkflowDefinition } from "../src/workflow-reducer.js";
 
 const cronTrigger: Trigger = { type: "cron", schedule: "*/5 * * * *" };
 const eventTrigger: Trigger = { type: "event", source: "tasks:created" };
+const workflow: WorkflowDefinition = {
+  version: 1,
+  initialState: "investigate",
+  states: {
+    investigate: { prompt: "Find the cause.", on: { found: "fix" } },
+    fix: { prompt: "Fix it.", on: { passing: "done" } },
+    done: { prompt: "Report completion.", terminal: "completed" },
+  },
+};
 
 describe("atMaxFires", () => {
   it("is false when maxFires is unset (unbounded loop)", () => {
@@ -39,6 +49,104 @@ function apply(state: LoopReducerState, event: LoopReducerEvent) {
 }
 
 describe("loop reducer", () => {
+  it("creates an opt-in workflow run on a dynamic loop", () => {
+    const { state } = apply(makeState(), {
+      type: "LOOP_CREATED",
+      at: 100,
+      source: "tool",
+      entityType: "loop",
+      payload: {
+        prompt: "Fix the regression",
+        trigger: { type: "dynamic" },
+        recurring: true,
+        workflow,
+      },
+    });
+
+    expect(state.loopsById["1"].workflow).toMatchObject({
+      definition: workflow,
+      currentState: "investigate",
+      transitionSeq: 0,
+      attemptsByState: { investigate: 1 },
+    });
+  });
+
+  it("persists a validated workflow transition with the current dynamic state", () => {
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Fix the regression",
+        trigger: { type: "dynamic" },
+        status: "active",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 0,
+        dynamic: { goal: "Fix the regression", iteration: 0 },
+        workflow: {
+          definition: workflow,
+          currentState: "investigate",
+          transitionSeq: 0,
+          stateEnteredAt: 10,
+          attemptsByState: { investigate: 1 },
+        },
+      },
+    ], 2);
+
+    const { state } = apply(initial, {
+      type: "LOOP_WORKFLOW_TRANSITION",
+      at: 100,
+      source: "tool",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", outcome: "found", evidence: "Reproduced locally." },
+    });
+
+    expect(state.loopsById["1"]).toMatchObject({
+      dynamic: { state: "fix", awaitingUpdate: false },
+      workflow: {
+        currentState: "fix",
+        transitionSeq: 1,
+        lastTransition: { outcome: "found", evidence: "Reproduced locally." },
+      },
+    });
+  });
+
+  it("records the task created for the active workflow state", () => {
+    const initial = makeState([
+      {
+        id: "1",
+        prompt: "Fix the regression",
+        trigger: { type: "dynamic" },
+        status: "active",
+        recurring: true,
+        createdAt: 10,
+        updatedAt: 10,
+        expiresAt: 20,
+        fireCount: 0,
+        workflow: {
+          definition: workflow,
+          currentState: "investigate",
+          transitionSeq: 0,
+          stateEnteredAt: 10,
+          attemptsByState: { investigate: 1 },
+        },
+      },
+    ], 2);
+
+    const { state } = apply(initial, {
+      type: "LOOP_WORKFLOW_TASK_SET",
+      at: 100,
+      source: "tool",
+      entityType: "loop",
+      entityId: "1",
+      payload: { id: "1", taskId: "12" },
+    });
+
+    expect(state.loopsById["1"].workflow?.activeTaskId).toBe("12");
+  });
+
   it("creates an active loop with fireCount 0 and 7-day expiry", () => {
     const { state, effects } = apply(makeState(), {
       type: "LOOP_CREATED",
@@ -331,138 +439,6 @@ describe("loop reducer", () => {
         entityId: "1",
         payload: { id: "1" },
       },
-    ]);
-  });
-
-  it("updates prompt only on LOOP_UPDATED", () => {
-    const initial = makeState([
-      {
-        id: "1",
-        prompt: "Old prompt",
-        trigger: cronTrigger,
-        status: "active",
-        recurring: true,
-        createdAt: 10,
-        updatedAt: 10,
-        expiresAt: 20,
-        fireCount: 0,
-      },
-    ], 2);
-
-    const { state, effects } = apply(initial, {
-      type: "LOOP_UPDATED",
-      at: 500,
-      source: "tool",
-      entityType: "loop",
-      entityId: "1",
-      payload: { id: "1", prompt: "New prompt" },
-    });
-
-    expect(state.loopsById["1"].prompt).toBe("New prompt");
-    expect(state.loopsById["1"].trigger).toEqual(cronTrigger); // unchanged
-    expect(state.loopsById["1"].updatedAt).toBe(500);
-    expect(state.loopsById["1"].status).toBe("active"); // unchanged
-    expect(effects).toEqual([
-      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
-    ]);
-  });
-
-  it("updates trigger only on LOOP_UPDATED", () => {
-    const newTrigger: Trigger = { type: "cron", schedule: "*/10 * * * *" };
-    const initial = makeState([
-      {
-        id: "1",
-        prompt: "Check something",
-        trigger: cronTrigger,
-        status: "active",
-        recurring: true,
-        createdAt: 10,
-        updatedAt: 10,
-        expiresAt: 20,
-        fireCount: 0,
-      },
-    ], 2);
-
-    const { state, effects } = apply(initial, {
-      type: "LOOP_UPDATED",
-      at: 600,
-      source: "command",
-      entityType: "loop",
-      entityId: "1",
-      payload: { id: "1", trigger: newTrigger },
-    });
-
-    expect(state.loopsById["1"].trigger).toEqual(newTrigger);
-    expect(state.loopsById["1"].prompt).toBe("Check something"); // unchanged
-    expect(state.loopsById["1"].updatedAt).toBe(600);
-    expect(effects).toEqual([
-      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
-    ]);
-  });
-
-  it("updates both prompt and trigger on LOOP_UPDATED", () => {
-    const newTrigger: Trigger = { type: "event", source: "tool_execution_start" };
-    const initial = makeState([
-      {
-        id: "1",
-        prompt: "Old prompt",
-        trigger: cronTrigger,
-        status: "active",
-        recurring: true,
-        createdAt: 10,
-        updatedAt: 10,
-        expiresAt: 20,
-        fireCount: 0,
-      },
-    ], 2);
-
-    const { state, effects } = apply(initial, {
-      type: "LOOP_UPDATED",
-      at: 700,
-      source: "tool",
-      entityType: "loop",
-      entityId: "1",
-      payload: { id: "1", prompt: "New prompt", trigger: newTrigger },
-    });
-
-    expect(state.loopsById["1"].prompt).toBe("New prompt");
-    expect(state.loopsById["1"].trigger).toEqual(newTrigger);
-    expect(state.loopsById["1"].updatedAt).toBe(700);
-    expect(effects).toEqual([
-      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
-    ]);
-  });
-
-  it("updates status-unchanged loop (paused) on LOOP_UPDATED", () => {
-    const initial = makeState([
-      {
-        id: "1",
-        prompt: "Old prompt",
-        trigger: cronTrigger,
-        status: "paused",
-        recurring: true,
-        createdAt: 10,
-        updatedAt: 10,
-        expiresAt: 20,
-        fireCount: 5,
-      },
-    ], 2);
-
-    const { state, effects } = apply(initial, {
-      type: "LOOP_UPDATED",
-      at: 800,
-      source: "tool",
-      entityType: "loop",
-      entityId: "1",
-      payload: { id: "1", prompt: "Updated while paused" },
-    });
-
-    expect(state.loopsById["1"].prompt).toBe("Updated while paused");
-    expect(state.loopsById["1"].status).toBe("paused"); // status preserved
-    expect(state.loopsById["1"].fireCount).toBe(5); // fireCount preserved
-    expect(state.loopsById["1"].updatedAt).toBe(800);
-    expect(effects).toEqual([
-      { type: "PERSIST_LOOP", entityType: "loop", entityId: "1", payload: { loop: state.loopsById["1"] } },
     ]);
   });
 

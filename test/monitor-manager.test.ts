@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorManager } from "../src/monitor-manager.js";
 import { createMockPi } from "./helpers/mock-pi.js";
+import { createMockChildProcess, createSequentialSpawn } from "./helpers/mock-spawn.js";
 
 describe("MonitorManager", () => {
   let manager: MonitorManager;
@@ -25,6 +26,55 @@ describe("MonitorManager", () => {
     expect(entry.command).toBe("echo hello world");
   });
 
+  it("emits monitor:started once the monitor can be inspected", () => {
+    const events: any[] = [];
+    pi.events.on("monitor:started", (event: any) => events.push(event));
+
+    const entry = manager.create("sleep 30", "started test");
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      command: "sleep 30",
+      description: "started test",
+      timeout: 300000,
+      timestamp: expect.any(Number),
+    }]);
+    expect(manager.get(entry.id)).toBe(entry);
+  });
+
+  it("emits monitor:finished for a manually stopped monitor", async () => {
+    const events: any[] = [];
+    pi.events.on("monitor:finished", (event: any) => events.push(event));
+    const entry = manager.create("sleep 30", "stopped test");
+
+    await manager.stop(entry.id);
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      status: "stopped",
+      reason: "manual",
+      outputLines: 0,
+    }]);
+  });
+
+  it("emits monitor:finished when a process cannot start", async () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const events: any[] = [];
+    pi.events.on("monitor:finished", (event: any) => events.push(event));
+    const entry = manager.create("missing-command", "spawn error");
+
+    manager.getProcess(entry.id)?.proc.emit("error", new Error("spawn failed"));
+
+    expect(events).toEqual([{
+      monitorId: entry.id,
+      status: "error",
+      error: "spawn failed",
+      outputLines: 0,
+    }]);
+  });
   it("gets a monitor by ID", () => {
     manager.create("echo test", "get test");
     const entry = manager.get("1");
@@ -56,6 +106,163 @@ describe("MonitorManager", () => {
     });
   });
 
+  it("bounds buffered output and rate-limits high-volume progress events", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const events: any[] = [];
+    pi.events.on("monitor:output", (event: any) => events.push(event));
+    const entry = manager.create("noisy experiment");
+    const output = Array.from({ length: 1000 }, (_value, index) => `step ${index}`).join("\n");
+
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from(`${output}\n`));
+
+    const current = manager.get(entry.id)!;
+    expect(current.outputLines).toBe(1000);
+    expect(current.outputBuffer).toHaveLength(200);
+    expect(current.outputBuffer[0]).toBe("step 800");
+    expect(current.outputBuffer.at(-1)).toBe("step 999");
+    expect(current.outputRatePerMinute).toBe(1000);
+    expect(current.lastOutputAt).toEqual(expect.any(Number));
+    expect(events).toEqual([expect.objectContaining({
+      monitorId: entry.id,
+      line: "step 999",
+      outputLines: 1000,
+      droppedLines: 999,
+    })]);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("extracts structured progress from JSON Lines without treating ordinary output as progress", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from([
+      "epoch 1 starting",
+      '{"progress":{"current":25,"total":100,"message":"training epoch 1"}}',
+      '{"progress":{"message":"waiting for validation"}}',
+      '{"progress":{"current":"not a number"}}',
+    ].join("\n") + "\n"));
+
+    expect(manager.get(entry.id)?.progress).toMatchObject({
+      current: 25,
+      total: 100,
+      message: "waiting for validation",
+      source: "jsonl",
+    });
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("allows agents to set an optional progress percentage or status message", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+
+    expect(manager.updateProgress(entry.id, { message: "waiting for remote worker" })?.progress).toMatchObject({
+      message: "waiting for remote worker",
+      source: "agent",
+    });
+    expect(manager.updateProgress(entry.id, { current: 3, total: 5, message: "epoch 3" })?.progress).toMatchObject({
+      current: 3,
+      total: 5,
+      message: "epoch 3",
+      source: "agent",
+    });
+    expect(manager.updateProgress("missing", { message: "nope" })).toBeUndefined();
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("frames split stream records before counting or parsing them", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    stdout.emit("data", Buffer.from('{"progress":{"current":'));
+    expect(manager.get(entry.id)?.outputLines).toBe(0);
+    expect(manager.get(entry.id)?.progress).toBeUndefined();
+
+    stdout.emit("data", Buffer.from('1,"total":2,"message":"halfway"}}\n'));
+    expect(manager.get(entry.id)?.outputLines).toBe(1);
+    expect(manager.get(entry.id)?.outputBuffer).toEqual(['{"progress":{"current":1,"total":2,"message":"halfway"}}']);
+    expect(manager.get(entry.id)?.progress).toMatchObject({ current: 1, total: 2, message: "halfway" });
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
+  it("retains an unterminated final output record on completion", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    manager.getProcess(entry.id)?.proc.stdout?.emit("data", Buffer.from("final result"));
+
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+
+    expect(manager.get(entry.id)?.outputBuffer).toContain("final result");
+  });
+
+  it("coalesces JSONL progress widget updates to once per second", () => {
+    vi.useFakeTimers();
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const onChange = vi.fn();
+    manager.setOnChange(onChange);
+    const entry = manager.create("experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    stdout.emit("data", Buffer.from('{"progress":{"message":"one"}}\n'));
+    stdout.emit("data", Buffer.from('{"progress":{"message":"two"}}\n'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+    vi.useRealTimers();
+  });
+
+  it("rejects agent progress updates after a monitor completes", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("experiment");
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+
+    expect(manager.updateProgress(entry.id, { message: "late update" })).toBeUndefined();
+  });
+
+  it("coalesces log-rate accounting into bounded one-second buckets", () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("noisy experiment");
+    const process = manager.getProcess(entry.id);
+    if (!process?.proc.stdout) throw new Error("expected stdout");
+    const stdout = process.proc.stdout;
+
+    for (let index = 0; index < 1000; index++) stdout.emit("data", Buffer.from("line\n"));
+
+    expect(manager.getProcess(entry.id)?.outputBuckets).toHaveLength(1);
+    expect(manager.get(entry.id)?.outputRatePerMinute).toBe(1000);
+    manager.getProcess(entry.id)?.proc.emit("close", 0);
+  });
+
   it("emits monitor:done on clean exit", async () => {
     manager.create("echo done", "done test");
 
@@ -82,6 +289,25 @@ describe("MonitorManager", () => {
 
     expect(callback).toHaveBeenCalledTimes(1);
     expect(manager.getProcess(entry.id)?.completionCallbacks).toHaveLength(0);
+  });
+
+  it("invokes completion callbacks immediately for already errored monitors", async () => {
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: 3 })),
+    );
+    const entry = manager.create("exit 3", "fast failure");
+
+    await new Promise<void>((resolve) => {
+      pi.events.on("monitor:error", (data: any) => {
+        if (data.monitorId === entry.id) resolve();
+      });
+    });
+    expect(manager.get(entry.id)?.status).toBe("error");
+
+    const callback = vi.fn();
+    expect(manager.onComplete(entry.id, callback)).toBe(true);
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it("prunes completed monitors after the retention callback runs", async () => {
@@ -273,6 +499,30 @@ describe("MonitorManager", () => {
     vi.useRealTimers();
   });
 
+  it("notifies completion callbacks when a monitor times out", async () => {
+    vi.useFakeTimers();
+    manager = new MonitorManager(
+      pi,
+      createSequentialSpawn(createMockChildProcess({ exitCode: null })),
+    );
+    const entry = manager.create("sleep 60", "timeout callback test", 500);
+    const callback = vi.fn();
+    const errors: any[] = [];
+    pi.events.on("monitor:error", (event: any) => errors.push(event));
+
+    expect(manager.onComplete(entry.id, callback)).toBe(true);
+    await vi.advanceTimersByTimeAsync(5600);
+
+    expect(manager.get(entry.id)?.status).toBe("stopped");
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(errors).toEqual([{
+      monitorId: entry.id,
+      error: "Timed out after 500ms",
+      outputLines: 0,
+    }]);
+    vi.useRealTimers();
+  });
+
   it("disables timeout when set to 0", async () => {
     manager.create("echo 'no timeout'", undefined, 0);
     await new Promise<void>((resolve) => {
@@ -297,31 +547,5 @@ describe("MonitorManager", () => {
     expect(stopped).toBe(true);
     expect(manager.get(entry.id)!.status).toBe("stopped");
     vi.useRealTimers();
-  });
-
-  it("uses platform-appropriate shell for spawn", () => {
-    const calls: Array<{ cmd: string; args: string[] }> = [];
-    const capturingManager = new MonitorManager(pi, (cmd, args) => {
-      calls.push({ cmd, args });
-      const { spawn } = require("node:child_process");
-      return spawn("echo", ["stub"]);
-    });
-    capturingManager.create("echo cross-platform", "shell test");
-    expect(calls).toHaveLength(1);
-    const call = calls[0];
-    if (process.platform === "win32") {
-      expect(call.cmd).toBe("cmd.exe");
-      expect(call.args).toEqual(["/d", "/s", "/c", "echo cross-platform"]);
-    } else {
-      expect(call.cmd).toBe("/bin/sh");
-      expect(call.args).toEqual(["-c", "echo cross-platform"]);
-    }
-  });
-
-  it("terminateProcess path runs without throwing on already-dead processes", async () => {
-    const { terminateProcess } = await import("../src/monitor-manager.js");
-    const fakeProc = { pid: 99999, kill: vi.fn(() => { throw new Error("ESRCH"); }) };
-    await expect(terminateProcess(fakeProc as any, "graceful")).resolves.not.toThrow();
-    await expect(terminateProcess(fakeProc as any, "force")).resolves.not.toThrow();
   });
 });

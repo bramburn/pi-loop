@@ -1,3 +1,4 @@
+import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
 import { registerMonitorTools } from "../src/tools/monitor-tools.js";
@@ -17,7 +18,11 @@ function makeMonitor(overrides: Partial<MonitorEntry> = {}): MonitorEntry {
   };
 }
 
-function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id: string) => Promise<boolean>; delete: (id: string) => Promise<boolean> }> = {}) {
+function setup(managerOverrides: Partial<{
+  list: () => MonitorEntry[];
+  stop: (id: string) => Promise<boolean>;
+  updateProgress: (id: string, progress: any) => MonitorEntry | undefined;
+}> = {}) {
   const { pi, toolMap } = createMockPi();
   const store = new LoopStore();
   let nextId = 1;
@@ -25,23 +30,22 @@ function setup(managerOverrides: Partial<{ list: () => MonitorEntry[]; stop: (id
     list: managerOverrides.list ?? (() => []),
     create: vi.fn((command: string) => makeMonitor({ id: String(nextId++), command })),
     stop: managerOverrides.stop ?? vi.fn(async () => true),
-    delete: managerOverrides.delete ?? vi.fn(async () => true),
-  };
-  const bindingsStore = {
-    sessionId: "test-session",
+    updateProgress: managerOverrides.updateProgress ?? vi.fn((_id: string, progress: any) => makeMonitor({
+      progress: { ...progress, source: "agent", updatedAt: Date.now() },
+    })),
   };
   const handleMonitorDoneLoop = vi.fn();
   registerMonitorTools({
     pi,
     getStore: () => store as any,
     getMonitorManager: () => manager as any,
-    getBindingsStore: () => bindingsStore as any,
     updateWidget: vi.fn(),
     handleMonitorDoneLoop,
   });
+
   const text = async (name: string, args: any) =>
     (await toolMap.get(name)!.execute!("t", args)).content[0].text as string;
-  return { store, manager, handleMonitorDoneLoop, text };
+  return { store, manager, handleMonitorDoneLoop, text, toolMap };
 }
 
 describe("MonitorCreate", () => {
@@ -49,9 +53,11 @@ describe("MonitorCreate", () => {
     const h = setup();
     const out = await h.text("MonitorCreate", { command: "npm test" });
     expect(out).toContain("Monitor #1 started");
-    expect(out).toContain("Output stream: monitor:output");
+    expect(out).toContain("monitor:output is rate-limited");
     expect(h.manager.create).toHaveBeenCalledWith("npm test", undefined, undefined);
     expect(h.handleMonitorDoneLoop).not.toHaveBeenCalled();
+    expect(h.toolMap.get("MonitorCreate")?.renderShell).toBe("self");
+    expect(h.toolMap.get("MonitorCreate")?.renderResult).toBeTypeOf("function");
   });
 
   it("creates a one-shot completion loop and registers it when onDone is set", async () => {
@@ -95,6 +101,81 @@ describe("MonitorList", () => {
     expect(out).toContain("exit=0");
     expect(out).toContain("| line two");
   });
+
+  it("includes the output tail for a running monitor", async () => {
+    const running = makeMonitor({
+      outputLines: 1,
+      outputBuffer: ["current experiment progress"],
+    });
+    const h = setup({ list: () => [running] });
+
+    expect(await h.text("MonitorList", {})).toContain("| current experiment progress");
+  });
+
+  it("shows a percentage only when current and total are supplied", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      progress: { current: 25, total: 100, message: "training", source: "jsonl", updatedAt: Date.now() },
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("25% (25/100) · training");
+  });
+
+  it("shows a progress message without inferring a percentage", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      progress: { message: "waiting for validation", source: "jsonl", updatedAt: Date.now() },
+    })] });
+    const out = await h.text("MonitorList", {});
+    expect(out).toContain("waiting for validation");
+    expect(out).not.toContain("%");
+  });
+
+  it("shows observed log velocity for active monitors", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      lastOutputAt: Date.now(),
+      outputRatePerMinute: 24,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("24 lines/min");
+  });
+
+  it("shows quiet time without claiming the monitor has failed", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      lastOutputAt: Date.now() - 120000,
+      outputRatePerMinute: 24,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("quiet 2m");
+  });
+
+  it("shows quiet time for a monitor that has not produced output", async () => {
+    const h = setup({ list: () => [makeMonitor({
+      startedAt: Date.now() - 120000,
+    })] });
+    expect(await h.text("MonitorList", {})).toContain("quiet 2m");
+  });
+});
+
+describe("MonitorUpdate", () => {
+  it("updates an agent-provided progress message", async () => {
+    const updateProgress = vi.fn((_id: string, progress: any) => makeMonitor({
+      progress: { ...progress, source: "agent", updatedAt: Date.now() },
+    }));
+    const h = setup({ updateProgress });
+
+    expect(await h.text("MonitorUpdate", { monitorId: "1", message: "waiting for worker" }))
+      .toContain("waiting for worker");
+    expect(updateProgress).toHaveBeenCalledWith("1", {
+      current: undefined,
+      total: undefined,
+      message: "waiting for worker",
+    });
+  });
+
+  it("requires at least one recognized progress field", () => {
+    const h = setup();
+    const schema = h.toolMap.get("MonitorUpdate")?.parameters;
+
+    expect(Check(schema as any, { monitorId: "1" })).toBe(false);
+    expect(Check(schema as any, { monitorId: "1", ignored: true })).toBe(false);
+    expect(Check(schema as any, { monitorId: "1", message: "working" })).toBe(true);
+  });
 });
 
 describe("MonitorStop", () => {
@@ -106,18 +187,5 @@ describe("MonitorStop", () => {
   it("reports when the monitor is not found or not running", async () => {
     const h = setup({ stop: vi.fn(async () => false) });
     expect(await h.text("MonitorStop", { monitorId: "9" })).toContain("not found or not running");
-  });
-});
-
-describe("MonitorDelete", () => {
-  it("removes a monitor immediately", async () => {
-    const h = setup({ delete: vi.fn(async () => true) });
-    expect(await h.text("MonitorDelete", { monitorId: "1" })).toBe("Monitor #1 deleted");
-    expect(h.manager.delete).toHaveBeenCalledWith("1");
-  });
-
-  it("reports when the monitor is not found", async () => {
-    const h = setup({ delete: vi.fn(async () => false) });
-    expect(await h.text("MonitorDelete", { monitorId: "9" })).toBe("Monitor #9 not found");
   });
 });
