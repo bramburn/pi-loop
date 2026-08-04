@@ -23,6 +23,9 @@ const tasksCreatedTrigger: Trigger = { type: "event", source: "tasks:created" };
 const LEGACY_WORKER_PROMPT =
   "Run TaskList, pick next pending task, mark it in_progress, implement it, run validation, and complete it. If no pending tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
+const IMMEDIATELY_PREVIOUS_WORKER_PROMPT =
+  "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Follow each prerequisite chain to the earliest unfinished task. Use TaskClaim for that task whether it is pending or in_progress; an expired claim can be taken over, but a live foreign claim must not be duplicated. Resume claimed in_progress work before claiming unrelated pending work. Keep the returned claimId, call TaskHeartbeat before its lease expires during long work, and pass claimId to TaskUpdate when completing or closing the task. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: claim and resume it, verify evidence and complete it, or report its live owner/blocker and required recovery. Implement the claimed task, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
+
 const PREVIOUS_WORKER_PROMPT =
   "Run TaskList and inspect every in_progress task before choosing a pending task; read each pending task's description and use TaskGet whenever an excerpt is truncated. Resume an eligible in_progress task before claiming new work. If a dependent task is blocked, follow its prerequisite chain to the earliest unfinished task and resume it when it is in_progress. Prefer a pending task with no unresolved prerequisite. If task A names B as its next task, or B says it depends on A, complete A before B. Never choose a dependent task while its prerequisite is pending or in_progress. Never report no eligible task while any in_progress task exists: resume it, verify evidence and complete it, or report why it is actively owned or blocked and what recovery is required. Mark newly claimed work in_progress, implement it, run validation, and complete it. If no unfinished tasks remain, report that and end this iteration; pi-loop manages the worker lifecycle automatically.";
 
@@ -81,6 +84,22 @@ describe("task-backlog-runtime predicates", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/TaskGet/i);
   });
 
+  it("requires action before status prose or another wake", () => {
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("ACTION REQUIRED NOW");
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("First tool call: TaskList");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/claim or resume.*same turn/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/do not end.*reporting state/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/future-tense promise/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toContain("Tool calls, not a plan");
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/describing intended work does not count/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/TaskGet.*execution authority/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/do not invent.*blocker/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/validation.*observable tool result/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/reasoning-only validation does not count/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/run the validation.*TaskGet requires/i);
+    expect(AUTO_TASK_WORKER_PROMPT).toMatch(/reads and edits.*do not prove validation/i);
+  });
+
   it("orders a prerequisite A before its dependent B", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toContain("no unresolved prerequisite");
     expect(AUTO_TASK_WORKER_PROMPT).toContain("complete A before B");
@@ -97,7 +116,8 @@ describe("task-backlog-runtime predicates", () => {
     expect(AUTO_TASK_WORKER_PROMPT).toMatch(/pass claimId to TaskUpdate/i);
   });
 
-  it("retains the immediately previous worker prompt for persisted loops", () => {
+  it("retains previous worker prompts for persisted loops", () => {
+    expect(AUTO_TASK_WORKER_LEGACY_PROMPTS).toContain(IMMEDIATELY_PREVIOUS_WORKER_PROMPT);
     expect(AUTO_TASK_WORKER_LEGACY_PROMPTS).toContain(PREVIOUS_WORKER_PROMPT);
   });
 

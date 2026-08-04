@@ -29,7 +29,7 @@ LoopList
 LoopDelete id="1"
 ```
 
-`/loop event tasks:created ...` is treated as an explicit task-backlog worker: it adopts existing unfinished tasks, coalesces task-creation bursts, and re-wakes after each agent turn until the backlog drains. Tool callers opt into the same behavior with `taskBacklog=true`.
+`/loop event tasks:created ...` is treated as an explicit task-backlog worker: it adopts existing unfinished tasks, coalesces task-creation bursts, and re-wakes after each agent turn until the backlog drains. Tool callers opt into the same behavior with `taskBacklog=true`. Worker wakes are action-first: `TaskList`, claim/resume, concrete same-turn work, validation, then evidence—not a state report or promise to start on a later wake.
 
 Run work in the background and wake the agent when it succeeds, fails, or times out:
 
@@ -71,7 +71,7 @@ npm run build
 PI_LOOP_LIVE_MODEL="<provider/model[:thinking]>" npm run test:e2e:workflow
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md), the [workflow harness testing guide](./docs/WORKFLOW_HARNESS_TESTING.md), and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), the [workflow harness testing guide](./docs/WORKFLOW_HARNESS_TESTING.md), the [task-backlog prompt testing guide](./docs/BACKLOG_PROMPT_TESTING.md), and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
 
 ## License
 

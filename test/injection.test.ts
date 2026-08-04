@@ -337,6 +337,15 @@ describe("loop:fire custom message delivery", () => {
 
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].message.content).toContain("adopts unfinished tasks and re-wakes after this turn");
+    expect(sentMessages[0].message.content).toContain("ACTION REQUIRED NOW");
+    expect(sentMessages[0].message.content).toContain("First tool call: TaskList");
+    expect(sentMessages[0].message.content.indexOf("ACTION REQUIRED NOW"))
+      .toBeLessThan(sentMessages[0].message.content.indexOf("Backlog goal:"));
+    expect(sentMessages[0].message.content).toMatch(/claim or resume.*same turn/i);
+    expect(sentMessages[0].message.content).toMatch(/do not end.*reporting state/i);
+    expect(sentMessages[0].message.content).toContain("Tool calls, not a plan");
+    expect(sentMessages[0].message.content).toMatch(/describing intended work does not count/i);
+    expect(sentMessages[0].message.content).toMatch(/TaskGet.*execution authority/i);
     expect(sentMessages[0].message.content).toContain("Do not call LoopDelete");
     expect(sentMessages[0].message.content).toContain("report that and end this iteration");
     expect(sentMessages[0].message.details.taskBacklog).toBe(true);

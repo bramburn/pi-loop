@@ -14,6 +14,7 @@ import {
 } from "../notification-reducer.js";
 import type { DynamicLoopState, Trigger, WorkflowRunState } from "../types.js";
 import { getWorkflowOutcomeAvailability } from "../workflow-reducer.js";
+import { TASK_BACKLOG_ACTION_CONTRACT } from "./task-backlog-runtime.js";
 
 export interface LoopFireEvent {
   loopId: string;
@@ -174,11 +175,18 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       return lines.join("\n");
     }
 
-    const lifecycle = data.taskBacklog
-      ? `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not call LoopDelete; when no unfinished tasks remain, report that and end this iteration.`
-      : (data.persistent ?? data.recurring)
-        ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not call LoopDelete or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation.`
-        : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not call LoopDelete.`;
+    if (data.taskBacklog) {
+      return [
+        `[pi-loop] Loop #${loopId} fired (${triggerInfo}).${constraint}`,
+        TASK_BACKLOG_ACTION_CONTRACT,
+        `Backlog goal: ${prompt}`,
+        `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not call LoopDelete; when no unfinished tasks remain, report that and end this iteration.`,
+      ].join("\n");
+    }
+
+    const lifecycle = (data.persistent ?? data.recurring)
+      ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not call LoopDelete or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation.`
+      : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not call LoopDelete.`;
 
     return [
       `[pi-loop] Loop #${loopId} fired (${triggerInfo}).${constraint}`,
