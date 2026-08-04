@@ -2,11 +2,12 @@ import { computeJitter, cronToNextFire } from "./loop-parse.js";
 import type { LoopStore } from "./store.js";
 import type { LoopEntry } from "./types.js";
 
-const _MAX_EXPIRY_DAYS = 7;
-
 function computeNextFire(entry: LoopEntry): Date {
   if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
     return cronToNextFire(entry.trigger.type === "hybrid" ? entry.trigger.cron : entry.trigger.schedule);
+  }
+  if (entry.trigger.type === "dynamic") {
+    return new Date(entry.dynamic?.nextWakeAt ?? Date.now());
   }
   return new Date(Date.now() + 60000);
 }
@@ -20,9 +21,19 @@ export class CronScheduler {
   ) {}
 
   start(): void {
-    for (const entry of this.store.list()) {
+    for (const storedEntry of this.store.list()) {
+      let entry = storedEntry;
       if (entry.status !== "active") continue;
-      if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
+      if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid" || entry.trigger.type === "dynamic") {
+        if (entry.trigger.type === "dynamic" && entry.dynamic?.awaitingUpdate && !this.fireTimes.has(entry.id)) {
+          entry = this.store.updateDynamic(entry.id, {
+            dynamic: {
+              awaitingUpdate: false,
+              nextWakeAt: undefined,
+              lastUpdatedAt: Date.now(),
+            },
+          }) ?? entry;
+        }
         this.armTimer(entry);
       }
     }
@@ -33,8 +44,9 @@ export class CronScheduler {
   }
 
   add(entry: LoopEntry): void {
-    if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
-      if (this.fireTimes.has(entry.id)) return;
+    // Guard against double-arming the same entry.
+    if (this.fireTimes.has(entry.id)) return;
+    if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid" || entry.trigger.type === "dynamic") {
       this.armTimer(entry);
     }
   }
@@ -47,17 +59,25 @@ export class CronScheduler {
     return this.fireTimes.get(id);
   }
 
-  private armTimer(entry: LoopEntry): void {
-    const _scheduleExpr = entry.trigger.type === "hybrid" ? entry.trigger.cron : (entry.trigger as { schedule: string }).schedule;
+  private retire(entry: LoopEntry): void {
+    if (entry.workflow || entry.taskBacklog) this.store.pause(entry.id);
+    else this.store.delete(entry.id);
+    this.fireTimes.delete(entry.id);
+  }
 
+  private armTimer(entry: LoopEntry): void {
     const nextFire = computeNextFire(entry);
-    const minuteField = _scheduleExpr.trim().split(/\s+/)[0];
-    const minuteStep = minuteField.startsWith("*/") ? parseInt(minuteField.slice(2), 10) || 30 : 30;
-    const jitter = computeJitter(entry.id, entry.recurring, minuteStep);
+    let jitter = 0;
+    if (entry.trigger.type === "cron" || entry.trigger.type === "hybrid") {
+      const scheduleExpr = entry.trigger.type === "hybrid" ? entry.trigger.cron : entry.trigger.schedule;
+      const minuteField = scheduleExpr.trim().split(/\s+/)[0] ?? "";
+      const minuteStep = minuteField.startsWith("*/") ? parseInt(minuteField.slice(2), 10) || 30 : 30;
+      jitter = computeJitter(entry.id, entry.recurring, minuteStep);
+    }
     const fireTime = nextFire.getTime() + jitter;
 
     if (fireTime > entry.expiresAt) {
-      this.store.delete(entry.id);
+      this.retire(entry);
       return;
     }
 
@@ -69,16 +89,18 @@ export class CronScheduler {
       if (now < fireTime) continue;
 
       const entry = this.store.get(id);
-      if (entry?.status !== "active") {
+      if (!entry || entry.status !== "active") {
         this.fireTimes.delete(id);
         continue;
       }
 
+      // Skip dynamic loops that are waiting for an agent-provided next wake time.
+      if (entry.trigger.type === "dynamic" && entry.dynamic?.awaitingUpdate) continue;
+
       if (filter && !filter(entry)) continue;
 
       if (now >= entry.expiresAt) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+        this.retire(entry);
         continue;
       }
 
@@ -87,8 +109,7 @@ export class CronScheduler {
       // on the previous tick. This prevents an off-by-one where the cap
       // is reached but one extra fire is delivered.
       if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+        this.retire(entry);
         continue;
       }
 
@@ -100,21 +121,19 @@ export class CronScheduler {
         continue;
       }
 
-      // Closes G-11: maxFires is now applied to non-recurring loops too.
-      // (Previously the recurring-only check meant a one-shot loop with
-      // maxFires would still fire once, ignoring the cap.)
-      if (fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
-        this.store.delete(id);
-        this.fireTimes.delete(id);
+      // Non-recurring loops are deleted after firing (c5ae360: retire cron one-shots).
+      // G-11: maxFires is now applied to non-recurring loops too.
+      if (!fresh.recurring) {
+        this.retire(fresh);
         continue;
       }
 
-      if (fresh.recurring) {
-        this.armTimer(fresh);
-      } else {
-        this.fireTimes.delete(id);
+      if (fresh.maxFires && (fresh.fireCount ?? 0) >= fresh.maxFires) {
+        this.retire(fresh);
+        continue;
       }
+
+      this.armTimer(fresh);
     }
   }
 }
-

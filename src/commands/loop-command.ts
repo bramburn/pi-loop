@@ -3,18 +3,25 @@ import type {
   ExtensionCommandContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { parseInterval } from "../loop-parse.js";
-import { BindingsStore } from "../runtime/bindings-store.js";
-import type { LoopEntry, Trigger } from "../types.js";
+import { formatTrigger } from "../loop-format.js";
+import { isValidCronExpression, parseInterval } from "../loop-parse.js";
+import type { DynamicLoopState, LoopEntry, Trigger } from "../types.js";
+import { isTerminalWorkflowRun } from "../workflow-reducer.js";
 
 interface LoopStoreLike {
   list(): LoopEntry[];
   get(id: string): LoopEntry | undefined;
-  create(trigger: Trigger, prompt: string, options?: Partial<LoopEntry>): LoopEntry;
+  create(trigger: Trigger, prompt: string, options: {
+    recurring: boolean;
+    autoTask?: boolean;
+    taskBacklog?: boolean;
+    readOnly?: boolean;
+    maxFires?: number;
+    dynamic?: Partial<DynamicLoopState>;
+  }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
   delete(id: string): boolean;
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; runOnCreate?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] };
 }
 
 interface TriggerSystemLike {
@@ -22,36 +29,75 @@ interface TriggerSystemLike {
   remove(id: string): void;
 }
 
-interface NotificationRuntimeLike {
-  queueOrDeliverNotification(data: {
-    loopId: string;
-    prompt: string;
-    trigger: Trigger | string;
-    timestamp: number;
-    readOnly?: boolean;
-    recurring?: boolean;
-    autoTask?: boolean;
-  }): Promise<void>;
-}
-
-interface WidgetLike {
-  setFiringStatus(loopId: string, prompt: string): void;
-}
-
 export interface LoopCommandOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
-  getBindingsStore: () => BindingsStore;
-  getNotificationRuntime: () => NotificationRuntimeLike;
-  getWidget: () => WidgetLike;
   updateWidget: () => void;
-  /** Fire a loop entry immediately (mimics the scheduler firing it). */
-  fireLoopNow: (entry: LoopEntry) => void;
+  maybeBootstrapTaskLoop?: (entry: LoopEntry) => Promise<boolean>;
+  onDynamicLoopActivated?: (entry: LoopEntry) => void;
+}
+
+type LoopCommandRoute =
+  | { type: "menu" }
+  | { type: "event"; source: string; prompt: string }
+  | { type: "cron"; interval: string; prompt: string; notifyEvery: boolean }
+  | { type: "invalid-cron"; interval: string }
+  | { type: "missing-interval-prompt" }
+  | { type: "dynamic"; goal: string };
+
+function parseLoopCommandRoute(input: string): LoopCommandRoute {
+  const trimmed = input.trim();
+  if (!trimmed) return { type: "menu" };
+
+  const eventMatch = trimmed.match(/^(?:event|when)\s+(\S+)\s+(.+)$/i);
+  if (eventMatch?.[1] && eventMatch[2]) {
+    return { type: "event", source: eventMatch[1], prompt: eventMatch[2].trim() };
+  }
+
+  const parts = trimmed.split(/\s+/);
+  if (parts.length > 5) {
+    const interval = parts.slice(0, 5).join(" ");
+    const cronShaped = parts.slice(0, 5).every((part) => /^[\d*/,-]+$/.test(part));
+    if (cronShaped) {
+      if (!isValidCronExpression(interval)) return { type: "invalid-cron", interval };
+      return { type: "cron", interval, prompt: parts.slice(5).join(" "), notifyEvery: false };
+    }
+  }
+
+  const intervalMatch = trimmed.match(/^(\d+\s*[smhdS]\b)/i);
+  if (intervalMatch) {
+    const interval = intervalMatch[1] ?? intervalMatch[0];
+    const prompt = trimmed.slice(intervalMatch[0].length).trim();
+    if (!prompt) return { type: "missing-interval-prompt" };
+    return { type: "cron", interval, prompt, notifyEvery: true };
+  }
+
+  return { type: "dynamic", goal: trimmed };
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, getBindingsStore, getNotificationRuntime, getWidget, updateWidget, fireLoopNow: _fireLoopNow } = options;
+  const { pi, getStore, getTriggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated } = options;
+
+  function createCronLoop(ui: ExtensionUIContext, interval: string, prompt: string, notifyEvery: boolean) {
+    let entry: LoopEntry | undefined;
+    try {
+      const parsed = parseInterval(interval);
+      const trigger: Trigger = { type: "cron", schedule: parsed.cron };
+      entry = getStore().create(trigger, prompt, { recurring: true });
+      getTriggerSystem().add(entry);
+      updateWidget();
+      const cadence = notifyEvery ? `every ${parsed.description}` : parsed.description;
+      ui.notify(`Loop #${entry.id} created: ${cadence} — ${prompt.slice(0, 50)}`, "info");
+    } catch (err: unknown) {
+      if (entry) {
+        getTriggerSystem().remove(entry.id);
+        getStore().delete(entry.id);
+        updateWidget();
+      }
+      ui.notify((err as Error).message, "error");
+    }
+  }
 
   async function scheduleLoop(ui: ExtensionUIContext, prompt?: string) {
     const p = prompt || await ui.input("Prompt (what should the agent check?)");
@@ -60,180 +106,101 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     const interval = await ui.input("Interval (e.g., 5m, 2h, 1d)");
     if (!interval) return;
 
-    try {
-      const parsed = parseInterval(interval);
-      const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-      const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
-      getTriggerSystem().add(entry);
-      getBindingsStore().add(entry.id);
-      updateWidget();
-
-      getWidget().setFiringStatus(entry.id, entry.prompt);
-      await getNotificationRuntime().queueOrDeliverNotification({
-        loopId: entry.id,
-        prompt: entry.prompt,
-        trigger: entry.trigger,
-        timestamp: Date.now(),
-        readOnly: entry.readOnly,
-        recurring: entry.recurring,
-        autoTask: entry.autoTask,
-      });
-      ui.notify(`Loop #${entry.id} created: every ${parsed.description} — first iteration queued`, "info");
-    } catch (err: unknown) {
-      ui.notify((err as Error).message, "error");
-    }
+    createCronLoop(ui, interval, p, true);
   }
 
-  async function eventLoop(ui: ExtensionUIContext, prompt?: string) {
+  async function eventLoop(ui: ExtensionUIContext, prompt?: string, sourceOverride?: string) {
     const p = prompt || await ui.input("Prompt");
     if (!p) return;
 
-    const source = await ui.input("Pi event source (e.g., tool_execution_start, before_agent_start)");
+    const source = sourceOverride || await ui.input("Pi event source (e.g., tool_execution_start, before_agent_start)");
     if (!source) return;
 
     const trigger: Trigger = { type: "event", source };
-    const entry = getStore().create(trigger, p, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
-    getTriggerSystem().add(entry);
-    getBindingsStore().add(entry.id);
-    updateWidget();
-
-    getWidget().setFiringStatus(entry.id, entry.prompt);
-    await getNotificationRuntime().queueOrDeliverNotification({
-      loopId: entry.id,
-      prompt: entry.prompt,
-      trigger: entry.trigger,
-      timestamp: Date.now(),
-      readOnly: entry.readOnly,
-      recurring: entry.recurring,
-      autoTask: entry.autoTask,
+    const taskBacklog = source === "tasks:created";
+    const entry = getStore().create(trigger, p, {
+      recurring: true,
+      taskBacklog,
+      maxFires: taskBacklog ? 25 : undefined,
     });
-    ui.notify(`Event loop #${entry.id} created: fires on "${source}" — first iteration queued`, "info");
+    getTriggerSystem().add(entry);
+    updateWidget();
+    const bootstrapped = taskBacklog ? await maybeBootstrapTaskLoop?.(entry) : false;
+    const adoption = taskBacklog
+      ? `; adopts unfinished tasks${bootstrapped ? " (initial wake queued)" : ""}`
+      : "";
+    ui.notify(`Event loop #${entry.id} created: fires on "${source}"${adoption}`, "info");
+  }
+
+  function dynamicLoop(ui: ExtensionUIContext, goal: string) {
+    const trigger: Trigger = { type: "dynamic" };
+    const entry = getStore().create(trigger, goal, {
+      recurring: true,
+      maxFires: 20,
+      dynamic: { goal, iteration: 0 },
+    });
+    getTriggerSystem().add(entry);
+    updateWidget();
+    ui.notify(`Dynamic loop #${entry.id} created — ${goal.slice(0, 50)}`, "info");
+    onDynamicLoopActivated?.(entry);
   }
 
   async function viewLoops(ui: ExtensionUIContext) {
-    // do-while keeps the user in the loop list after an action (Delete, Pause,
-    // Resume, Edit) so they can pick another loop without returning to the main
-    // menu. Only exits back to the main menu when "< Back" is selected.
-    while (true) {
-      const loops = getStore().list();
-      if (loops.length === 0) {
-        await ui.select("No loops configured", ["< Back"]);
-        return;
-      }
+    const loops = getStore().list();
+    if (loops.length === 0) {
+      await ui.select("No loops configured", ["< Back"]);
+      return;
+    }
 
-      const choices = loops.map((l) => {
-        const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
-        const triggerDesc = l.trigger.type === "cron"
-          ? `cron: ${l.trigger.schedule}`
-          : l.trigger.type === "event"
-            ? `event: ${l.trigger.source}`
-            : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
-        return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
-      });
-      choices.push("< Back");
+    const choices = loops.map((l) => {
+      const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
+      return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${formatTrigger(l.trigger, "command")})`;
+    });
+    choices.push("< Back");
 
-      const selected = await ui.select("Loops", choices);
-      if (!selected || selected === "< Back") return;
+    const selected = await ui.select("Loops", choices);
+    if (!selected || selected === "< Back") return;
 
-      const match = selected.match(/#(\d+)/);
-      if (!match) return;
-
+    const match = selected.match(/#(\d+)/);
+    if (match?.[1]) {
       const entry = getStore().get(match[1]);
-      if (!entry) {
-        ui.notify(`Loop #${match[1]} not found — it may have been deleted.`, "warning");
-        return;
-      }
+      if (entry) {
+        const actions = ["x Delete"];
+        if (entry.status === "active") actions.unshift("- Pause");
+        else if (entry.status === "paused" && !isTerminalWorkflowRun(entry.workflow)) actions.unshift("* Resume");
+        actions.push("< Back");
 
-      const actions = ["✎ Edit", "x Delete"];
-      if (entry.status === "active") actions.unshift("- Pause");
-      else if (entry.status === "paused") actions.unshift("* Resume");
-      actions.push("< Back");
+        const action = await ui.select(
+          `#${entry.id}: ${entry.prompt}\nTrigger: ${JSON.stringify(entry.trigger)}`,
+          actions,
+        );
 
-      const action = await ui.select(
-        `#${entry.id}: ${entry.prompt}\nTrigger: ${JSON.stringify(entry.trigger)}`,
-        actions,
-      );
-
-      if (!action || action === "< Back") return;
-
-      if (action === "x Delete") {
-        getTriggerSystem().remove(entry.id);
-        getStore().delete(entry.id);
-        updateWidget();
-        ui.notify(`Loop #${entry.id} deleted`, "info");
-        return;
-      }
-
-      if (action === "- Pause") {
-        getStore().pause(entry.id);
-        getTriggerSystem().remove(entry.id);
-        updateWidget();
-        ui.notify(`Loop #${entry.id} paused`, "info");
-        return;
-      }
-
-      if (action === "* Resume") {
-        getStore().resume(entry.id);
-        getTriggerSystem().add(entry);
-        updateWidget();
-        ui.notify(`Loop #${entry.id} resumed`, "info");
-        return;
-      }
-
-      if (action === "✎ Edit") {
-        let newPrompt: string | undefined = entry.prompt;
-        let newTrigger: Trigger | undefined = entry.trigger;
-        let committed = false;
-
-        while (true) {
-          const editChoice = await ui.select(`Editing loop #${entry.id}`, [
-            "Edit prompt",
-            "Edit trigger",
-            "< Back",
-          ]);
-
-          if (!editChoice || editChoice === "< Back") {
-            // Back out of the edit flow — either saved (committed) or cancelled.
-            // Return to the loop list so the user can pick another loop.
-            break;
+        if (action === "x Delete") {
+          if (entry.workflow?.activeTaskId) {
+            ui.notify(`Workflow #${entry.id} has active task #${entry.workflow.activeTaskId}; use LoopDelete with its claimId to cancel safely`, "warning");
+            return viewLoops(ui);
           }
-
-          if (editChoice === "Edit prompt") {
-            const p = await ui.input("New prompt", newPrompt);
-            if (p !== undefined) newPrompt = p;
-          } else if (editChoice === "Edit trigger") {
-            const newT = await collectTrigger(ui, newTrigger);
-            if (newT !== undefined) newTrigger = newT;
-          }
-
-          // Prompt to commit after at least one change was made
-          if (!committed && (newPrompt !== entry.prompt || JSON.stringify(newTrigger) !== JSON.stringify(entry.trigger))) {
-            const save = await ui.select("Save changes?", ["Save & exit", "Continue editing"]);
-            if (save === "Save & exit") {
-              const fields: { prompt?: string; trigger?: Trigger } = {};
-              if (newPrompt !== entry.prompt) fields.prompt = newPrompt;
-              if (JSON.stringify(newTrigger) !== JSON.stringify(entry.trigger)) fields.trigger = newTrigger;
-
-              const { entry: updated, changedFields } = getStore().updateMetadata(entry.id, fields);
-
-              // Re-register live trigger subscription when trigger config changed
-              if (updated && fields.trigger && entry.status === "active") {
-                getTriggerSystem().remove(entry.id);
-                getTriggerSystem().add(updated);
-              }
-
-              updateWidget();
-              ui.notify(`Loop #${entry.id} updated: ${changedFields.join(", ")}`, "info");
-              committed = true;
-              break;
-            }
-          }
+          getTriggerSystem().remove(entry.id);
+          getStore().delete(entry.id);
+          updateWidget();
+          ui.notify(`Loop #${entry.id} deleted`, "info");
+        } else if (action === "- Pause") {
+          getStore().pause(entry.id);
+          getTriggerSystem().remove(entry.id);
+          updateWidget();
+          ui.notify(`Loop #${entry.id} paused`, "info");
+        } else if (action === "* Resume") {
+          const resumed = getStore().resume(entry.id);
+          if (!resumed) return viewLoops(ui);
+          getTriggerSystem().add(resumed);
+          updateWidget();
+          ui.notify(`Loop #${entry.id} resumed`, "info");
+          if (resumed.trigger.type === "dynamic") onDynamicLoopActivated?.(resumed);
         }
-
-        // After Edit exits (saved or cancelled), fall through to re-loop
-        // and re-render the loop list so the user can pick another loop.
       }
     }
+
+    return viewLoops(ui);
   }
 
   async function settings(ui: ExtensionUIContext) {
@@ -242,129 +209,13 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     ui.notify(`${active}/${loops.length} active loops (max 25)`, "info");
   }
 
-  // ── viewBindings: read-only diagnostic view of this session's bindings ──
-
-  /** Formats debounceMs as a human-readable duration: 60000 → "60s", 900000 → "15m", 3600000 → "1h". */
-  function formatDebounceMs(ms: number): string {
-    if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)}h`;
-    if (ms > 60_000) return `${Math.round(ms / 60_000)}m`;
-    return `${Math.round(ms / 1_000)}s`;
-  }
-
-  /** Prompt the user to build a new Trigger from scratch. Returns undefined on cancel. */
-  async function collectTrigger(ui: ExtensionUIContext, current?: Trigger): Promise<Trigger | undefined> {
-    const choice = await ui.select("Edit trigger — select type", [
-      "cron: time-based interval",
-      "event: fires on a pi event",
-      "hybrid: cron + event with debounce",
-      "< Back",
-    ]);
-    if (!choice || choice === "< Back") return undefined;
-
-    if (choice === "cron: time-based interval") {
-      const defaultInterval = current?.type === "cron" ? current.schedule : "5m";
-      const raw = await ui.input(`New interval (e.g., 5m, 2h, 1d, or full cron)`, defaultInterval);
-      if (!raw) return undefined;
-      try {
-        const parsed = parseInterval(raw);
-        return { type: "cron", schedule: parsed.cron };
-      } catch (err: unknown) {
-        ui.notify((err as Error).message, "error");
-        return undefined;
-      }
-    }
-
-    if (choice === "event: fires on a pi event") {
-      const defaultSource = current?.type === "event" ? current.source : "tool_execution_start";
-      const source = await ui.input("Pi event source", defaultSource);
-      if (!source) return undefined;
-      const filterRaw = await ui.input("Event filter (optional, press Enter to skip)");
-      return { type: "event", source, filter: filterRaw || undefined };
-    }
-
-    if (choice === "hybrid: cron + event with debounce") {
-      const defaultCron = current?.type === "hybrid" ? current.cron : "5m";
-      const rawCron = await ui.input("Hybrid cron interval (e.g., 5m, 2h)", defaultCron);
-      if (!rawCron) return undefined;
-      let cronSchedule: string;
-      try {
-        cronSchedule = parseInterval(rawCron).cron;
-      } catch (err: unknown) {
-        ui.notify((err as Error).message, "error");
-        return undefined;
-      }
-
-      const defaultSource = current?.type === "hybrid" ? current.event.source : "tool_execution_start";
-      const source = await ui.input("Pi event source for hybrid", defaultSource);
-      if (!source) return undefined;
-
-      const debounceRaw = current?.type === "hybrid" ? String(current.debounceMs) : "30000";
-      const debounceStr = await ui.input("Debounce ms (e.g., 30000 = 30s)", debounceRaw);
-      const debounceMs = debounceStr ? parseInt(debounceStr, 10) : 30000;
-
-      return {
-        type: "hybrid",
-        cron: cronSchedule,
-        event: { source },
-        debounceMs,
-      };
-    }
-
-    return undefined;
-  }
-
-  function triggerDescForLoop(l: LoopEntry): string {
-    return l.trigger.type === "cron"
-      ? `cron: ${l.trigger.schedule}`
-      : l.trigger.type === "event"
-        ? `event: ${l.trigger.source}`
-        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
-  }
-
-  async function viewBindings(ui: ExtensionUIContext) {
-    const bindings = getBindingsStore();
-    bindings.reload(); // force a fresh read from disk
-    const allLoops = getStore().list();
-    const bound = allLoops.filter((l) => bindings.has(l.id));
-    const unbound = allLoops.filter((l) => !bindings.has(l.id));
-
-    if (allLoops.length === 0) {
-      await ui.select("No loops in the project store", ["< Back"]);
-      return;
-    }
-
-    const choices: string[] = [];
-
-    if (bound.length > 0) {
-      choices.push("— Armed in this session —");
-      for (const l of bound) {
-        const paused = l.status === "paused" ? " [PAUSED — won't fire]" : "";
-        choices.push(`* #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})${paused}`);
-      }
-    }
-
-    if (unbound.length > 0) {
-      choices.push("— Not bound —");
-      for (const l of unbound) {
-        choices.push(`- #${l.id} ${l.prompt.slice(0, 50)} (${triggerDescForLoop(l)})`);
-      }
-    }
-
-    choices.push("< Back");
-
-    const header = bindings.path
-      ? `Bindings: ${bindings.path.split("/").pop()}`
-      : "Bindings (memory scope — no file)";
-    await ui.select(header, choices);
-  }
-
   pi.registerCommand("loop", {
-    description: "Create a repeating scheduled task: /loop [interval] [prompt]. E.g., /loop 5m check the deploy, /loop 30s am I still here",
+    description: "Create a loop. Use /loop [interval] [prompt] for scheduled loops, /loop event <source> <prompt> for event loops, or /loop <goal> for a dynamic goal loop.",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const trimmed = args.trim();
       const ui = ctx.ui;
+      const route = parseLoopCommandRoute(args);
 
-      if (!trimmed) {
+      if (route.type === "menu") {
         const choice = await ui.select("Loop", [
           "Create scheduled loop",
           "Create event-triggered loop",
@@ -379,415 +230,17 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         return settings(ui);
       }
 
-      const intervalMatch = trimmed.match(/^(\d+\s*[smhdS]\b)/i);
-      if (intervalMatch) {
-        const interval = intervalMatch[1];
-        const prompt = trimmed.slice(intervalMatch[0].length).trim();
-
-        if (!prompt) {
-          ui.notify("Provide a prompt after the interval, e.g., /loop 5m check the deploy", "warning");
-          return;
-        }
-
-        try {
-          const parsed = parseInterval(interval);
-          const trigger: Trigger = { type: "cron", schedule: parsed.cron };
-          const entry = getStore().create(trigger, prompt, { recurring: true, createdBy: getBindingsStore().sessionId, runOnCreate: true });
-          getTriggerSystem().add(entry);
-          getBindingsStore().add(entry.id);
-          updateWidget();
-
-          getWidget().setFiringStatus(entry.id, entry.prompt);
-          await getNotificationRuntime().queueOrDeliverNotification({
-            loopId: entry.id,
-            prompt: entry.prompt,
-            trigger: entry.trigger,
-            timestamp: Date.now(),
-            readOnly: entry.readOnly,
-            recurring: entry.recurring,
-            autoTask: entry.autoTask,
-          });
-          ui.notify(`Loop #${entry.id} created: every ${parsed.description} — first iteration queued — bound to this session`, "info");
-        } catch (err: unknown) {
-          ui.notify((err as Error).message, "error");
-        }
+      if (route.type === "event") return eventLoop(ui, route.prompt, route.source);
+      if (route.type === "cron") return createCronLoop(ui, route.interval, route.prompt, route.notifyEvery);
+      if (route.type === "invalid-cron") {
+        ui.notify(`Invalid cron expression: ${route.interval}`, "error");
         return;
       }
-
-      const choice = await ui.select("Loop mode", [
-        `Scheduled: "${trimmed.slice(0, 50)}"`,
-        `Event-triggered: "${trimmed.slice(0, 50)}"`,
-      ]);
-
-      if (!choice) return;
-      if (choice.startsWith("Event")) return eventLoop(ui, trimmed);
-      return scheduleLoop(ui, trimmed);
-    },
-  });
-
-  pi.registerCommand("loop-resume", {
-    description: "Re-arm a stored loop by ID, or open the governor to pick which loops this session arms. Usage: /loop-resume <id> | /loop-resume (no args)",
-    handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const trimmed = args.trim();
-      const ui = ctx.ui;
-      const bindings = getBindingsStore();
-
-      if (!trimmed) {
-        await openGovernor(ui, bindings);
+      if (route.type === "missing-interval-prompt") {
+        ui.notify("Provide a prompt after the interval, e.g., /loop 5m check the deploy", "warning");
         return;
       }
-
-      const id = trimmed.split(/\s+/)[0];
-      if (!/^\d+$/.test(id)) {
-        ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-resume <id> or /loop-resume (no args) for the governor.`, "error");
-        return;
-      }
-      await rearmLoopOneShot(ui, bindings, id);
-    },
-  });
-
-  // ── One-shot: arm + bind a single loop in one call ──
-
-  async function rearmLoopOneShot(ui: ExtensionUIContext, bindings: BindingsStore, id: string): Promise<void> {
-    const before = getStore().get(id);
-    if (!before) {
-      ui.notify(`Loop #${id} not found in the store. Use /loop to create one first.`, "error");
-      return;
-    }
-    const entry = getStore().resume(id) ?? before;
-    getTriggerSystem().add(entry);
-    bindings.add(id);
-    updateWidget();
-    ui.notify(`Loop #${entry.id} re-armed and bound to this session`, "info");
-  }
-
-  // ── Governor: pick which loops this session arms ──
-
-  type Toggle = "arm" | "disarm";
-  // Picker sentinels are prefixed with `< ` so they sort naturally to the
-  // bottom of the row list (no numeric prefix to confuse with loop ids).
-  const SENTINEL_OK = "< OK";
-  const SENTINEL_CONTINUE = "< Continue";
-  const SENTINEL_DISARM_ALL = "< Disarm all";
-  const SENTINEL_REFRESH = "< Refresh>";
-  const SENTINEL_CANCEL = "< Cancel";
-
-  async function openGovernor(ui: ExtensionUIContext, bindings: BindingsStore): Promise<void> {
-    let loops = getStore().list();
-    if (loops.length === 0) {
-      ui.notify("No stored loops to bind. Use /loop to create one first.", "info");
-      return;
-    }
-
-    // Partition loops into "My loops" (created by this session) and "Other terminals"
-    // (created by other sessions or before this field was introduced).
-    const mySessionId = bindings.sessionId;
-    const [mine, others] = partitionLoopsBySession(loops, mySessionId);
-    if (mine.length === 0 && others.length === 0) return; // just in case
-
-    // pending toggles: ids the user flipped while in the picker. The final
-    // applied state for an id is (bindings.has(id) XOR pending.has(id)).
-    const pending = new Map<string, Toggle>();
-    let dirty = false;
-
-    // G-44: scan all other session bindings files to annotate each row with
-    // a hint showing how many other terminals have the loop bound.
-    const otherSessionCounts = bindings.getOtherSessionBindingCounts();
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const rows = buildGovernorRows(mine, others, bindings, pending, otherSessionCounts);
-      const selected = await ui.select("Governor — toggle loops, then < OK / < Continue / < Disarm all / < Refresh / < Cancel>", [
-        ...rows,
-        SENTINEL_OK,
-        SENTINEL_CONTINUE,
-        SENTINEL_DISARM_ALL,
-        SENTINEL_REFRESH,
-        SENTINEL_CANCEL,
-      ]);
-
-      if (!selected || selected === SENTINEL_CANCEL) {
-        if (dirty) {
-          ui.notify("Governor changes discarded.", "info");
-        }
-        return;
-      }
-
-      if (selected === SENTINEL_OK) {
-        applyPending(ui, bindings, pending);
-        if (pending.size > 0) dirty = true;
-        return;
-      }
-
-      if (selected === SENTINEL_CONTINUE) {
-        // No toggles at all — stay in the picker rather than exiting
-        if (!dirty) {
-          ui.notify("No pending changes — select loops to toggle or click Cancel.", "info");
-          continue;
-        }
-        const diff = buildDiffSummary(loops, bindings, pending);
-        const ok = await ui.confirm("Apply changes?", diff);
-        if (ok) {
-          // Capture dirty state BEFORE applyPending clears pending. This
-          // ensures we notify even when the user toggled loops but the net
-          // result was zero binding changes (e.g., arm then disarm the same
-          // loop — a "XOR no-op" that would otherwise exit silently).
-          const hadChanges = dirty;
-          applyPending(ui, bindings, pending);
-          if (!hadChanges) {
-            ui.notify("No changes to apply.", "info");
-          }
-          return;
-        }
-        // Cancel from the confirm returns to the picker; pending stays.
-        continue;
-      }
-
-      // Refresh: re-read store + bindings, clear pending — the user sees
-      // the current state and any stale toggles from external changes are discarded.
-      if (selected === SENTINEL_REFRESH) {
-        bindings.load();
-        const allLoops = getStore().list();
-        const [newMine, newOthers] = partitionLoopsBySession(allLoops, mySessionId);
-        mine.length = 0;
-        mine.push(...newMine);
-        others.length = 0;
-        others.push(...newOthers);
-        // Re-scan other-session bindings in case another terminal armed loops
-        // while the Governor was open.
-        otherSessionCounts.clear();
-        for (const [id, count] of bindings.getOtherSessionBindingCounts()) {
-          otherSessionCounts.set(id, count);
-        }
-        pending.clear();
-        dirty = false;
-        ui.notify("Governor refreshed — loop list and bindings re-read from disk.", "info");
-        continue;
-      }
-
-      // Disarm all: mark every currently-bound loop for disarm, then refresh.
-      if (selected === SENTINEL_DISARM_ALL) {
-        for (const l of loops) {
-          if (bindings.has(l.id)) {
-            pending.set(l.id, "disarm");
-          } else {
-            // If user already toggled it to arm, undo that toggle so the
-            // disarm-all truly means "all currently bound → disarmed".
-            pending.delete(l.id);
-          }
-        }
-        dirty = true;
-        continue;
-      }
-
-      // Otherwise it must be a loop row — toggle and refresh.
-      const match = selected.match(/#(\d+)/);
-      if (!match) continue;
-      const id = match[1];
-      const entry = getStore().get(id);
-      const currentlyBound = bindings.has(id);
-      const prev = pending.get(id);
-
-      // No pending yet → decide toggle based on current bound state.
-      // Pending exists → flip it (so user can correct a misclick).
-      if (prev === undefined) {
-        pending.set(id, currentlyBound ? "disarm" : "arm");
-        // Warn when arming a paused loop — it won't fire until resumed.
-        if (pending.get(id) === "arm" && entry?.status === "paused") {
-          ui.notify(
-            `Loop #${id} is paused — it won't fire until resumed. Run /loop to view loops and resume it.`,
-            "warning",
-          );
-        }
-      } else if (prev === "arm") {
-        pending.set(id, "disarm");
-      } else {
-        // prev === "disarm" — undo the disarm and leave loop in its original
-        // bound state (no pending entry needed).
-        pending.delete(id);
-      }
-      dirty = true;
-    }
-  }
-
-  /**
-   * Partitions loops into "My loops" (created by this session) and
-   * "Other terminals" (created by other sessions or before createdBy was added).
-   * Preserves original order within each partition.
-   */
-  function partitionLoopsBySession(loops: LoopEntry[], sessionId: string | undefined): [LoopEntry[], LoopEntry[]] {
-    const mine: LoopEntry[] = [];
-    const others: LoopEntry[] = [];
-    for (const loop of loops) {
-      if (loop.createdBy === sessionId) {
-        mine.push(loop);
-      } else {
-        others.push(loop);
-      }
-    }
-    return [mine, others];
-  }
-
-  function buildGovernorRows(
-    mine: LoopEntry[],
-    others: LoopEntry[],
-    bindings: BindingsStore,
-    pending: Map<string, Toggle>,
-    otherSessionCounts: Map<string, number>,
-  ): string[] {
-    const rows: string[] = [];
-
-    if (mine.length > 0) {
-      rows.push("— My loops —");
-      for (const l of mine) {
-        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
-      }
-    }
-
-    if (others.length > 0) {
-      rows.push("— Other terminals —");
-      for (const l of others) {
-        rows.push(formatLoopRow(l, bindings, pending, otherSessionCounts));
-      }
-    }
-
-    return rows;
-  }
-
-  function formatLoopRow(
-    l: LoopEntry,
-    bindings: BindingsStore,
-    pending: Map<string, Toggle>,
-    otherSessionCounts: Map<string, number>,
-  ): string {
-    const triggerDesc = l.trigger.type === "cron"
-      ? `cron: ${l.trigger.schedule}`
-      : l.trigger.type === "event"
-        ? `event: ${l.trigger.source}`
-        : `hybrid: ${l.trigger.cron} + event:${l.trigger.event.source} (${formatDebounceMs(l.trigger.debounceMs)} debounce)`;
-    const finalBound = computeFinalBound(l.id, bindings, pending);
-    const box = finalBound ? "[x]" : "[ ]";
-    // Paused loops get a `~` suffix on the checkbox so the user can see
-    // at a glance that a bound loop won't fire until resumed.
-    const pausedMark = l.status === "paused" ? "~" : "";
-    // G-44: annotate with per-session binding count so the user can see
-    // which loops are armed by other terminals in project scope.
-    const otherCount = otherSessionCounts.get(l.id) ?? 0;
-    const otherMark = otherCount > 0 ? ` · bound in ${otherCount} other session${otherCount === 1 ? "" : "s"}` : "";
-    return `${box}${pausedMark} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})${otherMark}`;
-  }
-
-  function computeFinalBound(id: string, bindings: BindingsStore, pending: Map<string, Toggle>): boolean {
-    const current = bindings.has(id);
-    const toggle = pending.get(id);
-    if (toggle === undefined) return current;
-    return toggle === "arm";
-  }
-
-  function buildDiffSummary(
-    loops: LoopEntry[],
-    bindings: BindingsStore,
-    pending: Map<string, Toggle>,
-  ): string {
-    if (pending.size === 0) return "No changes.";
-
-    // Build pending arm/disarm lists and collect paused-loop warnings.
-    // Each pending change shows the loop prompt so the user knows exactly what
-    // they are arming or disarming — not just the loop ID.
-    const loopMap = new Map(loops.map((l) => [l.id, l]));
-    const armLines: string[] = [];
-    const disarmLines: string[] = [];
-    const pausedWarnings: string[] = [];
-    for (const [id, toggle] of pending) {
-      const entry = loopMap.get(id);
-      const label = entry ? `  #${id} ${entry.prompt.slice(0, 40)}` : `  #${id}`;
-      if (toggle === "arm") {
-        armLines.push(label);
-        if (entry?.status === "paused") pausedWarnings.push(`#${id}`);
-      } else {
-        disarmLines.push(label);
-      }
-    }
-
-    // Show currently armed loops that will remain armed after pending changes,
-    // so users can see the full picture when they have pre-existing bindings.
-    const willRemainArmed = loops
-      .filter((l) => {
-        if (!bindings.has(l.id)) return false;
-        return pending.get(l.id) !== "disarm";
-      })
-      .map((l) => `#${l.id}`);
-
-    const lines: string[] = [];
-    if (willRemainArmed.length > 0) {
-      lines.push(`Armed: ${willRemainArmed.join(", ")}  (unchanged)`);
-    }
-    for (const l of armLines) lines.push(`Arm:\n${l}`);
-    for (const l of disarmLines) lines.push(`Disarm:\n${l}`);
-    // Warn about paused loops pending arm — they won't fire until resumed.
-    if (pausedWarnings.length > 0) {
-      const verb = pausedWarnings.length > 1 ? "are" : "is";
-      lines.push(`Warning: ${pausedWarnings.join(", ")} ${verb} PAUSED — won't fire until resumed.`);
-    }
-    return lines.join("\n");
-  }
-
-  function applyPending(
-    ui: ExtensionUIContext,
-    bindings: BindingsStore,
-    pending: Map<string, Toggle>,
-  ): void {
-    if (pending.size === 0) {
-      ui.notify("No changes to apply.", "info");
-      return;
-    }
-    const armed: string[] = [];
-    const disarmed: string[] = [];
-    const orphaned: string[] = [];
-
-    for (const [id, toggle] of pending) {
-      const entry = getStore().get(id);
-      if (!entry) {
-        orphaned.push(`#${id}`);
-        // Clean up orphaned binding even though the loop no longer exists —
-        // prevents stale entries from accumulating in the bindings file.
-        bindings.remove(id);
-        continue;
-      }
-      if (toggle === "arm") {
-        bindings.add(id);
-        getTriggerSystem().add(entry);
-        armed.push(`#${id}`);
-      } else {
-        bindings.remove(id);
-        getTriggerSystem().remove(id);
-        disarmed.push(`#${id}`);
-      }
-    }
-
-    pending.clear();
-    updateWidget();
-
-    if (orphaned.length > 0) {
-      ui.notify(
-        `Skipped — loops no longer exist: ${orphaned.join(", ")}. Re-open /loop-resume to see the current loop list.`,
-        "warning",
-      );
-    }
-
-    const summary = [
-      armed.length > 0 ? `Armed: ${armed.join(", ")}` : null,
-      disarmed.length > 0 ? `Disarmed: ${disarmed.join(", ")}` : null,
-    ].filter(Boolean).join(" · ");
-    ui.notify(summary || "Governor applied.", "info");
-  }
-
-  // ── /loop-bindings: read-only diagnostic view of this session's bindings ──
-
-  pi.registerCommand("loop-bindings", {
-    description: "View which loops are bound (armed) in this session. Read-only — use /loop-resume to change bindings.",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      await viewBindings(ctx.ui);
+      return dynamicLoop(ui, route.goal);
     },
   });
 }

@@ -1,3 +1,5 @@
+// VENDORED TEST HARNESS — canonical copy lives in pi-loop; pi-orca vendors
+// this file verbatim under test/helpers/. Keep divergences behind options.
 import { vi } from "vitest";
 
 export interface MockPiOptions {
@@ -7,6 +9,15 @@ export interface MockPiOptions {
   pendingTaskCount?: () => number;
   /** Respond to `tasks:rpc:create` with this task id (treats pi-tasks as the task backend). */
   respondToTaskCreate?: () => string;
+  /**
+   * Respond to `tasks:rpc:clean` with a canned `{ success: true }` (default true —
+   * disable when a real tasks:rpc server under test owns the channel).
+   */
+  respondToTaskClean?: boolean;
+  /** Respond to `tasks:rpc:update` with a canned reply built from the request. */
+  respondToTaskUpdate?: (request: any) => { task: any } | { error: string };
+  /** Respond to `subagents:rpc:spawn` with this agent id (simulates pi-subagents). */
+  respondToSubagentSpawn?: (request: any) => string;
   /** Swallow `monitor:done` emits (used to isolate the direct-callback path). */
   suppressMonitorDoneDispatch?: boolean;
 }
@@ -93,9 +104,32 @@ export function createMockPi(options: MockPiOptions = {}): MockPi {
         return;
       }
 
-      if (name === "tasks:rpc:clean" && payload?.requestId) {
+      if (name === "tasks:rpc:clean" && payload?.requestId && options.respondToTaskClean !== false) {
         queueMicrotask(() => {
           events.emit(`tasks:rpc:clean:reply:${payload.requestId}`, { success: true });
+        });
+        return;
+      }
+
+      if (name === "tasks:rpc:update" && payload?.requestId && options.respondToTaskUpdate) {
+        queueMicrotask(() => {
+          const result = options.respondToTaskUpdate?.(payload);
+          events.emit(
+            `tasks:rpc:update:reply:${payload.requestId}`,
+            result && "error" in result
+              ? { success: false, error: result.error }
+              : { success: true, data: result },
+          );
+        });
+        return;
+      }
+
+      if (name === "subagents:rpc:spawn" && payload?.requestId && options.respondToSubagentSpawn) {
+        queueMicrotask(() => {
+          events.emit(`subagents:rpc:spawn:reply:${payload.requestId}`, {
+            success: true,
+            data: { id: options.respondToSubagentSpawn?.(payload) ?? "agent-1" },
+          });
         });
         return;
       }
@@ -122,15 +156,11 @@ export function createMockPi(options: MockPiOptions = {}): MockPi {
 
   const pi: any = {
     events,
-    // Use mockImplementation so the handler-push logic survives vi.restoreAllMocks():
-    // without it, the mock's implementation is restored to an empty fn after each
-    // test's afterEach, breaking subsequent registerSessionRuntimeHooks calls that
-    // depend on pi.on being functional (e.g. the session-runtime fire-on-create test).
-    on: vi.fn((name: string, handler: (data: any, ctx: any) => unknown) => {
+    on(name: string, handler: (data: any, ctx: any) => unknown) {
       const handlers = extensionHandlers.get(name) ?? [];
       handlers.push(handler);
       extensionHandlers.set(name, handlers);
-    }),
+    },
     registerTool(tool: RegisteredTool) {
       toolMap.set(tool.name, tool);
     },
@@ -164,12 +194,42 @@ export function createMockPi(options: MockPiOptions = {}): MockPi {
   };
 }
 
-/** Standard extension context used by lifecycle-handler tests. */
-export function createCtx(hasPendingMessages = false) {
+export interface MockCtxOptions {
+  hasPendingMessages?: boolean;
+  cwd?: string;
+  isIdle?: boolean;
+  sessionId?: string;
+  modelRegistry?: unknown;
+}
+
+/**
+ * Standard extension context used by lifecycle-handler tests. Superset of the
+ * ctx shapes both pi-loop (setStatus/setWidget, hasPendingMessages) and
+ * pi-orca (notify, cwd, isIdle) depend on. `notifications` records every
+ * ui.notify call; `statuses` records every ui.setStatus call. Accepts a bare
+ * boolean for backward compatibility with `createCtx(hasPendingMessages)`.
+ */
+export function createCtx(options: boolean | MockCtxOptions = false) {
+  const opts = typeof options === "boolean" ? { hasPendingMessages: options } : options;
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const statuses: Array<{ key: string; text: string | undefined }> = [];
   return {
-    ui: { setStatus() {}, setWidget() {} },
-    hasPendingMessages: () => hasPendingMessages,
-    sessionManager: { getSessionId: () => "test-session" },
+    ui: {
+      setStatus(key: string, text: string | undefined) {
+        statuses.push({ key, text });
+      },
+      setWidget() {},
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
+    },
+    notifications,
+    statuses,
+    cwd: opts.cwd ?? process.cwd(),
+    isIdle: () => opts.isIdle ?? true,
+    hasPendingMessages: () => opts.hasPendingMessages ?? false,
+    sessionManager: { getSessionId: () => opts.sessionId ?? "test-session" },
+    ...(opts.modelRegistry ? { modelRegistry: opts.modelRegistry } : {}),
   };
 }
 

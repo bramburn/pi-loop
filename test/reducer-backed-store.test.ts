@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -121,6 +121,28 @@ describe("ReducerBackedStore", () => {
       // A second store reading the same file sees the persisted entry.
       const b = new ItemStore(path);
       expect(b.get("x")).toEqual({ id: "x", value: 42 });
+    });
+
+    it("fails closed when the only snapshot is corrupt", () => {
+      const path = join(dir, "items.json");
+      writeFileSync(path, "{not-json");
+
+      expect(() => new ItemStore(path)).toThrow(/corrupt store.*items\.json/i);
+      expect(readFileSync(path, "utf-8")).toBe("{not-json");
+    });
+
+    it("recovers the previous valid snapshot and quarantines the corrupt current file", () => {
+      const path = join(dir, "items.json");
+      const first = new ItemStore(path);
+      first.set("x", 1);
+      first.set("y", 2);
+      writeFileSync(path, "{not-json");
+
+      const recovered = new ItemStore(path);
+
+      expect(recovered.list()).toEqual([{ id: "x", value: 1 }]);
+      expect(JSON.parse(readFileSync(path, "utf-8")).items).toEqual([{ id: "x", value: 1 }]);
+      expect(readdirSync(dir).some((name) => name.startsWith("items.json.corrupt-"))).toBe(true);
     });
 
     it("deleteFileIfEmpty removes the backing file only when empty", () => {

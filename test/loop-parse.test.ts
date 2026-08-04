@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cronToNextFire, parseInterval } from "../src/loop-parse.js";
+import { cronToNextFire, isValidCronExpression, parseInterval } from "../src/loop-parse.js";
 
 describe("parseInterval", () => {
   describe("human-readable intervals", () => {
@@ -97,6 +97,20 @@ describe("parseInterval", () => {
       const result = parseInterval("30 14 15 3 *");
       expect(result.cron).toBe("30 14 15 3 *");
     });
+
+    it("rejects out-of-range fields", () => {
+      expect(() => parseInterval("99 * * * *")).toThrow("Invalid cron expression");
+      expect(() => parseInterval("0 24 * * *")).toThrow("Invalid cron expression");
+      expect(() => parseInterval("0 0 0 * *")).toThrow("Invalid cron expression");
+    });
+
+    it("recognizes supported cron syntax without accepting prose", () => {
+      expect(isValidCronExpression("0 9 * * 1-5")).toBe(true);
+      expect(isValidCronExpression("*/15 * * * *")).toBe(true);
+      expect(isValidCronExpression("2026 release must ship by")).toBe(false);
+      expect(isValidCronExpression("99 * * * *")).toBe(false);
+      expect(isValidCronExpression("5/10 * * * *")).toBe(false);
+    });
   });
 });
 
@@ -152,6 +166,27 @@ describe("cronToNextFire", () => {
     const next = cronToNextFire("0 9-17 * * *", from);
     expect(next.getHours()).toBeGreaterThanOrEqual(9);
     expect(next.getHours()).toBeLessThanOrEqual(17);
+  });
+
+  it("anchors day-of-month wildcard steps at day one", () => {
+    const from = new Date(2026, 0, 1, 0, 1, 0, 0);
+    expect(cronToNextFire("0 0 */2 * *", from)).toEqual(
+      new Date(2026, 0, 3, 0, 0, 0, 0),
+    );
+  });
+
+  it("anchors month wildcard steps at January", () => {
+    const from = new Date(2026, 0, 1, 0, 1, 0, 0);
+    expect(cronToNextFire("0 0 1 */2 *", from)).toEqual(
+      new Date(2026, 2, 1, 0, 0, 0, 0),
+    );
+  });
+
+  it("finds an annual schedule exactly one leap year later", () => {
+    const from = new Date(2024, 0, 1, 0, 0, 0, 0);
+    expect(cronToNextFire("0 0 1 1 *", from)).toEqual(
+      new Date(2025, 0, 1, 0, 0, 0, 0),
+    );
   });
 
   it("returns a Date object", () => {

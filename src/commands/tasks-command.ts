@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { emitNativeTaskEvent } from "../runtime/task-events.js";
 import { TaskStore } from "../task-store.js";
 import type { TaskEntry } from "../task-types.js";
-import { openSettingsMenu } from "../ui/settings-menu.js";
 
 export interface TaskBacklogResult {
   created: boolean;
@@ -14,22 +13,13 @@ export interface TasksCommandOptions {
   getNativeTaskStore: () => TaskStore | undefined;
   evaluateTaskBacklog: (taskStore: TaskStore, pendingCount: number) => Promise<TaskBacklogResult>;
   updateWidget: () => void;
-  cwd: string;
 }
 
 export function registerTasksCommand(options: TasksCommandOptions): void {
-  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget, cwd } = options;
+  const { pi, getNativeTaskStore, evaluateTaskBacklog, updateWidget } = options;
 
   async function emitCreated(entry: TaskEntry) {
-    // Closes G-19: when pi-tasks is active, the native tools are not
-    // registered, so this code path is unreachable in practice. The
-    // suppressIfPiTasks option is defensive — if a future change makes
-    // these tools reachable while pi-tasks is active, events are
-    // suppressed automatically.
-    emitNativeTaskEvent(pi, "tasks:created", entry, undefined, {
-      suppressIfPiTasks: true,
-      piTasksAvailable: !getNativeTaskStore(),
-    });
+    emitNativeTaskEvent(pi, "tasks:created", entry);
     const taskStore = getNativeTaskStore();
     if (!taskStore) return { created: false } satisfies TaskBacklogResult;
     const backlog = await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
@@ -44,11 +34,10 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
       return;
     }
 
-    const subject = await ui.input("Task subject (max 80 chars)");
+    const subject = await ui.input("Task subject");
     if (!subject) return;
-    const trimmed = subject.slice(0, 80);
-    const description = await ui.input("Task description") || trimmed;
-    const entry = taskStore.create(trimmed, description);
+    const description = await ui.input("Task description") || subject;
+    const entry = taskStore.create(subject, description);
     const backlog = await emitCreated(entry);
     ui.notify(`Task #${entry.id} created`, "info");
     if (backlog.created && backlog.entry) {
@@ -65,9 +54,8 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
 
     const tasks = taskStore.list();
     const choices = tasks.map((task) => {
-      const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : "*";
-      const dep = task.blockedBy.length > 0 ? ` [blocked by ${task.blockedBy.map((b) => `#${b}`).join(", ")}]` : "";
-      return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60 - dep.length)}${dep}`;
+      const icon = task.status === "in_progress" ? ">" : task.status === "completed" ? "ok" : task.status === "closed" ? "x" : "*";
+      return `${icon} #${task.id} [${task.status}] ${task.subject.slice(0, 60)}`;
     });
     choices.unshift("+ Create task");
     choices.push("< Back");
@@ -79,107 +67,66 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
       return viewNativeTasks(ui);
     }
 
-    const match = selected.match(/#(\d+)/);
-    if (!match) return viewNativeTasks(ui);
+    const taskId = selected.match(/#(\d+)/)?.[1];
+    if (!taskId) return viewNativeTasks(ui);
 
-    const task = taskStore.get(match[1]);
+    const task = taskStore.get(taskId);
     if (!task) return viewNativeTasks(ui);
 
-    const detailLines: string[] = [`#${task.id}: ${task.subject}`, ""];
-    if (task.owner) detailLines.push(`Owner: ${task.owner}`);
-    if (task.activeForm) detailLines.push(`Active: ${task.activeForm}`);
-    detailLines.push(task.description);
-    if (task.blockedBy.length > 0) {
-      const { openBlockers } = taskStore.getWithDependencies(task.id);
-      const openIds = new Set(openBlockers.map((t) => t.id));
-      const blockerLines = task.blockedBy.map((b) => {
-        const blocker = taskStore.get(b);
-        if (!blocker) return `#${b} (unknown)`;
-        return openIds.has(b) ? `#${b} ${blocker.subject}` : `#${b} ${blocker.subject} [completed]`;
-      });
-      detailLines.push("", `Blocked by: ${blockerLines.join(", ")}`);
-    }
-    if (task.blocks.length > 0) {
-      const blockLines = task.blocks.map((b) => {
-        const blocked = taskStore.get(b);
-        return blocked ? `#${b} ${blocked.subject}` : `#${b} (unknown)`;
-      });
-      detailLines.push("", `Blocks: ${blockLines.join(", ")}`);
-    }
-    if (Object.keys(task.metadata).length > 0) {
-      detailLines.push("", `Metadata: ${JSON.stringify(task.metadata)}`);
-    }
-
-    const actions = ["x Delete", "✎ Edit"];
+    const actions = ["x Delete"];
     if (task.status === "pending") {
+      actions.unshift("x Close without completing");
       actions.unshift("ok Complete");
       actions.unshift("> Start");
     } else if (task.status === "in_progress") {
+      actions.unshift("x Close without completing");
       actions.unshift("ok Complete");
-      actions.unshift("* Return to pending");
     } else {
       actions.unshift("* Reopen");
     }
-    if (task.status === "pending") actions.push("+ Add blocker");
     actions.push("< Back");
 
-    const action = await ui.select(detailLines.join("\n"), actions);
+    const action = await ui.select(`#${task.id}: ${task.subject}\n\n${task.description}`, actions);
     if (!action || action === "< Back") return viewNativeTasks(ui);
 
-    if (action === "x Delete") {
-      taskStore.delete(task.id);
-      emitNativeTaskEvent(pi, "tasks:deleted", task, task.status, {
-        suppressIfPiTasks: true,
-        piTasksAvailable: !getNativeTaskStore(),
-      });
-      ui.notify(`Task #${task.id} deleted`, "info");
-    } else if (action === "> Start") {
-      const next = taskStore.start(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status, {
-        suppressIfPiTasks: true,
-        piTasksAvailable: !getNativeTaskStore(),
-      });
-      ui.notify(`Task #${task.id} started`, "info");
-    } else if (action === "ok Complete") {
-      const next = taskStore.complete(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status, {
-        suppressIfPiTasks: true,
-        piTasksAvailable: !getNativeTaskStore(),
-      });
-      ui.notify(`Task #${task.id} completed`, "info");
-    } else if (action === "* Return to pending" || action === "* Reopen") {
-      const next = taskStore.reopen(task.id);
-      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status, {
-        suppressIfPiTasks: true,
-        piTasksAvailable: !getNativeTaskStore(),
-      });
-      ui.notify(`Task #${task.id} reopened`, "info");
-    } else if (action === "✎ Edit") {
-      const newSubject = await ui.input("New subject", task.subject);
-      if (!newSubject) return viewNativeTasks(ui);
-      const newDesc = await ui.input("New description", task.description);
-      const updated = taskStore.updateDetails(task.id, {
-        subject: newSubject.trim() || task.subject,
-        description: newDesc?.trim() || task.description,
-      });
-      if (updated) emitNativeTaskEvent(pi, "tasks:updated", updated, task.status, {
-        suppressIfPiTasks: true,
-        piTasksAvailable: !getNativeTaskStore(),
-      });
-      ui.notify(`Task #${task.id} updated`, "info");
-    } else if (action === "+ Add blocker") {
-      const blockerId = await ui.input("Blocker task ID (e.g. 1, 2)");
-      if (!blockerId) return viewNativeTasks(ui);
-      const trimmed = blockerId.trim();
-      if (!trimmed) return viewNativeTasks(ui);
-      const blockerIds = trimmed.split(/[\s,]+/).filter(Boolean);
-      const result = taskStore.addBlockedBy(task.id, blockerIds);
-      if (result.warnings.selfDependency) ui.notify(`Task #${task.id}: cannot block itself`, "warning");
-      if (result.warnings.cycle) ui.notify(`Task #${task.id}: would create a dependency cycle — not applied`, "warning");
-      else if (result.warnings.danglingReference?.length) ui.notify(`Task #${task.id}: unknown tasks: #${result.warnings.danglingReference.join(", #")}`, "warning");
-      else ui.notify(`Task #${task.id} is now blocked by ${blockerIds.join(", ")}`, "info");
+    const claimId = task.claim ? await ui.input("Claim token required") : undefined;
+    if (task.claim && !claimId) {
+      ui.notify(`Task #${task.id} unchanged: claim token required`, "warning");
+      return viewNativeTasks(ui);
     }
 
+    let changed = false;
+    if (action === "x Delete") {
+      changed = taskStore.delete(task.id, claimId);
+      if (changed) emitNativeTaskEvent(pi, "tasks:deleted", task, task.status);
+    } else if (action === "> Start") {
+      const next = taskStore.start(task.id);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:started", next, task.status);
+    } else if (action === "ok Complete") {
+      const next = taskStore.complete(task.id, claimId);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:completed", next, task.status);
+    } else if (action === "x Close without completing") {
+      const next = taskStore.close(task.id, claimId);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:closed", next, task.status);
+    } else if (action === "* Reopen") {
+      const next = taskStore.reopen(task.id);
+      changed = next !== undefined;
+      if (next) emitNativeTaskEvent(pi, "tasks:reopened", next, task.status);
+    }
+
+    if (!changed) {
+      ui.notify(`Task #${task.id} unchanged: operation rejected`, "warning");
+      return viewNativeTasks(ui);
+    }
+    const pastTense = action === "x Delete" ? "deleted"
+      : action === "> Start" ? "started"
+        : action === "ok Complete" ? "completed"
+          : action === "x Close without completing" ? "closed without completing"
+            : "reopened";
+    ui.notify(`Task #${task.id} ${pastTense}`, "info");
     updateWidget();
     await evaluateTaskBacklog(taskStore, taskStore.pendingCount());
     return viewNativeTasks(ui);
@@ -203,41 +150,7 @@ export function registerTasksCommand(options: TasksCommandOptions): void {
         }
         return;
       }
-      // Top-level menu: matches /loop's interactive UX.
-      const allCount = taskStore.list().length;
-      const completedCount = taskStore.list().filter((t) => t.status === "completed").length;
-      const choice = await ctx.ui.select("Tasks", [
-        "Create task",
-        `View tasks (${allCount})`,
-        `Clear completed (${completedCount})`,
-        "Clear all",
-        "Settings",
-      ]);
-      if (!choice) return;
-      if (choice.startsWith("Create")) return createNativeTaskInteractively(ctx.ui);
-      if (choice.startsWith("View")) return viewNativeTasks(ctx.ui);
-      if (choice.startsWith("Clear completed")) {
-        const removed = taskStore.pruneCompleted();
-        ctx.ui.notify(`Pruned ${removed} completed task(s)`, "info");
-        updateWidget();
-        return;
-      }
-      if (choice === "Clear all") {
-        const confirmed = await ctx.ui.select("Clear all tasks?", ["< Cancel", "Clear all"]);
-        if (confirmed !== "Clear all") return;
-        const all = taskStore.list();
-        for (const t of all) taskStore.delete(t.id);
-        ctx.ui.notify(`Cleared ${all.length} task(s)`, "info");
-        updateWidget();
-        return;
-      }
-      if (choice === "Settings") {
-        await openSettingsMenu({
-          cwd,
-          ui: ctx.ui,
-          onSave: () => updateWidget(),
-        });
-      }
+      await viewNativeTasks(ctx.ui);
     },
   });
 }

@@ -1,10 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { TaskEntry, TaskStatus } from "../task-types.js";
+import type { TaskEntry, TaskStatus, TaskWorkflowLink } from "../task-types.js";
 
 export type NativeTaskEventName =
   | "tasks:created"
   | "tasks:started"
   | "tasks:completed"
+  | "tasks:closed"
   | "tasks:reopened"
   | "tasks:updated"
   | "tasks:deleted";
@@ -18,27 +19,17 @@ export interface NativeTaskEventPayload {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  closedAt?: number;
   metadata?: Record<string, unknown>;
+  workflow?: TaskWorkflowLink;
 }
 
-/**
- * Closes G-19: native task events are suppressed when pi-tasks is active.
- * Pass `tasksAvailable: true` from the caller when pi-tasks has been
- * detected (via tasks:rpc:ping reply). The event is still emitted on the
- * bus so the caller's own subscribers can react, but a no-op shortcut
- * is exposed via the second argument for callers that want to short-circuit.
- */
 export function emitNativeTaskEvent(
   pi: ExtensionAPI,
   name: NativeTaskEventName,
   entry: TaskEntry,
   previousStatus?: TaskStatus,
-  options: { suppressIfPiTasks?: boolean; piTasksAvailable?: boolean } = {},
 ): void {
-  // Suppress when pi-tasks is the active task system. Native task tools
-  // are only registered when pi-tasks is absent, so emitting these events
-  // would conflict with pi-tasks's own event semantics.
-  if (options.suppressIfPiTasks && options.piTasksAvailable) return;
   pi.events.emit(name, {
     taskId: entry.id,
     subject: entry.subject,
@@ -48,6 +39,8 @@ export function emitNativeTaskEvent(
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     completedAt: entry.completedAt,
+    closedAt: entry.closedAt,
     metadata: entry.metadata,
+    workflow: entry.workflow,
   } satisfies NativeTaskEventPayload);
 }

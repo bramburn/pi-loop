@@ -5,6 +5,8 @@ const UNIT_TO_CRON: Record<string, number> = {
   d: 86400,
 };
 
+const MAX_CRON_SEARCH_MINUTES = 366 * 24 * 60;
+
 const COMMON_INTERVALS: Record<number, string> = {
   60: "*/1 * * * *",
   120: "*/2 * * * *",
@@ -23,8 +25,10 @@ const COMMON_INTERVALS: Record<number, string> = {
 };
 
 function roundToNearestCommon(seconds: number): { cron: string; description: string } {
+  // COMMON_INTERVALS is a non-empty const table, so keys[0] and
+  // COMMON_INTERVALS[best] below are true invariants, not runtime fallbacks.
   const keys = Object.keys(COMMON_INTERVALS).map(Number).sort((a, b) => a - b);
-  let best = keys[0];
+  let best = keys[0] as number;
   for (const k of keys) {
     if (Math.abs(k - seconds) < Math.abs(best - seconds)) best = k;
   }
@@ -43,7 +47,7 @@ function roundToNearestCommon(seconds: number): { cron: string; description: str
     }
   }
 
-  return { cron: COMMON_INTERVALS[best], description };
+  return { cron: COMMON_INTERVALS[best] as string, description };
 }
 
 function isFullCron(expr: string): boolean {
@@ -51,17 +55,60 @@ function isFullCron(expr: string): boolean {
   return parts.length === 5;
 }
 
+function parseCronNumber(input: string, min: number, max: number): number | undefined {
+  if (!/^\d+$/.test(input)) return undefined;
+  const value = Number.parseInt(input, 10);
+  return value >= min && value <= max ? value : undefined;
+}
+
+function isValidCronField(field: string, min: number, max: number): boolean {
+  return field.split(",").every((part) => {
+    const [base, step, extra] = part.split("/");
+    if (extra !== undefined || base === undefined) return false;
+    if (step !== undefined && (parseCronNumber(step, 1, max - min + 1) === undefined)) return false;
+    if (base === "*") return true;
+
+    const range = base.split("-");
+    if (range.length === 1) return step === undefined && parseCronNumber(base, min, max) !== undefined;
+    if (range.length !== 2) return false;
+
+    const start = parseCronNumber(range[0] ?? "", min, max);
+    const end = parseCronNumber(range[1] ?? "", min, max);
+    return start !== undefined && end !== undefined && start <= end;
+  });
+}
+
+export function isValidCronExpression(expr: string): boolean {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+
+  const ranges = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 6],
+  ] as const;
+  return fields.every((field, index) => {
+    const range = ranges[index];
+    return range !== undefined && isValidCronField(field, range[0], range[1]);
+  });
+}
+
 export function parseInterval(input: string): { cron: string; description: string } {
   const trimmed = input.trim();
 
   if (isFullCron(trimmed)) {
+    if (!isValidCronExpression(trimmed)) {
+      throw new Error(`Invalid cron expression: ${trimmed}`);
+    }
     return { cron: trimmed, description: `cron: ${trimmed}` };
   }
 
   const match = trimmed.match(/^(\d+)\s*(s|m|h|d)$/i);
   if (match) {
-    const value = parseInt(match[1], 10);
-    const unit = match[2].toLowerCase();
+    const value = parseInt(match[1] ?? "", 10);
+    const unit = (match[2] ?? "").toLowerCase();
     const totalSec = value * (UNIT_TO_CRON[unit] ?? 60);
 
     if (totalSec < 60) {
@@ -78,20 +125,29 @@ export function parseInterval(input: string): { cron: string; description: strin
 
 export function cronToNextFire(cronExpr: string, fromDate: Date = new Date()): Date {
   const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) throw new Error(`Invalid cron expression: ${cronExpr}`);
+  if (!isValidCronExpression(cronExpr)) throw new Error(`Invalid cron expression: ${cronExpr}`);
 
   const [minF, hourF, dayF, monthF, dowF] = parts;
+  if (
+    minF === undefined ||
+    hourF === undefined ||
+    dayF === undefined ||
+    monthF === undefined ||
+    dowF === undefined
+  ) {
+    throw new Error(`Invalid cron expression: ${cronExpr}`);
+  }
   const now = new Date(fromDate);
   now.setSeconds(0, 0);
 
-  for (let minutesAdvanced = 1; minutesAdvanced < 525600; minutesAdvanced++) {
+  for (let minutesAdvanced = 1; minutesAdvanced <= MAX_CRON_SEARCH_MINUTES; minutesAdvanced++) {
     now.setMinutes(now.getMinutes() + 1);
 
-    if (!cronFieldMatches(minF, now.getMinutes())) continue;
-    if (!cronFieldMatches(hourF, now.getHours())) continue;
-    if (!cronFieldMatches(dayF, now.getDate())) continue;
-    if (!cronFieldMatches(monthF, now.getMonth() + 1)) continue;
-    if (!cronFieldMatches(dowF, now.getDay())) continue;
+    if (!cronFieldMatches(minF, now.getMinutes(), 0, 59)) continue;
+    if (!cronFieldMatches(hourF, now.getHours(), 0, 23)) continue;
+    if (!cronFieldMatches(dayF, now.getDate(), 1, 31)) continue;
+    if (!cronFieldMatches(monthF, now.getMonth() + 1, 1, 12)) continue;
+    if (!cronFieldMatches(dowF, now.getDay(), 0, 6)) continue;
 
     return new Date(now);
   }
@@ -99,7 +155,7 @@ export function cronToNextFire(cronExpr: string, fromDate: Date = new Date()): D
   throw new Error(`No matching time found for cron expression: ${cronExpr}`);
 }
 
-function cronFieldMatches(field: string, value: number): boolean {
+function cronFieldMatches(field: string, value: number, fieldMin: number, fieldMax: number): boolean {
   if (field === "*") return true;
 
   const parts = field.split(",");
@@ -107,16 +163,16 @@ function cronFieldMatches(field: string, value: number): boolean {
     if (part === "*") return true;
 
     if (part.includes("/")) {
-      const [range, stepStr] = part.split("/");
+      const [range = "", stepStr = ""] = part.split("/");
       const step = parseInt(stepStr, 10);
       let rangeMin: number;
       let rangeMax: number;
 
       if (range === "*") {
-        rangeMin = 0;
-        rangeMax = 59;
+        rangeMin = fieldMin;
+        rangeMax = fieldMax;
       } else if (range.includes("-")) {
-        const [minS, maxS] = range.split("-");
+        const [minS = "", maxS = ""] = range.split("-");
         rangeMin = parseInt(minS, 10);
         rangeMax = parseInt(maxS, 10);
       } else {
@@ -132,7 +188,7 @@ function cronFieldMatches(field: string, value: number): boolean {
     }
 
     if (part.includes("-")) {
-      const [minS, maxS] = part.split("-");
+      const [minS = "", maxS = ""] = part.split("-");
       const min = parseInt(minS, 10);
       const max = parseInt(maxS, 10);
       if (value >= min && value <= max) return true;

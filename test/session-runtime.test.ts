@@ -1,41 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BindingsStore } from "../src/runtime/bindings-store.js";
 import { registerSessionRuntimeHooks, type SessionRuntimeOptions } from "../src/runtime/session-runtime.js";
 import { createCtx, createMockPi } from "./helpers/mock-pi.js";
 
 function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
   const { pi, extensionHandlers } = createMockPi();
   const scheduler = { nextFire: vi.fn(() => undefined), pump: vi.fn() };
-  const bindingsStore = new BindingsStore(undefined, "memory");
-  const triggerSystem = {
-    start: vi.fn(),
-    stop: vi.fn(),
-    add: vi.fn(),
-    remove: vi.fn(),
-    wasRecentlyFired: vi.fn(() => false),
-  };
   const options: SessionRuntimeOptions = {
     pi,
-    getLoopScope: () => "memory", // skip session store recreation
+    getLoopScope: () => "memory",
     getPiLoopEnv: () => undefined,
     recreateSessionStore: vi.fn(),
     clearAllLoops: vi.fn(),
     getStore: () => ({ list: () => [], clearExpired: vi.fn(), expireEventLoops: vi.fn() }) as any,
     getScheduler: () => scheduler as any,
-    getTriggerSystem: () => triggerSystem as any,
-    getBindingsStore: () => bindingsStore,
-    getLatestCtx: () => undefined,
+    getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn() }),
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
-    widget: { setUICtx: vi.fn(), update: vi.fn(), dispose: vi.fn() },
+    widget: { setUICtx: vi.fn(), update: vi.fn() },
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),
+      queueOrDeliverMonitorStarted: vi.fn(async () => {}),
+      discardMonitorStarted: vi.fn(),
       flushPendingNotifications: vi.fn(async () => {}),
       clear: vi.fn(),
     },
     flushPendingNotifications: vi.fn(async () => {}),
+    migrateTaskBacklogLoops: vi.fn(() => 0),
     cleanupTaskBacklogLoops: vi.fn(async () => 0),
+    adoptTaskBacklogLoops: vi.fn(async () => 0),
+    releaseTaskBacklogWakes: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
     cleanDoneTasks: vi.fn(async () => {}),
     ...overrides,
@@ -65,6 +59,65 @@ describe("session-runtime heartbeat lifecycle", () => {
     expect(unref).toHaveBeenCalledTimes(1); // never keeps a `pi -p` process alive
   });
 
+  it("migrates persisted backlog prompts before starting loop triggers", async () => {
+    const calls: string[] = [];
+    const migrateTaskBacklogLoops = vi.fn(() => {
+      calls.push("migrate");
+      return 1;
+    });
+    const triggerSystem = {
+      start: vi.fn(() => calls.push("start")),
+      stop: vi.fn(),
+    };
+    const { drive } = setup({
+      migrateTaskBacklogLoops,
+      getStore: () => ({
+        list: () => [{ id: "8", status: "active" }],
+        clearExpired: vi.fn(),
+        expireEventLoops: vi.fn(),
+      }) as any,
+      getTriggerSystem: () => triggerSystem,
+    });
+
+    await drive("session_start");
+
+    expect(migrateTaskBacklogLoops).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["migrate", "start"]);
+  });
+
+  it("repaints the widget on session_start after the harness resets extension UI", async () => {
+    const widget = { setUICtx: vi.fn(), update: vi.fn() };
+    const setSessionId = vi.fn();
+    const { drive } = setup({ widget, setSessionId });
+
+    await drive("session_start");
+
+    expect(setSessionId).toHaveBeenCalledWith("test-session");
+    expect(widget.setUICtx).toHaveBeenCalledTimes(1);
+    expect(widget.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds the destination session during session_switch", async () => {
+    const setSessionId = vi.fn();
+    const { drive } = setup({ setSessionId });
+
+    await drive("session_switch");
+
+    expect(setSessionId.mock.calls).toEqual([[undefined], ["test-session"]]);
+  });
+
+  it("repaints the widget on heartbeat to recover an externally cleared status", async () => {
+    vi.useFakeTimers();
+    const widget = { setUICtx: vi.fn(), update: vi.fn() };
+    const { drive } = setup({ widget });
+
+    await drive("turn_start");
+    widget.update.mockClear();
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(widget.update).toHaveBeenCalledTimes(1);
+  });
+
   it("is idempotent — does not start a second interval across turn boundaries", async () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue({ unref: vi.fn() } as any);
 
@@ -76,19 +129,16 @@ describe("session-runtime heartbeat lifecycle", () => {
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the heartbeat on session_shutdown and disposes the widget", async () => {
+  it("clears the heartbeat on session_shutdown", async () => {
     const timer = { unref: vi.fn() };
     vi.spyOn(global, "setInterval").mockReturnValue(timer as any);
     const clearIntervalSpy = vi.spyOn(global, "clearInterval");
-    const disposeSpy = vi.fn();
 
-    const { drive } = setup({ widget: { setUICtx: vi.fn(), update: vi.fn(), dispose: disposeSpy } });
+    const { drive } = setup();
     await drive("turn_start");
     await drive("session_shutdown");
 
     expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
-    // widget.dispose() clears the status bar so no stale state remains after session ends
-    expect(disposeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not leak an unhandled rejection when a heartbeat pump throws", async () => {
@@ -99,288 +149,17 @@ describe("session-runtime heartbeat lifecycle", () => {
         throw new Error("pump boom");
       }),
     };
-    const { drive } = setup({ getScheduler: () => scheduler as any });
+    const widget = { setUICtx: vi.fn(), update: vi.fn() };
+    const { drive } = setup({ getScheduler: () => scheduler as any, widget });
 
     // before_agent_start starts the heartbeat without itself calling pumpLoops.
     await drive("before_agent_start");
+    widget.update.mockClear();
     // Fire one heartbeat tick → its pumpLoops() rejects. With the `.catch`, this
     // is swallowed; without it, vitest fails the test on the unhandled rejection.
     await vi.advanceTimersByTimeAsync(30000);
 
     expect(scheduler.pump).toHaveBeenCalled();
-  });
-});
-
-describe("session-runtime per-session bindings filter", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it("arms only loops whose ids are in the bindings set", async () => {
-    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
-    const bindingsStore = new BindingsStore(undefined, "memory");
-    bindingsStore.add("1");
-
-    const storedLoops = [
-      { id: "1", status: "active", trigger: { type: "cron", schedule: "*/5 * * * *" } },
-      { id: "2", status: "active", trigger: { type: "event", source: "x" } },
-      { id: "3", status: "active", trigger: { type: "cron", schedule: "*/10 * * * *" } },
-    ];
-    const triggerSystem = {
-      start: vi.fn(),
-      stop: vi.fn(),
-      add: vi.fn(),
-      remove: vi.fn(),
-      wasRecentlyFired: vi.fn(() => false),
-    };
-    const store = {
-      list: () => storedLoops,
-      clearExpired: vi.fn(),
-      expireEventLoops: vi.fn(),
-    };
-
-    const { drive } = setup({
-      getStore: () => store as any,
-      getTriggerSystem: () => triggerSystem as any,
-      getBindingsStore: () => bindingsStore,
-    });
-
-    await drive("before_agent_start");
-
-    expect(triggerSystem.add).toHaveBeenCalledTimes(1);
-    expect(triggerSystem.add.mock.calls[0][0].id).toBe("1");
-  });
-
-  it("arms zero loops when bindings set is empty (strict-isolation default)", async () => {
-    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
-    const bindingsStore = new BindingsStore(undefined, "memory");
-
-    const storedLoops = [
-      { id: "1", status: "active", trigger: { type: "cron", schedule: "*/5 * * * *" } },
-      { id: "2", status: "active", trigger: { type: "event", source: "x" } },
-    ];
-    const triggerSystem = {
-      start: vi.fn(),
-      stop: vi.fn(),
-      add: vi.fn(),
-      remove: vi.fn(),
-      wasRecentlyFired: vi.fn(() => false),
-    };
-    const store = {
-      list: () => storedLoops,
-      clearExpired: vi.fn(),
-      expireEventLoops: vi.fn(),
-    };
-
-    const { drive } = setup({
-      getStore: () => store as any,
-      getTriggerSystem: () => triggerSystem as any,
-      getBindingsStore: () => bindingsStore,
-    });
-
-    await drive("before_agent_start");
-
-    expect(triggerSystem.add).not.toHaveBeenCalled();
-    expect(triggerSystem.start).not.toHaveBeenCalled();
-  });
-
-  it("two sessions on the same repo arm disjoint subsets via independent bindings stores", async () => {
-    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
-    const bindingsA = new BindingsStore(undefined, "memory");
-    const bindingsB = new BindingsStore(undefined, "memory");
-    bindingsA.add("1");
-    bindingsA.add("5");
-    bindingsB.add("3");
-    bindingsB.add("7");
-
-    const storedLoops = [
-      { id: "1", status: "active", trigger: { type: "cron", schedule: "*/5 * * * *" } },
-      { id: "3", status: "active", trigger: { type: "cron", schedule: "*/15 * * * *" } },
-      { id: "5", status: "active", trigger: { type: "event", source: "x" } },
-      { id: "7", status: "active", trigger: { type: "event", source: "y" } },
-    ];
-    const triggerSystemA = {
-      start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn(), wasRecentlyFired: vi.fn(() => false),
-    };
-    const triggerSystemB = {
-      start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn(), wasRecentlyFired: vi.fn(() => false),
-    };
-    const store = {
-      list: () => storedLoops,
-      clearExpired: vi.fn(),
-      expireEventLoops: vi.fn(),
-    };
-
-    // Session A
-    const setupA = setup({
-      getStore: () => store as any,
-      getTriggerSystem: () => triggerSystemA as any,
-      getBindingsStore: () => bindingsA,
-    });
-    await setupA.drive("before_agent_start");
-
-    // Session B uses a fresh triggerSystem but the same store + its own bindings
-    const setupB = setup({
-      getStore: () => store as any,
-      getTriggerSystem: () => triggerSystemB as any,
-      getBindingsStore: () => bindingsB,
-    });
-    await setupB.drive("before_agent_start");
-
-    const idsA = triggerSystemA.add.mock.calls.map((c) => c[0].id).sort();
-    const idsB = triggerSystemB.add.mock.calls.map((c) => c[0].id).sort();
-    expect(idsA).toEqual(["1", "5"]);
-    expect(idsB).toEqual(["3", "7"]);
-    expect(idsA).not.toEqual(idsB);
-  });
-
-  it("session_switch fires before before_agent_start — both calls arm loops (G-17)", async () => {
-    // Regression: session_switch sets persistedShown=false, then calls
-    // showPersistedLoops. before_agent_start then calls showPersistedLoops.
-    // With persistedShown=true at the TOP of the function, before_agent_start
-    // returns early and loops are never armed on resume. With persistedShown
-    // at the END, both calls run arming logic correctly.
-    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
-    const bindingsStore = new BindingsStore(undefined, "memory");
-    bindingsStore.add("1");
-    bindingsStore.add("3");
-
-    const storedLoops = [
-      { id: "1", status: "active", trigger: { type: "cron", schedule: "*/5 * * * *" } },
-      { id: "3", status: "active", trigger: { type: "event", source: "x" } },
-    ];
-    const triggerSystem = {
-      start: vi.fn(),
-      stop: vi.fn(),
-      add: vi.fn(),
-      remove: vi.fn(),
-      wasRecentlyFired: vi.fn(() => false),
-    };
-    const store = {
-      list: () => storedLoops,
-      clearExpired: vi.fn(),
-      expireEventLoops: vi.fn(),
-    };
-
-    const { drive } = setup({
-      getStore: () => store as any,
-      getTriggerSystem: () => triggerSystem as any,
-      getBindingsStore: () => bindingsStore,
-    });
-
-    // session_switch fires first (e.g. process restart / resume)
-    await drive("session_switch");
-    // before_agent_start fires next — both calls must execute arming
-    await drive("before_agent_start");
-
-    // With the fix (persistedShown set at END of showPersistedLoops):
-    // - session_switch: persistedShown=false → runs arming → sets persistedShown=true
-    // - before_agent_start: persistedShown=false → runs arming again → sets persistedShown=true
-    // Without the fix (persistedShown at TOP):
-    // - session_switch: sets persistedShown=true BEFORE arming → arming runs
-    // - before_agent_start: persistedShown=true → returns early → NO arming ❌
-    expect(triggerSystem.add).toHaveBeenCalledTimes(2);
-    const armedIds = triggerSystem.add.mock.calls.map((c) => c[0].id);
-    expect(armedIds).toContain("1");
-    expect(armedIds).toContain("3");
-  });
-
-  it("fires stored loops with runOnCreate: true that were created in the current session", async () => {
-    // Isolated setup with its own notificationRuntime so call-count assertions
-    // don't leak state from other tests in the same file.
-    const { BindingsStore } = await import("../src/runtime/bindings-store.js");
-    const { createMockPi } = await import("./helpers/mock-pi.js");
-    const { registerSessionRuntimeHooks } = await import("../src/runtime/session-runtime.js");
-
-    const bindingsStore = new BindingsStore(undefined, "memory");
-    bindingsStore.add("1");
-
-    const now = Date.now();
-    const storedLoops = [
-      {
-        id: "1",
-        status: "active",
-        trigger: { type: "cron" as const, schedule: "*/5 * * * *" },
-        createdAt: now,          // created NOW (this session)
-        runOnCreate: true,
-        prompt: "check build",
-        readOnly: false,
-        recurring: true,
-        autoTask: false,
-        fireCount: 0,
-        expiresAt: now + 7 * 24 * 60 * 60 * 1000,
-      },
-      {
-        id: "2",
-        status: "active",
-        trigger: { type: "cron" as const, schedule: "*/10 * * * *" },
-        createdAt: now - 86_400_000, // created yesterday (previous session)
-        runOnCreate: true,
-        prompt: "old prompt",
-        readOnly: false,
-        recurring: true,
-        autoTask: false,
-        fireCount: 0,
-        expiresAt: now + 7 * 24 * 60 * 60 * 1000,
-      },
-    ];
-    const triggerSystem = {
-      start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn(), wasRecentlyFired: vi.fn(() => false),
-    };
-    const notificationRuntime = {
-      queueOrDeliverNotification: vi.fn(async () => {}),
-      syncRuntimeState: vi.fn(),
-      flushPendingNotifications: vi.fn(async () => {}),
-      clear: vi.fn(),
-    };
-    const widget = { setUICtx: vi.fn(), update: vi.fn(), dispose: vi.fn(), setFiringStatus: vi.fn() };
-    const store = {
-      list: () => storedLoops as any,
-      clearExpired: vi.fn(),
-      expireEventLoops: vi.fn(),
-    };
-
-    const { pi, extensionHandlers } = createMockPi();
-    registerSessionRuntimeHooks({
-      pi,
-      getLoopScope: () => "memory",
-      getPiLoopEnv: () => undefined,
-      recreateSessionStore: vi.fn(),
-      clearAllLoops: vi.fn(),
-      getStore: () => store as any,
-      getScheduler: () => ({ nextFire: vi.fn(() => undefined), pump: vi.fn() }) as any,
-      getTriggerSystem: () => triggerSystem as any,
-      getBindingsStore: () => bindingsStore,
-      getLatestCtx: () => undefined,
-      setLatestCtx: vi.fn(),
-      setSessionId: vi.fn(),
-      widget,
-      notificationRuntime: notificationRuntime as any,
-      flushPendingNotifications: vi.fn(async () => {}),
-      cleanupTaskBacklogLoops: vi.fn(async () => 0),
-      hasPendingTasks: vi.fn(async () => 0),
-      cleanDoneTasks: vi.fn(async () => {}),
-    });
-
-    const drive = async (name: string, data?: any) => {
-      const { createCtx } = await import("./helpers/mock-pi.js");
-      for (const handler of extensionHandlers.get(name) ?? []) {
-        await handler(data ?? null, createCtx());
-      }
-    };
-
-    // Reset persistedShown (module-level closure state from previous tests in this
-    // file) by driving a session_switch. Without this, showPersistedLoops returns
-    // early and setFiringStatus is never called.
-    await drive("session_switch");
-    await drive("before_agent_start");
-
-    // Only loop #1 should fire on create (createdAt === now, not a previous session).
-    // Loop #2 should NOT fire (created yesterday, not this session).
-    // Check widget.setFiringStatus (simpler than queueOrDeliverNotification call-count
-    // which is sensitive to vi.restoreAllMocks() state from other test files).
-    expect(widget.setFiringStatus).toHaveBeenCalledTimes(1);
-    expect(widget.setFiringStatus).toHaveBeenCalledWith("1", "check build");
+    expect(widget.update).toHaveBeenCalledTimes(1);
   });
 });

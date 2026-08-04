@@ -1,7 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LoopStore } from "../store.js";
-import { addBreadcrumb } from "../telemetry/sentry.js";
-import { BindingsStore } from "./bindings-store.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -20,22 +18,17 @@ export interface SessionRuntimeOptions {
   recreateSessionStore: (sessionId: string) => void;
   clearAllLoops: () => void;
   getStore: () => LoopStore;
-  getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string; trigger?: { type: string; debounceMs?: number } }) => boolean): void };
-  getTriggerSystem: () => {
-    start(): void;
-    stop(): void;
-    add(entry: { id: string; trigger: unknown; recurring: boolean; expiresAt: number; maxFires?: number; fireCount?: number }): void;
-    remove(id: string): void;
-    wasRecentlyFired(id: string, windowMs: number): boolean;
-  };
-  getBindingsStore: () => BindingsStore;
-  getLatestCtx: () => ExtensionContext | undefined;
+  getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string }) => boolean): void };
+  getTriggerSystem: () => { start(): void; stop(): void };
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
-  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void; dispose(): void; setFiringStatus(loopId: string, prompt: string): void };
+  widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
+  migrateTaskBacklogLoops: () => number;
   cleanupTaskBacklogLoops: () => Promise<number>;
+  adoptTaskBacklogLoops: (baselineFireCounts?: ReadonlyMap<string, number>) => Promise<number>;
+  releaseTaskBacklogWakes: () => void;
   hasPendingTasks: () => Promise<number>;
   cleanDoneTasks: () => Promise<void>;
 }
@@ -50,14 +43,15 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getStore,
     getScheduler,
     getTriggerSystem,
-    getBindingsStore,
-    getLatestCtx,
     setLatestCtx,
     setSessionId,
     widget,
     notificationRuntime,
     flushPendingNotifications,
+    migrateTaskBacklogLoops,
     cleanupTaskBacklogLoops,
+    adoptTaskBacklogLoops,
+    releaseTaskBacklogWakes,
     hasPendingTasks,
     cleanDoneTasks,
   } = options;
@@ -65,6 +59,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   let storeUpgraded = false;
   let persistedShown = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let agentStartFireCounts: ReadonlyMap<string, number> | undefined;
 
   // The CronScheduler is pump-driven; without this heartbeat it only advances at
   // turn boundaries (turn_start/agent_end), so a loop whose fire time elapses
@@ -74,8 +69,11 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     if (heartbeatTimer) return;
     heartbeatTimer = setInterval(() => {
       // Swallow pump failures so a transient error never surfaces as an
-      // unhandled rejection; the next tick retries.
-      void pumpLoops().catch(() => {});
+      // unhandled rejection; repaint still runs so cleared harness UI heals.
+      void pumpLoops()
+        .catch(() => {})
+        .then(() => widget.update())
+        .catch(() => {});
     }, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
   }
@@ -88,88 +86,25 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
-    if (getLoopScope() === "session" && !getPiLoopEnv()) {
+    if ((getLoopScope() === "session" || getLoopScope() === "memory") && !getPiLoopEnv()) {
       recreateSessionStore(ctx.sessionManager.getSessionId());
     }
     storeUpgraded = true;
   }
 
-  function showPersistedLoops(_isResume = false) {
+  async function showPersistedLoops(_isResume = false) {
     if (persistedShown) return;
+    persistedShown = true;
     const sessionStartedAt = Date.now();
-
-    const bindings = getBindingsStore();
-    const existedBefore = bindings.fileExists();
-    bindings.load();
-    if (!existedBefore && bindings.path !== undefined) {
-      // Fresh session — persist the empty file so subsequent starts know
-      // we've already done the first-start notify.
-      bindings.save();
-    }
-
-    const allLoops = getStore().list();
-    if (allLoops.length > 0) {
+    migrateTaskBacklogLoops();
+    const loops = getStore().list();
+    if (loops.length > 0) {
       getStore().clearExpired();
       getStore().expireEventLoops(sessionStartedAt);
-    }
-
-    // Arm ONLY loops that are in this session's bindings Set. This is the
-    // core per-session isolation: terminal A binding #5 does not cause
-    // terminal B to fire #5, because each session reads its own bindings
-    // file and arms via its own process-local TriggerSystem. In memory
-    // scope the BindingsStore is in-process only and an empty Set means
-    // "no loops bound" — strict isolation still applies.
-    const boundEntries = allLoops.filter((entry) => bindings.has(entry.id));
-    for (const entry of boundEntries) {
-      getTriggerSystem().add(entry);
-      // Fire-on-create for loops created during THIS session. Loops that
-      // were created in a previous session and are being re-armed after a
-      // restart do NOT re-fire — their next iteration is driven by the
-      // scheduler/cron interval.
-      // sessionStartedAt is captured at the start of showPersistedLoops, which
-      // may be a few ms after loop creation if Date.now() was called between
-      // them. Use a 10ms tolerance so a loop created in the same synchronous
-      // block as session start is correctly identified as "this session".
-      if (entry.runOnCreate && entry.createdAt >= sessionStartedAt - 10) {
-        widget.setFiringStatus(entry.id, entry.prompt);
-        void notificationRuntime.queueOrDeliverNotification({
-          loopId: entry.id,
-          prompt: entry.prompt,
-          trigger: entry.trigger,
-          timestamp: Date.now(),
-          readOnly: entry.readOnly,
-          recurring: entry.recurring,
-          autoTask: entry.autoTask,
-        });
-      }
-    }
-    if (boundEntries.length > 0) {
       getTriggerSystem().start();
       ensureHeartbeat();
     }
-    widget.update();
-
-    // First-start notify: only when the bindings file did not exist before
-    // we loaded it AND there are stored loops the user could pick from.
-    // We notify even if allLoops is empty — the user can run /loop to create
-    // some and then /loop-resume to bind them.
-    if (!existedBefore) {
-      const ctx = getLatestCtx();
-      // Defensive: minimal test contexts may have a UI stub without notify.
-      const notify = (ctx?.ui as { notify?: (msg: string, type?: "info" | "warning" | "error") => void } | undefined)?.notify;
-      notify?.(
-        "No bindings for this session — run /loop-resume to choose which loops this terminal arms.",
-        "info",
-      );
-    }
-
-    // Set the guard AFTER the arming logic completes. This is critical for
-    // session resume: session_switch calls showPersistedLoops (arming runs),
-    // then before_agent_start calls it again — we need both calls to execute
-    // arming since they load the bindings at different points. Only after
-    // the first full execution do we set the guard so subsequent turn_start
-    // calls (which reload the same bindings) don't double-arm.
-    persistedShown = true;
+    await adoptTaskBacklogLoops();
   }
 
   async function pumpLoops(): Promise<void> {
@@ -183,16 +118,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       const pending = await hasPendingTasks();
       if (pending <= 0) pendingTasks.set(entry.id, true);
     }
-    getScheduler().pump(Date.now(), (entry) => {
-      if (pendingTasks.has(entry.id)) return false;
-      // Closes G-08: skip hybrid cron fires within the debounce window
-      // of a recent event-driven fire.
-      const trigger = entry.trigger;
-      if (trigger && trigger.type === "hybrid" && trigger.debounceMs !== undefined) {
-        return !getTriggerSystem().wasRecentlyFired(entry.id, trigger.debounceMs);
-      }
-      return true;
-    });
+    getScheduler().pump(Date.now(), (entry) => !pendingTasks.has(entry.id));
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -201,7 +127,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    showPersistedLoops();
+    await showPersistedLoops();
     widget.update();
   });
 
@@ -211,17 +137,17 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
+    await showPersistedLoops();
     widget.update();
     await pumpLoops();
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
     setLatestCtx(ctx);
-    setSessionId(ctx.sessionManager.getSessionId());
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    showPersistedLoops();
+    await showPersistedLoops();
     widget.update();
   });
 
@@ -232,6 +158,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     });
     setLatestCtx(ctx);
     widget.setUICtx(ctx.ui);
+    agentStartFireCounts = new Map(getStore().list().map((entry) => [entry.id, entry.fireCount ?? 0]));
   });
 
   pi.on("agent_end", async (_event, ctx) => {
@@ -241,39 +168,37 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       agentRunning: false,
       hasPendingMessages: ctx.hasPendingMessages(),
     });
-    await flushPendingNotifications({ ignorePendingMessages: true });
+    releaseTaskBacklogWakes();
     await cleanupTaskBacklogLoops();
+    await adoptTaskBacklogLoops(agentStartFireCounts);
+    agentStartFireCounts = undefined;
+    await flushPendingNotifications({ ignorePendingMessages: true });
     await pumpLoops();
   });
 
   pi.on("session_shutdown", async () => {
     stopHeartbeat();
+    releaseTaskBacklogWakes();
     notificationRuntime.clear("session_shutdown");
-    widget.dispose();
   });
 
   pi.on("session_switch" as never, async (event: SessionSwitchEvent, ctx: ExtensionContext) => {
-    addBreadcrumb("session_switch", { reason: event?.reason });
     setLatestCtx(ctx);
     widget.setUICtx(ctx.ui);
     getTriggerSystem().stop();
     stopHeartbeat();
     notificationRuntime.clear("session_switch");
+    releaseTaskBacklogWakes();
+    setSessionId(undefined);
 
     const isResume = event?.reason === "resume";
     storeUpgraded = false;
     persistedShown = false;
 
-    if (!isResume && getLoopScope() === "memory") {
-      clearAllLoops();
-    }
-
-    // Set the correct sessionId BEFORE showPersistedLoops so the BindingsStore
-    // path is resolved correctly and the right bindings are loaded and armed.
     setSessionId(ctx.sessionManager.getSessionId());
-
     upgradeStoreIfNeeded(ctx);
-    showPersistedLoops(isResume);
+    if (!isResume && getLoopScope() === "memory") clearAllLoops();
+    await showPersistedLoops(isResume);
     widget.update();
   });
 

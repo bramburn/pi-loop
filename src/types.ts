@@ -1,3 +1,15 @@
+export type LoopDeletionReason = "task_backlog_empty";
+
+export interface LoopDeletionTombstone {
+  id: string;
+  reason: LoopDeletionReason;
+  deletedAt: number;
+  prompt: string;
+  pendingCount?: number;
+}
+
+export type LoopDeletionTombstoneInput = Omit<LoopDeletionTombstone, "id" | "deletedAt" | "prompt">;
+
 export type LoopStatus = "active" | "paused";
 
 export interface CronTrigger {
@@ -8,31 +20,72 @@ export interface CronTrigger {
 export interface EventTrigger {
   type: "event";
   source: string;
-  /**
-   * Optional filter for matching event payloads.
-   * Two formats:
-   *  - "regex:pattern" — tests JSON.stringify(data) against the regex
-   *  - JSON object string — compares top-level keys to expected values
-   *    e.g., '{"monitorId":"abc123"}' matches events where data.monitorId === "abc123"
-   */
   filter?: string;
 }
 
 export interface HybridTrigger {
   type: "hybrid";
   cron: string;
-  event: {
-    source: string;
-    /**
-     * Optional filter for the event portion. See EventTrigger.filter for
-     * accepted formats ("regex:..." or JSON object string).
-     */
-    filter?: string;
-  };
+  event: { source: string; filter?: string };
   debounceMs: number;
 }
 
-export type Trigger = CronTrigger | EventTrigger | HybridTrigger;
+export interface DynamicTrigger {
+  type: "dynamic";
+}
+
+export type Trigger = CronTrigger | EventTrigger | HybridTrigger | DynamicTrigger;
+
+export interface DynamicLoopState {
+  goal: string;
+  state?: string;
+  metrics?: string;
+  doneCriteria?: string;
+  iteration: number;
+  nextWakeAt?: number;
+  awaitingUpdate?: boolean;
+  lastUpdatedAt?: number;
+}
+
+export type WorkflowTerminalStatus = "completed" | "paused";
+
+export interface WorkflowTaskDefinition {
+  subject: string;
+  description: string;
+}
+
+export interface WorkflowStateDefinition {
+  prompt: string;
+  task?: WorkflowTaskDefinition;
+  on?: Record<string, string>;
+  terminal?: WorkflowTerminalStatus;
+  maxAttempts?: number;
+}
+
+export interface WorkflowDefinition {
+  version: 1;
+  initialState: string;
+  states: Record<string, WorkflowStateDefinition>;
+}
+
+export interface WorkflowTransitionRecord {
+  from: string;
+  to: string;
+  outcome: string;
+  evidence?: string;
+  at: number;
+  sequence: number;
+}
+
+export interface WorkflowRunState {
+  definition: WorkflowDefinition;
+  currentState: string;
+  transitionSeq: number;
+  stateEnteredAt: number;
+  attemptsByState: Record<string, number>;
+  activeTaskId?: string;
+  lastTransition?: WorkflowTransitionRecord;
+}
 
 export interface LoopEntry {
   id: string;
@@ -48,14 +101,8 @@ export interface LoopEntry {
   readOnly?: boolean;
   maxFires?: number;
   fireCount?: number;
-  /**
-   * The sessionId of the terminal that created this loop. Used by the
-   * Governor to partition loops into "My loops" and "Other terminals".
-   * Undefined for loops created before this field was introduced.
-   */
-  /** When true (default), the loop fires immediately on creation if the agent is idle. */
-  runOnCreate?: boolean;
-  createdBy?: string;
+  dynamic?: DynamicLoopState;
+  workflow?: WorkflowRunState;
 }
 
 export interface LoopStoreData {
@@ -74,6 +121,17 @@ export interface MonitorEntry {
   exitCode?: number;
   outputLines: number;
   outputBuffer: string[];
+  lastOutputAt?: number;
+  outputRatePerMinute?: number;
+  progress?: MonitorProgress;
+}
+
+export interface MonitorProgress {
+  current?: number;
+  total?: number;
+  message?: string;
+  source: "jsonl" | "agent";
+  updatedAt: number;
 }
 
 export interface MonitorProcess {
@@ -83,4 +141,14 @@ export interface MonitorProcess {
   abortController: AbortController;
   waiters: Array<() => void>;
   completionCallbacks: Array<() => void>;
+  lastOutputEventAt: number;
+  lastProgressChangeAt: number;
+  progressChangeTimer?: ReturnType<typeof setTimeout>;
+  pendingOutputLines: number;
+  latestOutputLine?: string;
+  outputBuckets: Array<{ second: number; count: number }>;
+  stdoutDecoder: import("node:string_decoder").StringDecoder;
+  stderrDecoder: import("node:string_decoder").StringDecoder;
+  stdoutRemainder: string;
+  stderrRemainder: string;
 }

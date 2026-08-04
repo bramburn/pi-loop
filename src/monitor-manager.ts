@@ -1,50 +1,19 @@
 
 import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type MonitorReducerEvent,
   type MonitorReducerState,
   reduceMonitorState,
 } from "./monitor-reducer.js";
-import type { MonitorEntry, MonitorProcess } from "./types.js";
+import type { MonitorEntry, MonitorProcess, MonitorProgress } from "./types.js";
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
-/**
- * Cross-platform shell invocation. On Unix we use `/bin/sh -c`, on Windows
- * `cmd.exe /d /s /c`. The `/d` and `/s` flags are required for `cmd.exe` to
- * handle the command string correctly (spaces, special chars, AutoRun).
- */
-export function getShellInvocation(command: string): { cmd: string; args: string[] } {
-  if (process.platform === "win32") {
-    return { cmd: "cmd.exe", args: ["/d", "/s", "/c", command] };
-  }
-  return { cmd: "/bin/sh", args: ["-c", command] };
-}
-
-/**
- * Cross-platform process termination. On Unix we send real POSIX signals;
- * SIGTERM gives the process a chance to clean up, SIGKILL is the final
- * fallback. On Windows `child.kill("SIGTERM")` is a no-op for most processes,
- * so we shell out to `taskkill`: the bare form sends WM_CLOSE (graceful),
- * `/F /T` force-kills the process and any children.
- */
-export async function terminateProcess(proc: ChildProcess, mode: "graceful" | "force"): Promise<void> {
-  if (process.platform === "win32") {
-    const pid = proc.pid;
-    if (!pid) return;
-    const { exec } = await import("node:child_process");
-    const flags = mode === "force" ? "/F /T" : "/T";
-    return new Promise<void>((resolve) => {
-      exec(`taskkill /PID ${pid} ${flags}`, () => resolve());
-    });
-  }
-  try {
-    proc.kill(mode === "force" ? "SIGKILL" : "SIGTERM");
-  } catch {
-    /* already dead */
-  }
-}
+const OUTPUT_EVENT_INTERVAL_MS = 1000;
+const MAX_OUTPUT_LINE_LENGTH = 4096;
+const OUTPUT_RATE_WINDOW_MS = 60000;
 
 export class MonitorManager {
   private processes = new Map<string, MonitorProcess>();
@@ -89,9 +58,13 @@ export class MonitorManager {
       }
       process.entry = updated;
     }
-    // Repaint on status/set transitions, but not on the frequent output-line
-    // events (which never change the visible count).
-    if (event.type !== "MONITOR_OUTPUT" && event.type !== "MONITOR_ONDONE_REGISTERED") {
+    // Repaint on status/progress transitions, but not on frequent output-line
+    // events that do not change the visible status.
+    if (
+      event.type !== "MONITOR_OUTPUT"
+      && event.type !== "MONITOR_ONDONE_REGISTERED"
+      && event.type !== "MONITOR_PROGRESS_UPDATED"
+    ) {
       this.onChange?.();
     }
     return result;
@@ -134,8 +107,7 @@ export class MonitorManager {
     const entry = result.state.monitorsById[id]!;
 
     const abortController = new AbortController();
-    const { cmd: shellCmd, args: shellArgs } = getShellInvocation(command);
-    const child = this.spawnFn(shellCmd, shellArgs, {
+    const child = this.spawnFn("sh", ["-c", command], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: abortController.signal,
       env: { ...process.env },
@@ -148,49 +120,22 @@ export class MonitorManager {
       abortController,
       waiters: [],
       completionCallbacks: [],
+      lastOutputEventAt: 0,
+      lastProgressChangeAt: 0,
+      pendingOutputLines: 0,
+      outputBuckets: [],
+      stdoutDecoder: new StringDecoder("utf8"),
+      stderrDecoder: new StringDecoder("utf8"),
+      stdoutRemainder: "",
+      stderrRemainder: "",
     };
 
-    child.stdout?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.length === 0) continue;
-        this.applyReducerEvent({
-          type: "MONITOR_OUTPUT",
-          at: Date.now(),
-          source: "monitor",
-          entityType: "monitor",
-          entityId: id,
-          payload: { id, line },
-        });
-        this.pi.events.emit("monitor:output", {
-          monitorId: id,
-          line,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.length === 0) continue;
-        this.applyReducerEvent({
-          type: "MONITOR_OUTPUT",
-          at: Date.now(),
-          source: "monitor",
-          entityType: "monitor",
-          entityId: id,
-          payload: { id, line },
-        });
-        this.pi.events.emit("monitor:output", {
-          monitorId: id,
-          line,
-          timestamp: Date.now(),
-        });
-      }
-    });
+    child.stdout?.on("data", (data: Buffer) => this.handleOutput(id, bp, "stdout", data));
+    child.stderr?.on("data", (data: Buffer) => this.handleOutput(id, bp, "stderr", data));
 
     const finish = (code: number | null, status: "completed" | "error") => {
+      this.flushOutput(id, bp);
+      this.emitOutputProgress(id, bp);
       this.applyReducerEvent({
         type: status === "completed" ? "MONITOR_COMPLETED" : "MONITOR_ERRORED",
         at: Date.now(),
@@ -203,6 +148,12 @@ export class MonitorManager {
         },
       });
       const current = this.get(id)!;
+      this.pi.events.emit("monitor:finished", {
+        monitorId: id,
+        status: current.status,
+        exitCode: current.exitCode,
+        outputLines: current.outputLines,
+      });
       this.pi.events.emit(status === "completed" ? "monitor:done" : "monitor:error", {
         monitorId: id,
         exitCode: code,
@@ -216,6 +167,7 @@ export class MonitorManager {
     };
 
     child.on("close", (code) => {
+      this.flushOutput(id, bp);
       if (bp.entry.status === "running") {
         finish(code, code === 0 ? "completed" : "error");
       }
@@ -223,6 +175,8 @@ export class MonitorManager {
 
     child.on("error", (err) => {
       if (bp.entry.status === "running") {
+        this.flushOutput(id, bp);
+        this.emitOutputProgress(id, bp);
         this.applyReducerEvent({
           type: "MONITOR_ERRORED",
           at: Date.now(),
@@ -233,6 +187,13 @@ export class MonitorManager {
             id,
             error: err.message,
           },
+        });
+        const current = this.get(id)!;
+        this.pi.events.emit("monitor:finished", {
+          monitorId: id,
+          status: current.status,
+          error: err.message,
+          outputLines: current.outputLines,
         });
         this.pi.events.emit("monitor:error", {
           monitorId: id,
@@ -248,12 +209,19 @@ export class MonitorManager {
     if (timeout > 0) {
       setTimeout(() => {
         if (bp.entry.status === "running") {
-          this.stop(id);
+          void this.stop(id, "timeout");
         }
       }, timeout);
     }
 
     this.processes.set(id, bp);
+    this.pi.events.emit("monitor:started", {
+      monitorId: id,
+      command,
+      description,
+      timeout,
+      timestamp: now,
+    });
     return entry;
   }
 
@@ -268,10 +236,11 @@ export class MonitorManager {
       .sort((a, b) => Number(a.id) - Number(b.id));
   }
 
-  async stop(id: string): Promise<boolean> {
+  async stop(id: string, reason: "manual" | "timeout" = "manual"): Promise<boolean> {
     const bp = this.processes.get(id);
-    if (bp?.entry.status !== "running") return false;
+    if (!bp || bp.entry.status !== "running") return false;
 
+    this.emitOutputProgress(id, bp);
     this.applyReducerEvent({
       type: "MONITOR_STOPPED",
       at: Date.now(),
@@ -280,15 +249,22 @@ export class MonitorManager {
       entityId: id,
       payload: {
         id,
-        reason: "manual",
+        reason,
       },
     });
+    this.pi.events.emit("monitor:finished", {
+      monitorId: id,
+      status: "stopped",
+      reason,
+      outputLines: bp.entry.outputLines,
+    });
     this.schedulePrune(id);
-    void terminateProcess(bp.proc, "graceful");
+    bp.proc.kill("SIGTERM");
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        void terminateProcess(bp.proc, "force").finally(() => resolve());
+        try { bp.proc.kill("SIGKILL"); } catch { /* already dead */ }
+        resolve();
       }, 5000);
 
       bp.proc.on("close", () => {
@@ -297,6 +273,14 @@ export class MonitorManager {
       });
     });
 
+    if (reason === "timeout") {
+      this.pi.events.emit("monitor:error", {
+        monitorId: id,
+        error: `Timed out after ${bp.entry.timeout}ms`,
+        outputLines: bp.entry.outputLines,
+      });
+      for (const callback of bp.completionCallbacks) callback();
+    }
     bp.completionCallbacks = [];
     for (const resolve of bp.waiters) resolve();
     bp.waiters = [];
@@ -306,7 +290,7 @@ export class MonitorManager {
   onComplete(id: string, callback: () => void): boolean {
     const bp = this.processes.get(id);
     if (!bp) return false;
-    if (bp.entry.status === "completed") {
+    if (bp.entry.status === "completed" || bp.entry.status === "error") {
       callback();
       return true;
     }
@@ -327,25 +311,123 @@ export class MonitorManager {
     return this.processes.get(id);
   }
 
-  /**
-   * Remove a monitor entry from the store immediately, regardless of status.
-   * The 30s auto-prune timer is bypassed. If the monitor is still running,
-   * it is stopped first. Returns true if the monitor existed and was removed.
-   */
-  async delete(id: string): Promise<boolean> {
+  updateProgress(id: string, progress: Omit<MonitorProgress, "source" | "updatedAt">): MonitorEntry | undefined {
     const bp = this.processes.get(id);
-    if (!bp) return false;
-    if (bp.entry.status === "running") {
-      await this.stop(id);
-    }
+    if (!bp || bp.entry.status !== "running") return undefined;
+    this.applyProgress(id, { ...progress, source: "agent" });
+    return this.get(id);
+  }
+
+  private handleOutput(id: string, bp: MonitorProcess, stream: "stdout" | "stderr", data: Buffer): void {
+    const decoder = stream === "stdout" ? bp.stdoutDecoder : bp.stderrDecoder;
+    const remainderKey = stream === "stdout" ? "stdoutRemainder" : "stderrRemainder";
+    const records = `${bp[remainderKey]}${decoder.write(data)}`.split("\n");
+    bp[remainderKey] = records.pop() ?? "";
+    this.recordOutputLines(id, bp, records);
+  }
+
+  private flushOutput(id: string, bp: MonitorProcess): void {
+    const stdout = `${bp.stdoutRemainder}${bp.stdoutDecoder.end()}`;
+    const stderr = `${bp.stderrRemainder}${bp.stderrDecoder.end()}`;
+    bp.stdoutRemainder = "";
+    bp.stderrRemainder = "";
+    this.recordOutputLines(id, bp, [stdout, stderr]);
+  }
+
+  private recordOutputLines(id: string, bp: MonitorProcess, records: string[]): void {
+    const lines = records
+      .map(line => line.endsWith("\r") ? line.slice(0, -1) : line)
+      .filter(Boolean)
+      .map(line => line.length <= MAX_OUTPUT_LINE_LENGTH ? line : `${line.slice(0, MAX_OUTPUT_LINE_LENGTH)}... [truncated]`);
+    if (lines.length === 0) return;
+    const now = Date.now();
+    const second = Math.floor(now / 1000);
+    const bucket = bp.outputBuckets.find(candidate => candidate.second === second);
+    if (bucket) bucket.count += lines.length;
+    else bp.outputBuckets.push({ second, count: lines.length });
+    bp.outputBuckets = bp.outputBuckets.filter(candidate => candidate.second > second - OUTPUT_RATE_WINDOW_MS / 1000);
+    const ratePerMinute = bp.outputBuckets.reduce((total, candidate) => total + candidate.count, 0);
     this.applyReducerEvent({
-      type: "MONITOR_PRUNED",
-      at: Date.now(),
-      source: "tool",
+      type: "MONITOR_OUTPUT",
+      at: now,
+      source: "monitor",
       entityType: "monitor",
       entityId: id,
-      payload: { id },
+      payload: { id, lines, ratePerMinute },
     });
-    return true;
+    bp.pendingOutputLines += lines.length;
+    bp.latestOutputLine = lines.at(-1);
+    for (const line of lines) {
+      const progress = parseJsonlProgress(line);
+      if (progress) this.applyProgress(id, { ...progress, source: "jsonl" });
+    }
+    if (Date.now() - bp.lastOutputEventAt >= OUTPUT_EVENT_INTERVAL_MS) {
+      this.emitOutputProgress(id, bp);
+    }
+  }
+
+  private emitOutputProgress(id: string, bp: MonitorProcess): void {
+    if (!bp.latestOutputLine || bp.pendingOutputLines === 0) return;
+    const current = this.get(id);
+    if (!current) return;
+    this.pi.events.emit("monitor:output", {
+      monitorId: id,
+      line: bp.latestOutputLine,
+      outputLines: current.outputLines,
+      droppedLines: bp.pendingOutputLines - 1,
+      timestamp: Date.now(),
+    });
+    bp.lastOutputEventAt = Date.now();
+    bp.pendingOutputLines = 0;
+    bp.latestOutputLine = undefined;
+  }
+
+  private applyProgress(id: string, progress: Omit<MonitorProgress, "updatedAt">): void {
+    this.applyReducerEvent({
+      type: "MONITOR_PROGRESS_UPDATED",
+      at: Date.now(),
+      source: progress.source === "agent" ? "tool" : "monitor",
+      entityType: "monitor",
+      entityId: id,
+      payload: { id, progress },
+    });
+    const bp = this.processes.get(id);
+    if (bp) this.scheduleProgressChange(bp);
+  }
+
+  private scheduleProgressChange(bp: MonitorProcess): void {
+    const now = Date.now();
+    const delay = OUTPUT_EVENT_INTERVAL_MS - (now - bp.lastProgressChangeAt);
+    if (delay <= 0) {
+      bp.lastProgressChangeAt = now;
+      this.onChange?.();
+      return;
+    }
+    if (bp.progressChangeTimer) return;
+    bp.progressChangeTimer = setTimeout(() => {
+      bp.progressChangeTimer = undefined;
+      bp.lastProgressChangeAt = Date.now();
+      this.onChange?.();
+    }, delay);
+    bp.progressChangeTimer.unref?.();
+  }
+}
+
+function parseJsonlProgress(line: string): Omit<MonitorProgress, "source" | "updatedAt"> | undefined {
+  try {
+    const value: unknown = JSON.parse(line);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const progress = (value as { progress?: unknown }).progress;
+    if (!progress || typeof progress !== "object" || Array.isArray(progress)) return undefined;
+    const { current, total, message } = progress as Record<string, unknown>;
+    if (
+      (current !== undefined && (typeof current !== "number" || !Number.isFinite(current)))
+      || (total !== undefined && (typeof total !== "number" || !Number.isFinite(total)))
+      || (message !== undefined && typeof message !== "string")
+      || (current === undefined && total === undefined && message === undefined)
+    ) return undefined;
+    return { current, total, message };
+  } catch {
+    return undefined;
   }
 }

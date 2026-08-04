@@ -49,6 +49,26 @@ describe("task reducer", () => {
     ]);
   });
 
+  it("preserves typed workflow ownership on a created task", () => {
+    const { state } = apply(makeState(), {
+      type: "TASK_CREATED",
+      at: 100,
+      source: "tool",
+      entityType: "task",
+      payload: {
+        subject: "Investigate regression",
+        description: "Find the root cause.",
+        workflow: { loopId: "7", stateId: "investigate", transitionSeq: 0 },
+      },
+    });
+
+    expect(state.tasksById["1"].workflow).toEqual({
+      loopId: "7",
+      stateId: "investigate",
+      transitionSeq: 0,
+    });
+  });
+
   it("starts a task", () => {
     const initial = makeState([
       {
@@ -114,6 +134,35 @@ describe("task reducer", () => {
         payload: { task: state.tasksById["1"] },
       },
     ]);
+  });
+
+  it("closes a task without marking it completed", () => {
+    const initial = makeState([
+      {
+        id: "1",
+        subject: "Task",
+        description: "Desc",
+        status: "in_progress",
+        createdAt: 10,
+        updatedAt: 50,
+      },
+    ], 2);
+
+    const { state } = apply(initial, {
+      type: "TASK_CLOSED",
+      at: 300,
+      source: "tool",
+      entityType: "task",
+      entityId: "1",
+      payload: { id: "1" },
+    });
+
+    expect(state.tasksById["1"]).toMatchObject({
+      status: "closed",
+      updatedAt: 300,
+      closedAt: 300,
+    });
+    expect(state.tasksById["1"]?.completedAt).toBeUndefined();
   });
 
   it("reopens a completed task and preserves completedAt", () => {
@@ -225,7 +274,7 @@ describe("task reducer", () => {
     ]);
   });
 
-  it("prunes only completed tasks and preserves nextId", () => {
+  it("prunes completed and closed tasks and preserves nextId", () => {
     const initial = makeState([
       {
         id: "1",
@@ -238,21 +287,30 @@ describe("task reducer", () => {
       },
       {
         id: "2",
-        subject: "Active",
+        subject: "Closed",
         description: "d2",
-        status: "in_progress",
+        status: "closed",
         createdAt: 20,
         updatedAt: 20,
+        closedAt: 20,
       },
       {
         id: "3",
-        subject: "Pending",
-        description: "d3",
-        status: "pending",
+        subject: "Active",
+        description: "d2",
+        status: "in_progress",
         createdAt: 30,
         updatedAt: 30,
       },
-    ], 4);
+      {
+        id: "4",
+        subject: "Pending",
+        description: "d4",
+        status: "pending",
+        createdAt: 40,
+        updatedAt: 40,
+      },
+    ], 5);
 
     const { state, effects } = apply(initial, {
       type: "TASKS_PRUNED",
@@ -262,14 +320,20 @@ describe("task reducer", () => {
       payload: { reason: "git_commit" },
     });
 
-    expect(Object.keys(state.tasksById)).toEqual(["2", "3"]);
-    expect(state.nextId).toBe(4);
+    expect(Object.keys(state.tasksById)).toEqual(["3", "4"]);
+    expect(state.nextId).toBe(5);
     expect(effects).toEqual([
       {
         type: "DELETE_TASK",
         entityType: "task",
         entityId: "1",
         payload: { id: "1" },
+      },
+      {
+        type: "DELETE_TASK",
+        entityType: "task",
+        entityId: "2",
+        payload: { id: "2" },
       },
     ]);
   });

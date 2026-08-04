@@ -49,6 +49,42 @@ describe("TriggerSystem", () => {
     expect(store.get("1")!.trigger.type).toBe("cron");
   });
 
+  it("adds dynamic triggers to scheduler without event subscriptions", () => {
+    const entry = store.create({ type: "dynamic" }, "dynamic test", {
+      recurring: true,
+      dynamic: { goal: "dynamic test", iteration: 0, nextWakeAt: Date.now() + 1000 },
+    });
+    system.add(entry);
+
+    expect(scheduler.nextFire(entry.id)).toBeDefined();
+    expect(pi.events.on).not.toHaveBeenCalled();
+  });
+
+  it("restores persisted event subscriptions when the trigger system starts", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "persisted worker", {
+      recurring: true,
+      taskBacklog: true,
+    });
+
+    system.start();
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.fireCount).toBe(1);
+  });
+
+  it("does not duplicate persisted event subscriptions across repeated starts", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "persisted worker", {
+      recurring: true,
+      taskBacklog: true,
+    });
+
+    system.start();
+    system.start();
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.fireCount).toBe(1);
+  });
+
   it("adds event triggers as pi event subscriptions", () => {
     const eventTrigger: Trigger = { type: "event", source: "tool_execution_start" };
     const entry = store.create(eventTrigger, "event test", { recurring: true });
@@ -250,6 +286,21 @@ describe("TriggerSystem", () => {
     expect(afterCalls).toHaveLength(1);
   });
 
+  it("pauses task-backlog controllers when their fire budget is exhausted", () => {
+    const entry = store.create({ type: "event", source: "tasks:created" }, "bounded worker", {
+      recurring: true,
+      taskBacklog: true,
+      maxFires: 1,
+    });
+    system.add(entry);
+
+    pi.events.emit("tasks:created", { taskId: "1" });
+
+    expect(store.get(entry.id)?.status).toBe("paused");
+    pi.events.emit("tasks:created", { taskId: "2" });
+    expect(store.get(entry.id)?.fireCount).toBe(1);
+  });
+
   it("deletes recurring hybrid loops immediately when event-side final maxFires is reached", () => {
     const hybridTrigger: Trigger = {
       type: "hybrid",
@@ -271,42 +322,5 @@ describe("TriggerSystem", () => {
       (c: string[]) => c[0] === "loop:fire"
     );
     expect(fireCalls).toHaveLength(1);
-  });
-
-  it("add() twice for same event trigger registers only one listener (G-45)", () => {
-    const eventTrigger: Trigger = { type: "event", source: "dup_event" };
-    const entry = store.create(eventTrigger, "dup event test", { recurring: true });
-    system.add(entry);
-    system.add(entry); // duplicate add
-
-    const onCalls = (pi.events.on as any).mock.calls.filter(
-      (c: string[]) => c[0] === "dup_event"
-    );
-    // Exactly one listener registered — not two
-    expect(onCalls).toHaveLength(1);
-
-    pi.events.emit("dup_event", {});
-    const fireCalls = (pi.events.emit as any).mock.calls.filter(
-      (c: string[]) => c[0] === "loop:fire"
-    );
-    // Loop fires exactly once, not twice
-    expect(fireCalls).toHaveLength(1);
-  });
-
-  it("add() twice for same hybrid trigger registers only one event listener (G-45)", () => {
-    const hybridTrigger: Trigger = {
-      type: "hybrid",
-      cron: "*/5 * * * *",
-      event: { source: "dup_hybrid" },
-      debounceMs: 0,
-    };
-    const entry = store.create(hybridTrigger, "dup hybrid test", { recurring: true });
-    system.add(entry);
-    system.add(entry); // duplicate add
-
-    const onCalls = (pi.events.on as any).mock.calls.filter(
-      (c: string[]) => c[0] === "dup_hybrid"
-    );
-    expect(onCalls).toHaveLength(1);
   });
 });

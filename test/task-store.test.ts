@@ -1,162 +1,8 @@
 import { rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TaskStore } from "../src/task-store.js";
-
-describe("TaskStore dependency management", () => {
-  let store: TaskStore;
-
-  beforeEach(() => {
-    store = new TaskStore();
-  });
-
-  it("addBlocks: adds target to this task's blocks and to target's blockedBy (bidirectional)", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlocks(a.id, [b.id]);
-
-    expect(store.get(a.id)!.blocks).toContain(b.id);
-    expect(store.get(b.id)!.blockedBy).toContain(a.id);
-  });
-
-  it("addBlockedBy: adds blocker to this task's blockedBy and to blocker's blocks (bidirectional)", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlockedBy(b.id, [a.id]);
-
-    expect(store.get(b.id)!.blockedBy).toContain(a.id);
-    expect(store.get(a.id)!.blocks).toContain(b.id);
-  });
-
-  it("removeBlocks: removes target from this task's blocks and from target's blockedBy", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlocks(a.id, [b.id]);
-    store.removeBlocks(a.id, [b.id]);
-
-    expect(store.get(a.id)!.blocks).not.toContain(b.id);
-    expect(store.get(b.id)!.blockedBy).not.toContain(a.id);
-  });
-
-  it("removeBlockedBy: removes blocker from this task's blockedBy and from blocker's blocks", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlockedBy(b.id, [a.id]);
-    store.removeBlockedBy(b.id, [a.id]);
-
-    expect(store.get(b.id)!.blockedBy).not.toContain(a.id);
-    expect(store.get(a.id)!.blocks).not.toContain(b.id);
-  });
-
-  it("self-dependency: addBlocks returns selfDependency warning, no edge added", () => {
-    const a = store.create("a", "desc");
-    const result = store.addBlocks(a.id, [a.id]);
-
-    expect(result.warnings.selfDependency).toBe(true);
-    expect(store.get(a.id)!.blocks).not.toContain(a.id);
-  });
-
-  it("self-dependency: addBlockedBy returns selfDependency warning, no edge added", () => {
-    const a = store.create("a", "desc");
-    const result = store.addBlockedBy(a.id, [a.id]);
-
-    expect(result.warnings.selfDependency).toBe(true);
-    expect(store.get(a.id)!.blockedBy).not.toContain(a.id);
-  });
-
-  it("dangling reference: returns danglingReference warning, valid edges still added", () => {
-    const a = store.create("a", "desc");
-    const result = store.addBlocks(a.id, ["999"]);
-
-    expect(result.warnings.danglingReference).toEqual(["999"]);
-    expect(store.get(a.id)!.blocks).toHaveLength(0); // dangling not added
-  });
-
-  it("cycle detection: A→B then B→A is rejected with cycle warning", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlocks(a.id, [b.id]);
-
-    const result = store.addBlocks(b.id, [a.id]); // B blocks A would cycle
-    expect(result.warnings.cycle).toBe(true);
-    // A still blocks B
-    expect(store.get(a.id)!.blocks).toContain(b.id);
-    // B does not block A
-    expect(store.get(b.id)!.blocks).not.toContain(a.id);
-  });
-
-  it("transitive cycle detection: A→B→C then C→A is rejected", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    const c = store.create("c", "desc");
-    store.addBlocks(a.id, [b.id]);
-    store.addBlocks(b.id, [c.id]);
-
-    const result = store.addBlocks(c.id, [a.id]);
-    expect(result.warnings.cycle).toBe(true);
-    expect(store.get(c.id)!.blocks).not.toContain(a.id);
-  });
-
-  it("getWithDependencies: returns entry + open blockers (non-completed)", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    const c = store.create("c", "desc");
-    // a is blocked by b and c
-    store.addBlockedBy(a.id, [b.id, c.id]);
-    store.complete(b.id); // b is done — not an open blocker
-
-    const { entry, openBlockers } = store.getWithDependencies(a.id);
-    expect(entry?.id).toBe(a.id);
-    expect(openBlockers).toHaveLength(1);
-    expect(openBlockers[0].id).toBe(c.id);
-  });
-
-  it("delete cleans up dependency edges pointing to the deleted task", () => {
-    const a = store.create("a", "desc");
-    const b = store.create("b", "desc");
-    store.addBlocks(a.id, [b.id]);
-    store.delete(b.id);
-
-    expect(store.get(a.id)!.blocks).not.toContain(b.id);
-  });
-
-  it("create: accepts activeForm, owner, agentType, metadata", () => {
-    const t = store.create("task", "desc", { foo: "bar" }, {
-      activeForm: "Working on it",
-      owner: "agent-1",
-      agentType: "general-purpose",
-    });
-
-    expect(t.activeForm).toBe("Working on it");
-    expect(t.owner).toBe("agent-1");
-    expect(t.agentType).toBe("general-purpose");
-    expect(t.metadata).toEqual({ foo: "bar" });
-    expect(t.blocks).toEqual([]);
-    expect(t.blockedBy).toEqual([]);
-  });
-
-  it("updateDetails: updates activeForm, owner, agentType", () => {
-    const t = store.create("task", "desc");
-    store.updateDetails(t.id, {
-      activeForm: "Running tests",
-      owner: "agent-2",
-    });
-
-    expect(store.get(t.id)!.activeForm).toBe("Running tests");
-    expect(store.get(t.id)!.owner).toBe("agent-2");
-  });
-
-  it("updateDetails: shallow-merges metadata, null deletes keys", () => {
-    const t = store.create("task", "desc", { a: "1", b: "2" });
-    store.updateDetails(t.id, { metadata: { b: null, c: "3" } });
-
-    const meta = store.get(t.id)!.metadata;
-    expect(meta.a).toBe("1");
-    expect(meta.b).toBeUndefined();
-    expect(meta.c).toBe("3");
-  });
-});
 
 describe("TaskStore (in-memory)", () => {
   let store: TaskStore;
@@ -190,6 +36,15 @@ describe("TaskStore (in-memory)", () => {
     expect(typeof entry?.completedAt).toBe("number");
   });
 
+  it("closes tasks without completing them", () => {
+    store.create("task", "desc");
+    const entry = store.close("1");
+
+    expect(entry?.status).toBe("closed");
+    expect(typeof entry?.closedAt).toBe("number");
+    expect(entry?.completedAt).toBeUndefined();
+  });
+
   it("reopens tasks explicitly and preserves completedAt", () => {
     store.create("task", "desc");
     store.start("1");
@@ -199,6 +54,147 @@ describe("TaskStore (in-memory)", () => {
     const entry = store.reopen("1");
     expect(entry?.status).toBe("pending");
     expect(entry?.completedAt).toBe(completedAt);
+  });
+
+  it("rejects claim leases beyond the one-hour safety bound", () => {
+    store.create("task", "desc");
+    expect(store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      leaseMs: 3_600_001,
+    })).toBeUndefined();
+  });
+
+  it("claims pending work and rejects a live foreign owner", () => {
+    store.create("task", "desc");
+    const claimed = store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 5_000,
+    });
+
+    expect(claimed).toMatchObject({
+      takenOver: false,
+      renewed: false,
+      entry: {
+        status: "in_progress",
+        claim: {
+          claimId: "claim-1",
+          ownerSessionId: "session-a",
+          ownerRuntimeId: "runtime-a",
+          claimedAt: 1_000,
+          heartbeatAt: 1_000,
+          leaseExpiresAt: 6_000,
+          attempt: 1,
+        },
+      },
+    });
+    expect(store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-b",
+      ownerRuntimeId: "runtime-b",
+      now: 2_000,
+      leaseMs: 5_000,
+    })).toBeUndefined();
+  });
+
+  it("renews the same owner and permits takeover only after expiry", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    const renewed = store.claim("1", {
+      claimId: "ignored-new-id",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_500,
+      leaseMs: 1_000,
+    });
+    expect(renewed).toMatchObject({
+      takenOver: false,
+      renewed: true,
+      entry: { claim: { claimId: "claim-1", heartbeatAt: 1_500, leaseExpiresAt: 2_500, attempt: 1 } },
+    });
+
+    const takeover = store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-b",
+      ownerRuntimeId: "runtime-b",
+      now: 2_501,
+      leaseMs: 1_000,
+    });
+    expect(takeover).toMatchObject({
+      takenOver: true,
+      entry: { claim: { claimId: "claim-2", attempt: 2, leaseExpiresAt: 3_501 } },
+    });
+  });
+
+  it("issues a new token when the same owner reclaims after expiry", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    const reclaimed = store.claim("1", {
+      claimId: "claim-2",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 2_001,
+      leaseMs: 1_000,
+    });
+
+    expect(reclaimed).toMatchObject({
+      takenOver: false,
+      renewed: false,
+      entry: { claim: { claimId: "claim-2", attempt: 2, leaseExpiresAt: 3_001 } },
+    });
+  });
+
+  it("requires the live claim token for deletion", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    expect(store.delete("1", undefined, 1_500)).toBe(false);
+    expect(store.delete("1", "wrong", 1_500)).toBe(false);
+    expect(store.delete("1", "claim-1", 2_001)).toBe(false);
+    expect(store.delete("1", "claim-1", 1_500)).toBe(true);
+  });
+
+  it("requires the claim token for heartbeat and completion", () => {
+    store.create("task", "desc");
+    store.claim("1", {
+      claimId: "claim-1",
+      ownerSessionId: "session-a",
+      ownerRuntimeId: "runtime-a",
+      now: 1_000,
+      leaseMs: 1_000,
+    });
+
+    expect(store.heartbeat("1", "wrong", 1_500, 1_000)).toBeUndefined();
+    expect(store.heartbeat("1", "claim-1", 1_500, 3_600_001)).toBeUndefined();
+    expect(store.heartbeat("1", "claim-1", 1_500, 1_000)?.claim?.leaseExpiresAt).toBe(2_500);
+    expect(store.heartbeat("1", "claim-1", 2_501, 1_000)).toBeUndefined();
+    expect(store.complete("1", "wrong", 2_000)).toBeUndefined();
+    expect(store.complete("1", "claim-1", 2_000)?.status).toBe("completed");
+    expect(store.get("1")?.claim).toBeUndefined();
   });
 
   it("updates task details explicitly", () => {
@@ -213,27 +209,29 @@ describe("TaskStore (in-memory)", () => {
   it("returns undefined for missing lifecycle/detail updates", () => {
     expect(store.start("999")).toBeUndefined();
     expect(store.complete("999")).toBeUndefined();
+    expect(store.close("999")).toBeUndefined();
     expect(store.reopen("999")).toBeUndefined();
     expect(store.updateDetails("999", { subject: "missing" })).toBeUndefined();
   });
 
-  it("prunes completed tasks only", () => {
+  it("prunes completed and closed tasks", () => {
     store.create("done", "d1");
-    store.create("active", "d2");
+    store.create("closed", "d2");
+    store.create("active", "d3");
     store.complete("1");
-    store.start("2");
+    store.close("2");
+    store.start("3");
 
-    expect(store.pruneCompleted()).toBe(1);
+    expect(store.pruneCompleted()).toBe(2);
     expect(store.list()).toHaveLength(1);
     expect(store.get("1")).toBeUndefined();
-    expect(store.get("2")?.status).toBe("in_progress");
+    expect(store.get("2")).toBeUndefined();
+    expect(store.get("3")?.status).toBe("in_progress");
   });
 });
 
 describe("TaskStore (file-backed)", () => {
-  const testListId = `test-tasks-${Date.now()}`;
-  const tasksDir = join(homedir(), ".pi", "tasks");
-  const filePath = join(tasksDir, `${testListId}.json`);
+  const filePath = join(tmpdir(), `pi-loop-tasks-${Date.now()}.json`);
 
   afterEach(() => {
     rmSync(filePath, { force: true });
@@ -242,19 +240,19 @@ describe("TaskStore (file-backed)", () => {
   });
 
   it("persists explicit lifecycle and detail updates", () => {
-    const store1 = new TaskStore(testListId);
+    const store1 = new TaskStore(filePath);
     store1.create("task", "desc");
     store1.start("1");
     store1.updateDetails("1", { subject: "updated" });
 
-    const store2 = new TaskStore(testListId);
+    const store2 = new TaskStore(filePath);
     expect(store2.get("1")?.status).toBe("in_progress");
     expect(store2.get("1")?.subject).toBe("updated");
   });
 
   it("refreshes reads only when the backing file changes", () => {
-    const store1 = new TaskStore(testListId);
-    const store2 = new TaskStore(testListId);
+    const store1 = new TaskStore(filePath);
+    const store2 = new TaskStore(filePath);
 
     store1.create("first", "desc");
     expect(store2.list()).toHaveLength(1);
@@ -265,7 +263,7 @@ describe("TaskStore (file-backed)", () => {
   });
 
   it("preserves monotonic ids after prune", () => {
-    const store1 = new TaskStore(testListId);
+    const store1 = new TaskStore(filePath);
     store1.create("done", "desc");
     store1.complete("1");
     store1.pruneCompleted();
