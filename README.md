@@ -71,7 +71,7 @@ npm run build
 PI_LOOP_LIVE_MODEL="<provider/model[:thinking]>" npm run test:e2e:workflow
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md), the [workflow harness testing guide](./docs/WORKFLOW_HARNESS_TESTING.md), the [task-backlog prompt testing guide](./docs/BACKLOG_PROMPT_TESTING.md), and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), the [security policy](./.github/SECURITY.md), the [workflow harness testing guide](./docs/WORKFLOW_HARNESS_TESTING.md), the [task-backlog prompt testing guide](./docs/BACKLOG_PROMPT_TESTING.md), and the [profiling and fuzzing guide](./docs/PROFILING_AND_FUZZING.md).
 
 ## License
 
