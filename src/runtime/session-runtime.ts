@@ -1,5 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { LoopStore } from "../store.js";
+import { type LoopSnapshot, syncLoopTools } from "../tools/tool-visibility.js";
+import { showEscapeDialog } from "../ui/escape-dialog.js";
+import { showLoopListOverlay } from "../ui/overlays.js";
+import type { BindingsStore } from "./bindings-store.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -19,10 +24,20 @@ export interface SessionRuntimeOptions {
   clearAllLoops: () => void;
   getStore: () => LoopStore;
   getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string }) => boolean): void };
-  getTriggerSystem: () => { start(): void; stop(): void };
+  getTriggerSystem: () => { start(): void; stop(): void; add(entry: { id: string }): void; remove(id: string): void };
+  getBindingsStore: () => BindingsStore;
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
+  /** Snapshot of the current loop state. Read by syncLoopTools to decide
+   *  which loop tools should be exposed to the LLM. */
+  getLoopSnapshots: () => LoopSnapshot[];
+  /** Optional override of the runtime sync fn for tests. */
+  syncLoopToolsFn?: typeof syncLoopTools;
+  /** Optional override for the loop overlay (for tests). */
+  showLoopListOverlayFn?: typeof showLoopListOverlay;
+  /** Optional override for the escape dialog (for tests). */
+  showEscapeDialogFn?: typeof showEscapeDialog;
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   migrateTaskBacklogLoops: () => number;
@@ -43,9 +58,12 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getStore,
     getScheduler,
     getTriggerSystem,
+    getBindingsStore,
     setLatestCtx,
     setSessionId,
     widget,
+    getLoopSnapshots,
+    syncLoopToolsFn,
     notificationRuntime,
     flushPendingNotifications,
     migrateTaskBacklogLoops,
@@ -54,12 +72,15 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     releaseTaskBacklogWakes,
     hasPendingTasks,
     cleanDoneTasks,
+    showLoopListOverlayFn,
+    showEscapeDialogFn,
   } = options;
 
   let storeUpgraded = false;
   let persistedShown = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let agentStartFireCounts: ReadonlyMap<string, number> | undefined;
+  let terminalInputUnsubscribe: (() => void) | undefined;
 
   // The CronScheduler is pump-driven; without this heartbeat it only advances at
   // turn boundaries (turn_start/agent_end), so a loop whose fire time elapses
@@ -78,10 +99,74 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     heartbeatTimer.unref?.();
   }
 
+  function syncToolsNow(): void {
+    const fn = syncLoopToolsFn ?? syncLoopTools;
+    fn(pi, getLoopSnapshots());
+  }
+
   function stopHeartbeat(): void {
     if (!heartbeatTimer) return;
     clearInterval(heartbeatTimer);
     heartbeatTimer = undefined;
+  }
+
+  // Register global keybindings. Per ADR-004: Ctrl+Shift+L opens the loop
+  // list overlay; Escape during a pending fire opens the skip/continue/cancel
+  // dialog. Returns { consume: true } only when consuming the key.
+  // Crash recovery helper: when session_start fires with reason === 'resume',
+  // scan the store for paused loops and prompt the user per loop. Mirrors
+  // pragmaxim's extensions/goal.ts:3437. Headless mode is a no-op.
+  async function offerResumePausedLoops(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.hasUI) return;
+    const paused = getStore().list().filter((l) => l.status === "paused");
+    if (paused.length === 0) return;
+    for (const entry of paused) {
+      const shouldResume = await ctx.ui.confirm(
+        `Resume paused loop #${entry.id}?`,
+        entry.prompt.slice(0, 80),
+      );
+      if (shouldResume) {
+        const resumed = getStore().resume(entry.id);
+        if (resumed) {
+          getTriggerSystem().add(resumed);
+          ctx.ui.notify(`Loop #${entry.id} resumed`, "info");
+        }
+      }
+    }
+  }
+
+  function registerKeybindings(ctx: ExtensionContext): void {
+    if (!ctx.hasUI) return;
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+      // Ctrl+Shift+L — always available when idle and has UI.
+      if (matchesKey(data, "ctrl+shift+l")) {
+        void (showLoopListOverlayFn ?? showLoopListOverlay)(ctx, {
+          loops: getStore().list(),
+          monitors: [],
+          tasks: { count: 0 },
+          myLoopIds: new Set(getStore().list().map((l) => l.id)),
+        });
+        return { consume: true };
+      }
+      // Escape — only consumed when an operation is in flight. Otherwise the
+      // TUI handles Escape (e.g. clearing editor text).
+      if (matchesKey(data, "escape")) {
+        const hasRecentFire = getStore().list().some((l) => l.status === "active");
+        if (!hasRecentFire) return undefined;
+        void (showEscapeDialogFn ?? showEscapeDialog)(ctx, {
+          operationLabel: "Loop firing",
+        }).then((choice) => {
+          if (choice === "cancel") {
+            ctx.ui.notify("Operation cancelled via Escape", "info");
+          } else if (choice === "skip") {
+            ctx.ui.notify("Iteration skipped via Escape", "info");
+          }
+        });
+        return { consume: true };
+      }
+      return undefined;
+    });
   }
 
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
@@ -92,16 +177,39 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     storeUpgraded = true;
   }
 
-  async function showPersistedLoops(_isResume = false) {
+  async function showPersistedLoops(ui?: ExtensionContext["ui"], _isResume = false) {
     if (persistedShown) return;
     persistedShown = true;
     const sessionStartedAt = Date.now();
     migrateTaskBacklogLoops();
+
+    const bindings = getBindingsStore();
+    const hadFile = bindings.fileExists();
+    bindings.load();
+    if (!hadFile) {
+      bindings.save();
+      if (ui) {
+        ui.notify(
+          "No bindings for this session — run /loop-resume to choose which loops this terminal arms.",
+          "info",
+        );
+      }
+    }
+
     const loops = getStore().list();
     if (loops.length > 0) {
       getStore().clearExpired();
       getStore().expireEventLoops(sessionStartedAt);
+
       getTriggerSystem().start();
+      const boundIds = new Set(bindings.list());
+      for (const loop of loops) {
+        if (loop.status === "active" && boundIds.has(loop.id)) {
+          getTriggerSystem().add(loop);
+        } else {
+          getTriggerSystem().remove(loop.id);
+        }
+      }
       ensureHeartbeat();
     }
     await adoptTaskBacklogLoops();
@@ -121,13 +229,23 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getScheduler().pump(Date.now(), (entry) => !pendingTasks.has(entry.id));
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     setLatestCtx(ctx);
     setSessionId(ctx.sessionManager.getSessionId());
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
+    registerKeybindings(ctx);
+
+    // Per ADR-001 and pragmaxim's extensions/goal.ts:3437: on crash recovery
+    // (event.reason === 'resume'), offer to resume paused loops. Fresh
+    // session starts (reason unset or 'new') do NOT prompt — the user
+    // should pick deliberately via /loop-list.
+    if (event?.reason === "resume") {
+      await offerResumePausedLoops(ctx);
+    }
+
     widget.update();
   });
 
@@ -137,7 +255,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
     widget.update();
     await pumpLoops();
   });
@@ -147,7 +265,11 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
+    // Per ADR-002: sync the LLM's active tool set to the current loop
+    // state. First sync MUST happen in before_agent_start, never in
+    // session_start (runtime not bound — see pragmaxim d77e3b8).
+    syncToolsNow();
     widget.update();
   });
 
@@ -178,6 +300,8 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   pi.on("session_shutdown", async () => {
     stopHeartbeat();
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = undefined;
     releaseTaskBacklogWakes();
     notificationRuntime.clear("session_shutdown");
   });
@@ -198,7 +322,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     setSessionId(ctx.sessionManager.getSessionId());
     upgradeStoreIfNeeded(ctx);
     if (!isResume && getLoopScope() === "memory") clearAllLoops();
-    await showPersistedLoops(isResume);
+    await showPersistedLoops(ctx.ui, isResume);
     widget.update();
   });
 

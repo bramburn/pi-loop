@@ -1,22 +1,38 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSessionRuntimeHooks, type SessionRuntimeOptions } from "../src/runtime/session-runtime.js";
+import { LoopStore } from "../src/store.js";
 import { createCtx, createMockPi } from "./helpers/mock-pi.js";
 
 function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
   const { pi, extensionHandlers } = createMockPi();
   const scheduler = { nextFire: vi.fn(() => undefined), pump: vi.fn() };
+  const store: LoopStore =
+    "store" in overrides && overrides.store instanceof LoopStore
+      ? (overrides.store as LoopStore)
+      : new LoopStore();
+  const bindingsStore = {
+    list: vi.fn(() => [] as string[]),
+    add: vi.fn(),
+    remove: vi.fn(),
+    load: vi.fn(() => true),
+    save: vi.fn(),
+    fileExists: vi.fn(() => false),
+  };
+  const triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn() };
   const options: SessionRuntimeOptions = {
     pi,
     getLoopScope: () => "memory",
     getPiLoopEnv: () => undefined,
     recreateSessionStore: vi.fn(),
     clearAllLoops: vi.fn(),
-    getStore: () => ({ list: () => [], clearExpired: vi.fn(), expireEventLoops: vi.fn() }) as any,
+    getStore: () => store as any,
     getScheduler: () => scheduler as any,
-    getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn() }),
+    getTriggerSystem: () => triggerSystem as any,
+    getBindingsStore: () => bindingsStore as any,
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
+    getLoopSnapshots: vi.fn(() => store.list().map(() => ({ id: "1", status: "active" as const, hasDynamic: false, isTaskBacklog: false, hasWorkflow: false }))),
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),
@@ -32,13 +48,31 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     releaseTaskBacklogWakes: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
     cleanDoneTasks: vi.fn(async () => {}),
+    showLoopListOverlayFn: vi.fn(async () => undefined),
+    showEscapeDialogFn: vi.fn(async () => "continue" as const),
     ...overrides,
   };
+  // Don't double-pass store/getStore/showLoopListOverlayFn/showEscapeDialogFn
+  if (!("store" in overrides)) delete (options as { store?: unknown }).store;
+  if (!("resumeConfirmed" in overrides)) delete (options as { resumeConfirmed?: unknown }).resumeConfirmed;
   registerSessionRuntimeHooks(options);
-  const drive = async (name: string) => {
-    for (const handler of extensionHandlers.get(name) ?? []) await handler(null, createCtx());
+  let lastCtx = createCtx();
+  const drive = async (name: string, event?: Record<string, unknown>) => {
+    for (const handler of extensionHandlers.get(name) ?? []) {
+      lastCtx = createCtx();
+      if (overrides.resumeConfirmed === true) {
+        (lastCtx.ui.confirm as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+      }
+      await handler(event ?? null, lastCtx);
+    }
   };
-  return { scheduler, drive };
+  return {
+    scheduler,
+    drive,
+    ctxForDrive: () => lastCtx,
+    bindingsStore,
+    triggerSystem,
+  };
 }
 
 describe("session-runtime heartbeat lifecycle", () => {
@@ -68,6 +102,8 @@ describe("session-runtime heartbeat lifecycle", () => {
     const triggerSystem = {
       start: vi.fn(() => calls.push("start")),
       stop: vi.fn(),
+      add: vi.fn(),
+      remove: vi.fn(),
     };
     const { drive } = setup({
       migrateTaskBacklogLoops,
@@ -161,5 +197,182 @@ describe("session-runtime heartbeat lifecycle", () => {
 
     expect(scheduler.pump).toHaveBeenCalled();
     expect(widget.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("session-runtime keybindings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("session_start registers an onTerminalInput handler", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    const handlers = ctxForDrive().terminalInputs;
+    expect(handlers.length).toBeGreaterThan(0);
+  });
+
+  it("session_shutdown unregisters the terminal input handler", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    expect(ctxForDrive().terminalInputs.length).toBeGreaterThan(0);
+    await drive("session_shutdown");
+    expect(ctxForDrive().terminalInputs.length).toBe(0);
+  });
+
+  it("Escape without active loops returns undefined (does not consume)", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    const handler = ctxForDrive().terminalInputs[ctxForDrive().terminalInputs.length - 1]!;
+    // matchesKey expects a raw terminal escape sequence; we test the handler's
+    // short-circuit path by passing a sequence that won't match any key.
+    const result = handler("zzzz");
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("session-runtime crash recovery", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("session_start with reason 'resume' prompts per paused loop", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "weekly report",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+    expect(store.list()[0]?.status).toBe("paused");
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    // confirm() should have been called once for the paused loop
+    const ctx = ctxForDrive();
+    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.confirm.mock.calls[0]?.[0]).toContain(`#${entry.id}`);
+  });
+
+  it("session_start with reason 'resume' does NOT prompt when no paused loops", async () => {
+    const store = new LoopStore();
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "active loop",
+      { recurring: true },
+    );
+    expect(store.list()[0]?.status).toBe("active");
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    expect(ctxForDrive().ui.confirm).not.toHaveBeenCalled();
+    // entry should still be active — no resume attempted
+    expect(store.list()[0]?.status).toBe("active");
+  });
+
+  it("session_start WITHOUT reason does NOT prompt (fresh start)", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", undefined);
+    expect(ctxForDrive().ui.confirm).not.toHaveBeenCalled();
+    expect(store.list()[0]?.status).toBe("paused");
+  });
+
+  it("user declining the resume prompt leaves the loop paused", async () => {
+    const store = new LoopStore();
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    ).id;
+    // Pause the most recently created loop
+    const lastId = store.list()[0]!.id;
+    store.pause(lastId);
+
+    const { drive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    // confirm returns false by default (user declines)
+    expect(store.list()[0]?.status).toBe("paused");
+  });
+
+  it("user accepting the resume prompt activates the loop", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+
+    const { drive } = setup({ store, resumeConfirmed: true });
+    await drive("session_start", { reason: "resume" });
+    expect(store.list()[0]?.status).toBe("active");
+  });
+});
+
+describe("session-runtime per-session bindings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("arms zero loops and notifies on a fresh session with no bindings file", async () => {
+    const { drive, ctxForDrive, triggerSystem, bindingsStore } = setup();
+    await drive("session_start");
+
+    expect(bindingsStore.save).toHaveBeenCalled();
+    expect(
+      ctxForDrive().notifications.some((n) =>
+        n.message.includes("No bindings for this session"),
+      ),
+    ).toBe(true);
+    expect(triggerSystem.add).not.toHaveBeenCalled();
+  });
+
+  it("only arms loops that are listed in the bindings store", async () => {
+    const store = new LoopStore();
+    const bound = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "bound loop",
+      { recurring: true },
+    );
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "unbound loop",
+      { recurring: true },
+    );
+
+    const bindingsStore = {
+      list: vi.fn(() => [bound.id]),
+      add: vi.fn(),
+      remove: vi.fn(),
+      load: vi.fn(() => true),
+      save: vi.fn(),
+      fileExists: vi.fn(() => true),
+    };
+
+    const triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn() };
+    const { drive } = setup({
+      store,
+      getStore: () => store as any,
+      getTriggerSystem: () => triggerSystem as any,
+      getBindingsStore: () => bindingsStore as any,
+    });
+
+    await drive("session_start");
+
+    expect(triggerSystem.start).toHaveBeenCalled();
+    expect(triggerSystem.add).toHaveBeenCalledWith(expect.objectContaining({ id: bound.id }));
+    expect(triggerSystem.add).not.toHaveBeenCalledWith(expect.objectContaining({ id: "2" }));
+    expect(triggerSystem.remove).toHaveBeenCalledWith("2");
   });
 });

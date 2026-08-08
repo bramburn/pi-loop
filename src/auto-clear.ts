@@ -1,10 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadSettings, type PiLoopSettings } from "./settings.js";
 import type { TaskStore } from "./task-store.js";
 import type { TaskEntry } from "./task-types.js";
-import type { TasksConfig } from "./tasks-config.js";
-import { loadTasksConfig } from "./tasks-config.js";
 
-export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
+export type AutoClearMode = PiLoopSettings["autoClear"];
 
 export interface AutoClearOptions {
   pi: ExtensionAPI;
@@ -17,19 +16,27 @@ export interface AutoClearOptions {
 export function createAutoClearManager(options: AutoClearOptions) {
   const { pi, cwd, getTaskStore, updateWidget, onTasksCleared } = options;
 
-  let config: TasksConfig;
+  let config: PiLoopSettings;
   try {
-    config = loadTasksConfig(cwd);
+    config = loadSettings(cwd);
   } catch {
-    config = { taskScope: "session", sortOrder: "id", maxVisible: 10, showAll: false, hiddenAt: "bottom", autoClearCompleted: "on_list_complete" };
+    config = {
+      loopScope: "project",
+      taskScope: "session",
+      debug: false,
+      autoClear: "on_list_complete",
+      sortOrder: "id",
+      hiddenAt: "bottom",
+      maxVisible: 10,
+      showAll: false,
+      taskThreshold: 5,
+    };
   }
 
-  // Idle-turn counter — increments on agent idle, resets on task completion
   let idleTurnsSinceCompletion = 0;
   let _lastCompletedIds = new Set<string>();
   let autoClearArmed = false;
 
-  // Subscribe to agent idle to increment counter
   pi.events.on("agent_end", () => {
     idleTurnsSinceCompletion++;
     if (idleTurnsSinceCompletion >= 3 && autoClearArmed) {
@@ -37,17 +44,14 @@ export function createAutoClearManager(options: AutoClearOptions) {
     }
   });
 
-  // Subscribe to tasks:completed to arm/reset the counter
   pi.events.on("tasks:completed", (raw: unknown) => {
     const _payload = raw as { taskId?: string; task?: TaskEntry };
-    if (config.autoClearCompleted === "never") return;
+    if (config.autoClear === "never") return;
 
-    if (config.autoClearCompleted === "on_task_complete") {
-      // Clear immediately after a short delay (3 idle turns)
+    if (config.autoClear === "on_task_complete") {
       idleTurnsSinceCompletion = 0;
       autoClearArmed = true;
-    } else if (config.autoClearCompleted === "on_list_complete") {
-      // Check if ALL tasks are now completed
+    } else if (config.autoClear === "on_list_complete") {
       const taskStore = getTaskStore();
       if (!taskStore) return;
       const pending = taskStore.pendingCount();
@@ -81,7 +85,7 @@ export function createAutoClearManager(options: AutoClearOptions) {
   return {
     reloadConfig() {
       try {
-        config = loadTasksConfig(cwd);
+        config = loadSettings(cwd);
       } catch {
         // keep current
       }

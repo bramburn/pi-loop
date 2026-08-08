@@ -3,7 +3,7 @@ import extension from "../src/index.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
 const LOOP_TOOLS = ["LoopCreate", "LoopUpdate", "LoopList", "LoopDelete"];
-const LOOP_COMMANDS = ["loop", "loop-resume"];
+const LOOP_COMMANDS = ["loop", "loop-resume", "loop-settings"];
 const DISABLED_TOOLS = [
   "MonitorCreate",
   "MonitorList",

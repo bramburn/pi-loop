@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { formatTrigger } from "../loop-format.js";
 import { isValidCronExpression, parseInterval } from "../loop-parse.js";
+import type { BindingsStore } from "../runtime/bindings-store.js";
 import type { DynamicLoopState, LoopEntry, Trigger } from "../types.js";
 import { isTerminalWorkflowRun } from "../workflow-reducer.js";
 
@@ -33,6 +34,7 @@ export interface LoopCommandOptions {
   pi: ExtensionAPI;
   getStore: () => LoopStoreLike;
   getTriggerSystem: () => TriggerSystemLike;
+  getBindingsStore: () => BindingsStore;
   updateWidget: () => void;
   maybeBootstrapTaskLoop?: (entry: LoopEntry) => Promise<boolean>;
   onDynamicLoopActivated?: (entry: LoopEntry) => void;
@@ -77,7 +79,7 @@ function parseLoopCommandRoute(input: string): LoopCommandRoute {
 }
 
 export function registerLoopCommand(options: LoopCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated } = options;
+  const { pi, getStore, getTriggerSystem, getBindingsStore, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated } = options;
 
   function createCronLoop(ui: ExtensionUIContext, interval: string, prompt: string, notifyEvery: boolean) {
     let entry: LoopEntry | undefined;
@@ -86,6 +88,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       const trigger: Trigger = { type: "cron", schedule: parsed.cron };
       entry = getStore().create(trigger, prompt, { recurring: true });
       getTriggerSystem().add(entry);
+      getBindingsStore().add(entry.id);
       updateWidget();
       const cadence = notifyEvery ? `every ${parsed.description}` : parsed.description;
       ui.notify(`Loop #${entry.id} created: ${cadence} — ${prompt.slice(0, 50)}`, "info");
@@ -124,6 +127,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       maxFires: taskBacklog ? 25 : undefined,
     });
     getTriggerSystem().add(entry);
+    getBindingsStore().add(entry.id);
     updateWidget();
     const bootstrapped = taskBacklog ? await maybeBootstrapTaskLoop?.(entry) : false;
     const adoption = taskBacklog
@@ -140,6 +144,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       dynamic: { goal, iteration: 0 },
     });
     getTriggerSystem().add(entry);
+    getBindingsStore().add(entry.id);
     updateWidget();
     ui.notify(`Dynamic loop #${entry.id} created — ${goal.slice(0, 50)}`, "info");
     onDynamicLoopActivated?.(entry);
@@ -181,6 +186,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
             return viewLoops(ui);
           }
           getTriggerSystem().remove(entry.id);
+          getBindingsStore().remove(entry.id);
           getStore().delete(entry.id);
           updateWidget();
           ui.notify(`Loop #${entry.id} deleted`, "info");
@@ -193,6 +199,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           const resumed = getStore().resume(entry.id);
           if (!resumed) return viewLoops(ui);
           getTriggerSystem().add(resumed);
+          getBindingsStore().add(entry.id);
           updateWidget();
           ui.notify(`Loop #${entry.id} resumed`, "info");
           if (resumed.trigger.type === "dynamic") onDynamicLoopActivated?.(resumed);
@@ -256,8 +263,11 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           ui.notify("No stored loops to re-arm. Use /loop to create one first.", "info");
           return;
         }
-        const choices = loops.map((l) => {
-          const icon = l.status === "active" ? "*" : l.status === "paused" ? "-" : "x";
+
+        const pending = new Set(getBindingsStore().list());
+        const formatRow = (l: LoopEntry) => {
+          const bound = pending.has(l.id);
+          const icon = bound ? "[x]" : "[ ]";
           const triggerDesc = l.trigger.type === "cron"
             ? `cron: ${l.trigger.schedule}`
             : l.trigger.type === "event"
@@ -266,14 +276,47 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
                 ? `hybrid: ${l.trigger.cron}`
                 : "dynamic";
           return `${icon} #${l.id} [${l.status}] ${l.prompt.slice(0, 50)} (${triggerDesc})`;
-        });
-        choices.push("< Back");
-        const selected = await ui.select("Re-arm which loop?", choices);
-        if (!selected || selected === "< Back") return;
-        const match = selected.match(/#(\d+)/);
-        if (!match) return;
-        await rearmLoop(ui, match[1]);
-        return;
+        };
+
+        while (true) {
+          const choices = loops.map(formatRow);
+          choices.push("< OK>", "< Cancel>");
+          const selected = await ui.select("Arm loops for this session", choices);
+          if (!selected || selected === "< Cancel>") return;
+
+          if (selected === "< OK>") {
+            const current = new Set(getBindingsStore().list());
+            for (const id of pending) {
+              if (!current.has(id)) {
+                getBindingsStore().add(id);
+                const loop = getStore().get(id);
+                if (loop && loop.status === "active") {
+                  getTriggerSystem().add(loop);
+                }
+              }
+            }
+            for (const id of current) {
+              if (!pending.has(id)) {
+                getBindingsStore().remove(id);
+                getTriggerSystem().remove(id);
+              }
+            }
+            const armed = pending.size;
+            ui.notify(
+              `${armed} loop${armed === 1 ? "" : "s"} bound to this session`,
+              "info",
+            );
+            updateWidget();
+            return;
+          }
+
+          const match = selected.match(/#(\d+)/);
+          if (match) {
+            const id = match[1];
+            if (pending.has(id)) pending.delete(id);
+            else pending.add(id);
+          }
+        }
       }
 
       const id = trimmed.split(/\s+/)[0];
@@ -281,15 +324,16 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
         ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-resume <id>.`, "error");
         return;
       }
-      await rearmLoop(ui, id);
+      const ok = await rearmLoop(ui, id);
+      if (ok) getBindingsStore().add(id);
     },
   });
 
-  async function rearmLoop(ui: ExtensionUIContext, id: string): Promise<void> {
+  async function rearmLoop(ui: ExtensionUIContext, id: string): Promise<boolean> {
     const before = getStore().get(id);
     if (!before) {
       ui.notify(`Loop #${id} not found in the store. Use /loop to create it first.`, "error");
-      return;
+      return false;
     }
     const entry = getStore().resume(id) ?? before;
     getTriggerSystem().add(entry);
@@ -297,5 +341,6 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     const transitioned = before.status !== entry.status;
     const tag = transitioned ? "resumed" : "re-armed";
     ui.notify(`Loop #${entry.id} ${tag} (status: ${entry.status})`, "info");
+    return true;
   }
 }
