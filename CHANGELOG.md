@@ -1,5 +1,69 @@
 # Changelog
 
+## 2.0.0 (unreleased — v2.0 milestone)
+
+### BREAKING CHANGES
+
+- **Status line replaced with above-editor widget.** pi-loop v2.0 no longer
+  calls `ctx.ui.setStatus("loops", …)`. The new `Component` is registered
+  via `ctx.ui.setWidget(KEY, factory, { placement: "aboveEditor" })` and
+  renders a multi-line tree of loops + monitors + tasks. Any external
+  scripts that parsed the v1.x status-line format must be updated.
+- **Settings unified to `.pi/pi-loop-settings.json`.** The v1.x
+  `.pi/tasks-config.json` file is migrated once on first v2 startup and
+  renamed to `.pi/tasks-config.json.v1.bak`. The v1.x files
+  `src/tasks-config.ts` and `src/ui/settings-menu.ts` are deleted from
+  the tree.
+- **PI_LOOP_* env vars no longer read.** `PI_LOOP_SCOPE`,
+  `PI_LOOP_DEBUG`, `PI_LOOP_TASK_THRESHOLD`, `PI_LOOP_TASK_WORKER_THRESHOLD`,
+  and `PI_LOOP` are captured once by the v1-to-v2 migration into the new
+  settings file and ignored thereafter. Use `/loop-settings` instead.
+- **Strict settings schema.** Unknown keys in
+  `.pi/pi-loop-settings.json` cause a startup error (previously silently
+  ignored).
+
+### Features
+
+- **Above-editor widget** registered via `setWidget("loops", factory, { placement: "aboveEditor" })`. Renders per-loop rows with icons, branch lines, trigger descriptions, and badges (`auto-task`, `backlog`, `iter:N`). Per-monitor rows show status icon, command, output line count, and age. Per-task summary is a single line.
+- **Width-safety net.** Every widget line is post-processed through `truncateToWidth(line, width, "…")` so the TUI never overflows. Tested at widths 50, 70, 80, 100, 109, 120 with 25 loops + 25 monitors + 25 tasks.
+- **Live ticker.** The widget repaints at 1 Hz while a firing indicator is visible. The `→ firing (Ns ago)` suffix refreshes every second for 5 seconds, then auto-clears. The timer is `.unref()`-ed so one-shot processes can exit.
+- **Tool visibility gating.** `syncLoopTools(pi, loops)` removes loop tools from the LLM's active tool set when they are not relevant to the current state. `LoopUpdate` is hidden when no dynamic loop is active; `LoopDelete` is hidden when no paused or `taskBacklog` loop exists; `WorkflowTransition` is hidden unless a workflow loop is in flight. Called from `before_agent_start` (per pragmaxim `d77e3b8` lesson: never from `session_start` because the runtime isn't bound yet) and after every store mutation.
+- **Modal overlays** (`Ctrl+Shift+L`, `Escape`) modelled on pragmaxim's `task-list-overlay.ts` and `goal-escape-dialog.ts`. Loop list overlay shows every loop, monitor, and task with `a` to toggle "my loops" vs "all loops". Escape dialog appears during a long-running fire with three options: cancel / skip / continue (default).
+- **Unified settings file** with strict schema (`additionalProperties: false`), env-var precedence on first v2 startup, and `/loop-settings` TUI editor.
+- **Crash-recovery prompt** on `session_start` with `event.reason === "resume"`: offers to resume each paused loop via `ctx.ui.confirm`. Mirrors pragmaxim's `extensions/goal.ts:3437`.
+- **`/loop-settings` slash command** with TUI menu cycling every setting and saving immediately.
+
+### Internal
+
+- `src/ui/widget-render.ts` (new, 187 lines) — pure render function.
+- `src/ui/overlays.ts` (new, 188 lines) — `showLoopListOverlay`.
+- `src/ui/escape-dialog.ts` (new, 122 lines) — `showEscapeDialog`.
+- `src/tools/tool-visibility.ts` (new, 134 lines) — `syncLoopTools`, `computeActiveTools`, `snapshotFromLoop`.
+- `src/settings.ts` (new, 185 lines) — `parseSettings`, `loadSettings`, `saveSettings`, `updateSettings`.
+- `src/migration/v1-to-v2.ts` (new, 120 lines) — one-shot v1-to-v2 migration.
+- `src/commands/settings-command.ts` (new, 155 lines) — `/loop-settings` editor.
+- 4 new `userflow/*.md` docs: `widget-loop-monitor-task.md`, `keybindings.md`, `settings-v2.md`, `crash-recovery.md`.
+- 4 ADRs in `docs/plan/`: widget key naming, tool visibility call sites, settings file schema, overlay keybindings.
+
+### Migration
+
+On first v2 startup, `migrateV1ToV2()`:
+
+1. Reads `.pi/tasks-config.json` (if present). Merges values into the v2 schema.
+2. Reads `PI_LOOP_SCOPE`, `PI_LOOP_DEBUG`, `PI_LOOP_TASK_THRESHOLD` env vars. Captures values into the v2 file.
+3. Writes `.pi/pi-loop-settings.json`.
+4. Renames the v1 file to `.pi/tasks-config.json.v1.bak`.
+5. Prints a one-time banner to stderr.
+
+The migration is idempotent — re-running does nothing if the v2 file already exists. To migrate manually, run `/loop-migrate` (future PR).
+
+### Test coverage
+
+- **625 tests** pass (was 561 in v1.3.0; +64 new in v2.0).
+- Full state × tool matrix tests for tool visibility gating.
+- Width matrix tests for the widget (6 widths × pathological counts).
+- Migration round-trip tests (v1 file → v2 file, env vars → v2 file, idempotency).
+
 ## 1.0.0 (2026-07-02)
 
 

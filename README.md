@@ -18,6 +18,21 @@ LoopList
 LoopDelete id="1"
 ```
 
+## Widget (v2.0)
+
+pi-loop renders an above-editor widget showing every loop, monitor, and task at a glance:
+
+```text
+  pi-loop · 3 loops · 1 monitor · 2 tasks
+    ├─ * #1 [active] check deploy (cron: */5 * * * *) next: 4m
+    ├─ * #2 [active] tail logs (event: tool_execution_start)
+    ├─ - #3 [paused] weekly report
+    ├─ > #4 [running] npm test … (3m 12s, 42 lines)
+    └─ 2 tasks: active: Foo
+```
+
+When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing every second. Press `Ctrl+Shift+L` for a scrollable loop list overlay. Press `Escape` during a long-running fire to skip or cancel.
+
 ## Commands
 
 `/loop [interval] [prompt]` — interactive loop creation.
@@ -28,6 +43,8 @@ LoopDelete id="1"
 ```
 
 `/loop-resume <id>` — re-arm a stored loop by ID and re-add it to the trigger system. Use this after a session/process restart when a stored event/hybrid loop's trigger subscription was lost. Idempotent: re-arming an already-active loop just refreshes the trigger.
+
+`/loop-settings` — open the unified settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold).
 
 ```text
 /loop-resume 5        # re-arm loop #5 by id
