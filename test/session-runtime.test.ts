@@ -17,6 +17,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
+    getLoopSnapshots: vi.fn(() => []),
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),

@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LoopStore } from "../store.js";
+import { type LoopSnapshot, syncLoopTools } from "../tools/tool-visibility.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -23,6 +24,11 @@ export interface SessionRuntimeOptions {
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
+  /** Snapshot of the current loop state. Read by syncLoopTools to decide
+   *  which loop tools should be exposed to the LLM. */
+  getLoopSnapshots: () => LoopSnapshot[];
+  /** Optional override of the runtime sync fn for tests. */
+  syncLoopToolsFn?: typeof syncLoopTools;
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   migrateTaskBacklogLoops: () => number;
@@ -46,6 +52,8 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     setLatestCtx,
     setSessionId,
     widget,
+    getLoopSnapshots,
+    syncLoopToolsFn,
     notificationRuntime,
     flushPendingNotifications,
     migrateTaskBacklogLoops,
@@ -76,6 +84,11 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
         .catch(() => {});
     }, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
+  }
+
+  function syncToolsNow(): void {
+    const fn = syncLoopToolsFn ?? syncLoopTools;
+    fn(pi, getLoopSnapshots());
   }
 
   function stopHeartbeat(): void {
@@ -148,6 +161,10 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
     await showPersistedLoops();
+    // Per ADR-002: sync the LLM's active tool set to the current loop
+    // state. First sync MUST happen in before_agent_start, never in
+    // session_start (runtime not bound — see pragmaxim d77e3b8).
+    syncToolsNow();
     widget.update();
   });
 

@@ -32,6 +32,7 @@ import { CronScheduler } from "./scheduler.js";
 import { LoopStore } from "./store.js";
 import { addBreadcrumb, initSentry, isSentryInitialized, logDebug, wrapToolExecute } from "./telemetry/sentry.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
+import { snapshotFromLoop, syncLoopTools } from "./tools/tool-visibility.js";
 import { TriggerSystem } from "./trigger-system.js";
 import type { LoopEntry } from "./types.js";
 import { LoopWidget } from "./ui/widget.js";
@@ -179,6 +180,7 @@ export default function (pi: ExtensionAPI) {
       }
     },
     widget,
+    getLoopSnapshots: () => store.list().map(snapshotFromLoop),
     notificationRuntime,
     flushPendingNotifications: notificationRuntime.flushPendingNotifications,
     migrateTaskBacklogLoops,
@@ -193,8 +195,16 @@ export default function (pi: ExtensionAPI) {
 
   const { queueOrDeliverNotification } = notificationRuntime;
 
+  // Per ADR-002: re-sync the LLM's active tool set after every store
+  // mutation. Cheap (microseconds) but ensures the LLM can never call a
+  // tool that the current loop state has just invalidated.
+  function refreshToolVisibility(): void {
+    syncLoopTools(pi, store.list().map(snapshotFromLoop));
+  }
+
   pi.events.on("loop:fire", async (event: unknown) => {
     const data = event as LoopFireEvent;
+    refreshToolVisibility();
     await queueOrDeliverNotification(data);
   });
 
@@ -206,6 +216,7 @@ export default function (pi: ExtensionAPI) {
     getMonitorManager: () => monitorManager,
     updateWidget: () => {
       widget.update();
+      refreshToolVisibility();
     },
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
@@ -218,6 +229,7 @@ export default function (pi: ExtensionAPI) {
     getTriggerSystem: () => triggerSystem,
     updateWidget: () => {
       widget.update();
+      refreshToolVisibility();
     },
     maybeBootstrapTaskLoop,
   });
