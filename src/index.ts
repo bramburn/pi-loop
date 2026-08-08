@@ -182,7 +182,7 @@ export default function (pi: ExtensionAPI) {
       widget.setStore(store);
       scheduler = new CronScheduler(store, onLoopFire);
       triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
-      bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), sessionId), loopScope);
+      bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), sessionId), loopScope, sessionId);
     },
     clearAllLoops: () => {
       store.clearAll();
@@ -190,6 +190,7 @@ export default function (pi: ExtensionAPI) {
     getStore: () => store,
     getScheduler: () => scheduler,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
     setLatestCtx: (ctx) => {
       _latestCtx = ctx;
     },
@@ -250,6 +251,7 @@ export default function (pi: ExtensionAPI) {
     pi,
     getStore: () => store,
     getTriggerSystem: () => triggerSystem,
+    getBindingsStore: () => bindingsStore,
     updateWidget: () => {
       widget.update();
       refreshToolVisibility();

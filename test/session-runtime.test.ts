@@ -10,6 +10,15 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     "store" in overrides && overrides.store instanceof LoopStore
       ? (overrides.store as LoopStore)
       : new LoopStore();
+  const bindingsStore = {
+    list: vi.fn(() => [] as string[]),
+    add: vi.fn(),
+    remove: vi.fn(),
+    load: vi.fn(() => true),
+    save: vi.fn(),
+    fileExists: vi.fn(() => false),
+  };
+  const triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn() };
   const options: SessionRuntimeOptions = {
     pi,
     getLoopScope: () => "memory",
@@ -18,7 +27,8 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     clearAllLoops: vi.fn(),
     getStore: () => store as any,
     getScheduler: () => scheduler as any,
-    getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn(), add: vi.fn() }),
+    getTriggerSystem: () => triggerSystem as any,
+    getBindingsStore: () => bindingsStore as any,
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
@@ -60,6 +70,8 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     scheduler,
     drive,
     ctxForDrive: () => lastCtx,
+    bindingsStore,
+    triggerSystem,
   };
 }
 
@@ -90,6 +102,8 @@ describe("session-runtime heartbeat lifecycle", () => {
     const triggerSystem = {
       start: vi.fn(() => calls.push("start")),
       stop: vi.fn(),
+      add: vi.fn(),
+      remove: vi.fn(),
     };
     const { drive } = setup({
       migrateTaskBacklogLoops,
@@ -302,5 +316,63 @@ describe("session-runtime crash recovery", () => {
     const { drive } = setup({ store, resumeConfirmed: true });
     await drive("session_start", { reason: "resume" });
     expect(store.list()[0]?.status).toBe("active");
+  });
+});
+
+describe("session-runtime per-session bindings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("arms zero loops and notifies on a fresh session with no bindings file", async () => {
+    const { drive, ctxForDrive, triggerSystem, bindingsStore } = setup();
+    await drive("session_start");
+
+    expect(bindingsStore.save).toHaveBeenCalled();
+    expect(
+      ctxForDrive().notifications.some((n) =>
+        n.message.includes("No bindings for this session"),
+      ),
+    ).toBe(true);
+    expect(triggerSystem.add).not.toHaveBeenCalled();
+  });
+
+  it("only arms loops that are listed in the bindings store", async () => {
+    const store = new LoopStore();
+    const bound = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "bound loop",
+      { recurring: true },
+    );
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "unbound loop",
+      { recurring: true },
+    );
+
+    const bindingsStore = {
+      list: vi.fn(() => [bound.id]),
+      add: vi.fn(),
+      remove: vi.fn(),
+      load: vi.fn(() => true),
+      save: vi.fn(),
+      fileExists: vi.fn(() => true),
+    };
+
+    const triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn() };
+    const { drive } = setup({
+      store,
+      getStore: () => store as any,
+      getTriggerSystem: () => triggerSystem as any,
+      getBindingsStore: () => bindingsStore as any,
+    });
+
+    await drive("session_start");
+
+    expect(triggerSystem.start).toHaveBeenCalled();
+    expect(triggerSystem.add).toHaveBeenCalledWith(expect.objectContaining({ id: bound.id }));
+    expect(triggerSystem.add).not.toHaveBeenCalledWith(expect.objectContaining({ id: "2" }));
+    expect(triggerSystem.remove).toHaveBeenCalledWith("2");
   });
 });

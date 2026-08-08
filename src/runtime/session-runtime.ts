@@ -4,6 +4,7 @@ import { LoopStore } from "../store.js";
 import { type LoopSnapshot, syncLoopTools } from "../tools/tool-visibility.js";
 import { showEscapeDialog } from "../ui/escape-dialog.js";
 import { showLoopListOverlay } from "../ui/overlays.js";
+import type { BindingsStore } from "./bindings-store.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -23,7 +24,8 @@ export interface SessionRuntimeOptions {
   clearAllLoops: () => void;
   getStore: () => LoopStore;
   getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string }) => boolean): void };
-  getTriggerSystem: () => { start(): void; stop(): void; add(entry: { id: string }): void };
+  getTriggerSystem: () => { start(): void; stop(): void; add(entry: { id: string }): void; remove(id: string): void };
+  getBindingsStore: () => BindingsStore;
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
@@ -56,6 +58,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getStore,
     getScheduler,
     getTriggerSystem,
+    getBindingsStore,
     setLatestCtx,
     setSessionId,
     widget,
@@ -174,16 +177,39 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     storeUpgraded = true;
   }
 
-  async function showPersistedLoops(_isResume = false) {
+  async function showPersistedLoops(ui?: ExtensionContext["ui"], _isResume = false) {
     if (persistedShown) return;
     persistedShown = true;
     const sessionStartedAt = Date.now();
     migrateTaskBacklogLoops();
+
+    const bindings = getBindingsStore();
+    const hadFile = bindings.fileExists();
+    bindings.load();
+    if (!hadFile) {
+      bindings.save();
+      if (ui) {
+        ui.notify(
+          "No bindings for this session — run /loop-resume to choose which loops this terminal arms.",
+          "info",
+        );
+      }
+    }
+
     const loops = getStore().list();
     if (loops.length > 0) {
       getStore().clearExpired();
       getStore().expireEventLoops(sessionStartedAt);
+
       getTriggerSystem().start();
+      const boundIds = new Set(bindings.list());
+      for (const loop of loops) {
+        if (loop.status === "active" && boundIds.has(loop.id)) {
+          getTriggerSystem().add(loop);
+        } else {
+          getTriggerSystem().remove(loop.id);
+        }
+      }
       ensureHeartbeat();
     }
     await adoptTaskBacklogLoops();
@@ -209,7 +235,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
     registerKeybindings(ctx);
 
     // Per ADR-001 and pragmaxim's extensions/goal.ts:3437: on crash recovery
@@ -229,7 +255,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
     widget.update();
     await pumpLoops();
   });
@@ -239,7 +265,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     widget.setUICtx(ctx.ui);
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
-    await showPersistedLoops();
+    await showPersistedLoops(ctx.ui);
     // Per ADR-002: sync the LLM's active tool set to the current loop
     // state. First sync MUST happen in before_agent_start, never in
     // session_start (runtime not bound — see pragmaxim d77e3b8).
@@ -296,7 +322,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     setSessionId(ctx.sessionManager.getSessionId());
     upgradeStoreIfNeeded(ctx);
     if (!isResume && getLoopScope() === "memory") clearAllLoops();
-    await showPersistedLoops(isResume);
+    await showPersistedLoops(ctx.ui, isResume);
     widget.update();
   });
 
