@@ -1,5 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
 import { LoopWidget } from "../src/ui/widget.js";
 import { clampStatusLine, type RenderWidgetState, renderWidgetLines } from "../src/ui/widget-render.js";
@@ -263,5 +263,49 @@ describe("LoopWidget v2.0 surface", () => {
     const component = factory({ requestRender: () => {} } as never, makeTheme() as never);
     const rendered = component.render(80);
     expect(rendered.some((l) => l.includes("from new store"))).toBe(true);
+  });
+
+  it("setFiringStatus installs a ticker that re-registers the widget at 1Hz", () => {
+    vi.useFakeTimers();
+    try {
+      const initial = setWidgetCalls.length;
+      widget.setFiringStatus("42", "check build");
+      expect(setWidgetCalls.length).toBeGreaterThan(initial);
+      setWidgetCalls.length = initial; // reset
+      // Advance 2 ticks → at least 2 re-registrations (each tick calls invalidate())
+      vi.advanceTimersByTime(2200);
+      expect(setWidgetCalls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ticker self-disables after the firing-flash window expires", () => {
+    vi.useFakeTimers();
+    try {
+      widget.setFiringStatus("42", "check build");
+      // Advance past the 5-second firing-flash window plus 1 tick
+      vi.advanceTimersByTime(6100);
+      // The ticker cleared itself and triggered one final repaint
+      const after = setWidgetCalls.length;
+      // Advance another 3 seconds: ticker should be silent now
+      vi.advanceTimersByTime(3000);
+      const later = setWidgetCalls.length;
+      expect(later).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispose() clears the ticker", () => {
+    vi.useFakeTimers();
+    try {
+      widget.setFiringStatus("42", "check build");
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+      widget.dispose();
+      expect(clearIntervalSpy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

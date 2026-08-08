@@ -49,6 +49,7 @@ export class LoopWidget {
   private taskSummaryProvider: (() => TaskSummary) | undefined;
   private firingLoopId: string | undefined;
   private firedAt: number | undefined;
+  private tickerTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private store: LoopStore,
@@ -71,11 +72,41 @@ export class LoopWidget {
   }
 
   /** Mark a loop as having fired. The widget renders the firing loop row
-   *  with a "→ firing (Ns ago)" suffix for 5 seconds. */
+   *  with a "→ firing (Ns ago)" suffix for 5 seconds, refreshing every
+   *  1s so the timestamp stays accurate. */
   setFiringStatus(loopId: string, _prompt: string): void {
     this.firingLoopId = loopId;
     this.firedAt = Date.now();
     this.invalidate();
+    this.ensureTicker();
+  }
+
+  /** Start (or reset) the live ticker that repaints the widget at 1 Hz
+   *  while a firing indicator is visible. Self-disables after
+   *  FIRING_FLASH_MS of inactivity. */
+  private ensureTicker(): void {
+    if (this.tickerTimer) {
+      // Already ticking; the new firing resets the flash window implicitly
+      // (we re-check firedAt on every tick).
+      return;
+    }
+    this.tickerTimer = setInterval(() => {
+      const now = Date.now();
+      if (this.firedAt === undefined || now - this.firedAt >= 5000) {
+        this.stopTicker();
+        this.invalidate(); // one last repaint to clear the firing indicator
+        return;
+      }
+      this.invalidate();
+    }, 1000);
+    this.tickerTimer.unref?.();
+  }
+
+  private stopTicker(): void {
+    if (this.tickerTimer) {
+      clearInterval(this.tickerTimer);
+      this.tickerTimer = undefined;
+    }
   }
 
   /** Trigger a widget re-render. Called after every store mutation. */
@@ -85,6 +116,7 @@ export class LoopWidget {
 
   /** Clear the widget registration. Called on session shutdown. */
   dispose(): void {
+    this.stopTicker();
     if (!this.uiCtx) return;
     this.uiCtx.setWidget(WIDGET_KEY, undefined);
   }

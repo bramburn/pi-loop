@@ -154,6 +154,11 @@ export default function (pi: ExtensionAPI) {
     }
     store.fire(entry.id);
 
+    // The widget renders the firing loop's row with a "-> firing (Ns ago)"
+    // suffix for 5 seconds, refreshing every 1s while the indicator is
+    // visible. setFiringStatus also starts the internal ticker.
+    widget.setFiringStatus(entry.id, entry.prompt);
+
     pi.events.emit("loop:fire", {
       loopId: entry.id,
       prompt: entry.prompt,
