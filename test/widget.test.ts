@@ -1,6 +1,7 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
-import { LoopWidget } from "../src/ui/widget.js";
+import { clampStatusLine, LoopWidget } from "../src/ui/widget.js";
 
 function createMockMonitorManager() {
   const monitors: Array<{
@@ -200,5 +201,123 @@ describe("LoopWidget status rendering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("clampStatusLine (pure helper)", () => {
+  it("returns the input unchanged when shorter than maxWidth", () => {
+    expect(clampStatusLine("hello", 80)).toBe("hello");
+  });
+
+  it("returns the input unchanged when exactly at maxWidth", () => {
+    const line = "x".repeat(80);
+    expect(clampStatusLine(line, 80)).toBe(line);
+  });
+
+  it("truncates with ellipsis when longer than maxWidth", () => {
+    const line = "x".repeat(200);
+    const out = clampStatusLine(line, 80);
+    expect(visibleWidth(out)).toBeLessThanOrEqual(80);
+    // truncateToWidth wraps the ellipsis with ANSI reset codes, so we check
+    // for the ellipsis being present (after stripping ANSI) rather than as the
+    // literal last character.
+    const stripped = out.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(stripped.endsWith("…")).toBe(true);
+  });
+
+  it("rounds up widths below the 20-column floor to a safe minimum", () => {
+    const out = clampStatusLine("hello world", 5);
+    expect(visibleWidth(out)).toBeLessThanOrEqual(20);
+  });
+
+  it("treats empty input as a no-op (returns empty string)", () => {
+    expect(clampStatusLine("", 80)).toBe("");
+  });
+});
+
+describe("LoopWidget width-safety net", () => {
+  let store: LoopStore;
+  let monitorManager: ReturnType<typeof createMockMonitorManager>;
+  let widget: LoopWidget;
+  let setStatus: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    store = new LoopStore();
+    monitorManager = createMockMonitorManager();
+    widget = new LoopWidget(store, monitorManager as any);
+    setStatus = vi.fn();
+    widget.setUICtx({ setStatus, setWidget: vi.fn() } as any);
+  });
+
+  afterEach(() => widget.dispose());
+
+  function latestStatusLine(): string | undefined {
+    const calls = setStatus.mock.calls.filter((call) => call[0] === "loops");
+    const last = calls[calls.length - 1];
+    return last?.[1];
+  }
+
+  // Pragmaxim's regression test matrix from commit a45b43d — widths that
+  // historically caused TUI overflow.
+  for (const width of [50, 70, 80, 100, 109, 120]) {
+    it(`clamps the status line at width ${width} under pathological counts`, () => {
+      widget.setMaxWidth(width);
+
+      // Pathological: 25 loops + 25 monitors + 200-char focus text.
+      for (let i = 0; i < 25; i++) {
+        store.create(
+          { type: "cron", schedule: "*/5 * * * *" },
+          `Loop prompt #${i} that is moderately long`,
+          { recurring: true },
+        );
+      }
+      for (let i = 0; i < 25; i++) {
+        monitorManager._add({
+          id: `m${i}`,
+          command: "long-running background command",
+          status: "running",
+          startedAt: Date.now(),
+          outputLines: 0,
+        });
+      }
+      widget.setTaskSummaryProvider(() => ({
+        count: 25,
+        focusText: "x".repeat(200),
+      }));
+
+      widget.update();
+
+      const line = latestStatusLine();
+      expect(line).toBeDefined();
+      expect(visibleWidth(line!)).toBeLessThanOrEqual(width);
+    });
+  }
+
+  it("does not clamp short lines below maxWidth", () => {
+    widget.setMaxWidth(120);
+    store.create({ type: "cron", schedule: "*/5 * * * *" }, "short", { recurring: true });
+    widget.update();
+    expect(latestStatusLine()).toBe("1 loop");
+  });
+
+  it("clamps long firing prompts", () => {
+    widget.setMaxWidth(60);
+    widget.setFiringStatus("42", "x".repeat(500));
+    const line = latestStatusLine();
+    expect(line).toBeDefined();
+    expect(visibleWidth(line!)).toBeLessThanOrEqual(60);
+    const stripped = (line ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    expect(stripped).toContain("firing");
+  });
+
+  it("rounds maxWidth up to the 20-column floor", () => {
+    widget.setMaxWidth(3);
+    expect(widget.getMaxWidth()).toBe(20);
+  });
+
+  it("still emits undefined when nothing is active, regardless of maxWidth", () => {
+    widget.setMaxWidth(40);
+    widget.update();
+    expect(latestStatusLine()).toBeUndefined();
   });
 });

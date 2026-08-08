@@ -1,4 +1,5 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { MonitorManager } from "../monitor-manager.js";
 import type { LoopStore } from "../store.js";
 import type { LoopEntry } from "../types.js";
@@ -6,10 +7,25 @@ import type { LoopEntry } from "../types.js";
 // How long the firing flash is shown before reverting to the normal status line.
 const FIRING_FLASH_MS = 5000;
 
+// Maximum visible width for any single status line emitted by this widget.
+// Defaults to a comfortable 120-column target; the widget clamps to this even
+// when callers produce longer strings. Per ADR-001, this protects the TUI
+// from overflowing on small terminals or pathological counts. The widget
+// keeps the value settable via setMaxWidth() so tests can exercise widths
+// down to 50.
+const DEFAULT_MAX_WIDTH = 120;
+const MIN_MAX_WIDTH = 20;
+
 interface TaskSummary {
   count: number;
   focusText?: string;
   blockedByLines?: string[];
+}
+
+export function clampStatusLine(line: string, maxWidth: number): string {
+  const target = Math.max(MIN_MAX_WIDTH, Math.floor(maxWidth));
+  if (visibleWidth(line) <= target) return line;
+  return truncateToWidth(line, target, "…");
 }
 
 export class LoopWidget {
@@ -17,6 +33,7 @@ export class LoopWidget {
   private taskSummaryProvider: (() => TaskSummary) | undefined;
   private firingLoopId: string | undefined;
   private firingTimer: ReturnType<typeof setTimeout> | undefined;
+  private maxWidth: number = DEFAULT_MAX_WIDTH;
 
   constructor(
     private store: LoopStore,
@@ -25,6 +42,16 @@ export class LoopWidget {
 
   setUICtx(ctx: ExtensionUIContext) {
     this.uiCtx = ctx;
+  }
+
+  /** Clamp emitted status lines to the given visible width. Defaults to
+   *  DEFAULT_MAX_WIDTH (=120). Values below MIN_MAX_WIDTH are rounded up. */
+  setMaxWidth(width: number): void {
+    this.maxWidth = Math.max(MIN_MAX_WIDTH, Math.floor(width));
+  }
+
+  getMaxWidth(): number {
+    return this.maxWidth;
   }
 
   setStore(store: LoopStore) {
@@ -45,7 +72,8 @@ export class LoopWidget {
       this.firingLoopId = loopId;
     }
     if (!this.uiCtx) return;
-    this.uiCtx.setStatus("loops", `Loop #${loopId} → firing: ${prompt.slice(0, 40)}`);
+    const firingLine = `Loop #${loopId} → firing: ${prompt}`;
+    this.uiCtx.setStatus("loops", clampStatusLine(firingLine, this.maxWidth));
     this.firingTimer = setTimeout(() => {
       this.firingLoopId = undefined;
       this.firingTimer = undefined;
@@ -66,7 +94,12 @@ export class LoopWidget {
     if (!this.uiCtx) return;
     // Never overwrite a live firing flash — let the 5s timer revert naturally.
     if (this.firingTimer !== undefined) return;
-    this.uiCtx.setStatus("loops", this.computeStatus());
+    const line = this.computeStatus();
+    if (line === undefined) {
+      this.uiCtx.setStatus("loops", undefined);
+      return;
+    }
+    this.uiCtx.setStatus("loops", clampStatusLine(line, this.maxWidth));
   }
 
   private computeStatus(): string | undefined {
