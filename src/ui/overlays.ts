@@ -138,7 +138,11 @@ function createComponent(
       }
       if (matchesKey(data, "a")) {
         showAllLoops = !showAllLoops;
-        selectedIndex = 0;
+        // Clamp selectedIndex so it doesn't point past the end of the
+        // new (possibly shorter) visible list.
+        const max = visibleLoops().length - 1;
+        if (max < 0) selectedIndex = 0;
+        else if (selectedIndex > max) selectedIndex = max;
         tui.requestRender();
         return;
       }

@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "vitest";
+import type { ToolDisplayDetails } from "../src/tools/tool-result.js";
 import {
   hideToolTranscript,
   renderToolCall,
   renderToolResult,
   toolArg,
 } from "../src/ui/tool-renderer.js";
-import type { ToolDisplayDetails } from "../src/tools/tool-result.js";
 
 const theme: Theme = {
   fg: (_name: string, text: string) => `<${_name}>${text}</${_name}>`,

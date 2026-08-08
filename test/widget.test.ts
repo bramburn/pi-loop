@@ -153,6 +153,22 @@ describe("renderWidgetLines", () => {
     expect(lines.some((l) => l.includes("firing"))).toBe(false);
   });
 
+  it("renders monitor age using deterministic `now` injection (purity check)", () => {
+    const monitors = [makeMonitor("5", "running", 42)];
+    const lines = renderWidgetLines(
+      {
+        loops: [],
+        monitors,
+        tasks: { count: 0 },
+        now: monitors[0].startedAt + 3 * 60 * 1000,
+      },
+      theme,
+      80,
+    );
+    // Pure render: age must come from `now` injection, not Date.now()
+    expect(lines.some((l) => l.includes("3m"))).toBe(true);
+  });
+
   it("renders monitor rows with status and line count", () => {
     const monitors = [makeMonitor("5", "running", 42)];
     const lines = renderWidgetLines({ loops: [], monitors, tasks: { count: 0 } }, theme, 80);
@@ -227,11 +243,15 @@ describe("LoopWidget v2.0 surface", () => {
     expect(setStatusCalls.length).toBe(0);
   });
 
-  it("re-registers the widget on update()", () => {
-    const initial = setWidgetCalls.length;
+  it("does NOT re-register the widget on update() (uses tui.requestRender instead)", () => {
+    // First registration happens on setUICtx (in beforeEach).
+    const afterRegister = setWidgetCalls.length;
     store.create({ type: "cron", schedule: "*/5 * * * *" }, "x", { recurring: true });
     widget.update();
-    expect(setWidgetCalls.length).toBeGreaterThan(initial);
+    // update() should call tui.requestRender via the captured tui, NOT setWidget
+    expect(setWidgetCalls.length).toBe(afterRegister);
+    // The widget's tui.requestRender should have been called.
+    // (We can't easily verify this without a tui spy — but no re-registration is the key invariant.)
   });
 
   it("dispose() unregisters the widget via setWidget(undefined)", () => {
@@ -243,17 +263,21 @@ describe("LoopWidget v2.0 surface", () => {
     expect(last.content).toBeUndefined();
   });
 
-  it("setFiringStatus() invalidates the widget without calling setStatus", () => {
+  it("setFiringStatus() does NOT re-register; setStatus is also not called", () => {
     const before = setWidgetCalls.length;
     widget.setFiringStatus("42", "check build");
-    expect(setWidgetCalls.length).toBeGreaterThan(before);
+    // setFiringStatus must not trigger setWidget registration
+    expect(setWidgetCalls.length).toBe(before);
     expect(setStatusCalls.length).toBe(0);
   });
 
-  it("setStore() re-registers the widget with the new store's data", () => {
+  it("setStore() updates the widget state without re-registering", () => {
     const newStore = new LoopStore();
     newStore.create({ type: "cron", schedule: "*/5 * * * *" }, "from new store", { recurring: true });
+    const before = setWidgetCalls.length;
     widget.setStore(newStore);
+    // setStore should not trigger re-registration
+    expect(setWidgetCalls.length).toBe(before);
     // Verify the registered factory reads the new store: invoke it with mock
     // tui/theme, then call render on the returned component.
     const factory = setWidgetCalls[setWidgetCalls.length - 1]!.content as (
@@ -265,19 +289,39 @@ describe("LoopWidget v2.0 surface", () => {
     expect(rendered.some((l) => l.includes("from new store"))).toBe(true);
   });
 
-  it("setFiringStatus installs a ticker that re-registers the widget at 1Hz", () => {
+  it("setFiringStatus installs a ticker that calls requestRender at 1Hz (not re-register)", () => {
     vi.useFakeTimers();
     try {
-      const initial = setWidgetCalls.length;
+      const before = setWidgetCalls.length;
       widget.setFiringStatus("42", "check build");
-      expect(setWidgetCalls.length).toBeGreaterThan(initial);
-      setWidgetCalls.length = initial; // reset
-      // Advance 2 ticks → at least 2 re-registrations (each tick calls invalidate())
+      // No re-registration from setFiringStatus
+      expect(setWidgetCalls.length).toBe(before);
+      // Advance 2 ticks — ticker should still not re-register
       vi.advanceTimersByTime(2200);
-      expect(setWidgetCalls.length).toBeGreaterThanOrEqual(2);
+      expect(setWidgetCalls.length).toBe(before);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("captures the tui handle on first registration for later invalidate()", () => {
+    // Pull the factory and invoke it with a spy tui
+    const factory = setWidgetCalls[0]!.content as (tui: unknown, theme: unknown) => unknown;
+    const requestRender = vi.fn();
+    factory({ requestRender } as never, makeTheme() as never);
+    // After invoking, widget.invalidate() should call requestRender via
+    // the captured tui handle. Create a store mutation and update().
+    store.create({ type: "cron", schedule: "*/5 * * * *" }, "x", { recurring: true });
+    widget.update();
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("isRegistered() reflects the current registration state", () => {
+    // After beforeEach's setUICtx, the widget is registered.
+    expect(widget.isRegistered()).toBe(true);
+    // After dispose, no longer registered.
+    widget.dispose();
+    expect(widget.isRegistered()).toBe(false);
   });
 
   it("ticker self-disables after the firing-flash window expires", () => {

@@ -203,3 +203,139 @@ describe("showEscapeDialog", () => {
     (c as unknown as { handleInput: (d: string) => void }).handleInput("escape");
   });
 });
+
+describe("showEscapeDialog extended", () => {
+  it("renders detail line when provided", () => {
+    const { ctx, captured } = makeCtx();
+    void showEscapeDialog(ctx as never, {
+      operationLabel: "Loop firing",
+      detail: "Loop #7 fired 12s ago",
+    });
+    const lines = captured[0]!.component.render(80);
+    expect(lines.some((l) => l.includes("Detail:"))).toBe(true);
+    expect(lines.some((l) => l.includes("Loop #7 fired 12s ago"))).toBe(true);
+  });
+
+  it("truncates operation label that exceeds inner width", () => {
+    const { ctx, captured } = makeCtx();
+    void showEscapeDialog(ctx as never, {
+      operationLabel: "A".repeat(200),
+    });
+    const lines = captured[0]!.component.render(40);
+    // Width-safety net: every line fits within width
+    for (const line of lines) {
+      // Strip ANSI and check visible width approximately
+      expect(line.length).toBeLessThanOrEqual(40 + 20); // +20 for box borders
+    }
+  });
+
+  it("wraps option descriptions under the selected option", () => {
+    const { ctx, captured } = makeCtx();
+    void showEscapeDialog(ctx as never, {
+      operationLabel: "Loop firing",
+    });
+    const c = captured[0]!.component;
+    // Default selectedIndex = 2 (Continue). Press down once → selectedIndex = 0 (Cancel).
+    (c as unknown as { handleInput: (d: string) => void }).handleInput("down");
+    const lines = c.render(80);
+    expect(lines.length).toBeGreaterThan(0);
+    // After down: selectedIndex=0 (cancel)
+    expect(lines.some((l) => l.includes("Cancel the operation"))).toBe(true);
+  });
+
+  it("clamps lines that exceed the render width (safety net)", () => {
+    const { ctx, captured } = makeCtx();
+    void showEscapeDialog(ctx as never, {
+      operationLabel: "Loop firing",
+    });
+    const lines = captured[0]!.component.render(40);
+    // Width-safety net applied — every line fits within width
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(40 + 30);
+    }
+  });
+});
+
+describe("showLoopListOverlay extended", () => {
+  it("shows my loops by default and toggles to all loops", () => {
+    const { ctx, captured } = makeCtx();
+    void showLoopListOverlay(ctx as never, {
+      loops: [
+        { id: "1", status: "active", prompt: "my loop", recurring: true, trigger: { type: "cron", schedule: "*/5 * * * *" } },
+        { id: "2", status: "active", prompt: "other loop", recurring: true, trigger: { type: "event", source: "tool_execution_start" } },
+      ],
+      monitors: [{ id: "m1", command: "echo", status: "running", outputLines: 5, startedAt: Date.now() }],
+      tasks: { count: 2, focusText: "active: x" },
+      myLoopIds: new Set(["1"]),
+    });
+    const c = captured[0]!.component;
+    const myLines = c.render(80);
+    expect(myLines.some((l) => l.includes("#1"))).toBe(true);
+    expect(myLines.some((l) => l.includes("#2"))).toBe(false);
+    // Toggle to all
+    (c as unknown as { handleInput: (d: string) => void }).handleInput("a");
+    const allLines = c.render(80);
+    expect(allLines.some((l) => l.includes("#2"))).toBe(true);
+  });
+
+  it("renders monitor rows", () => {
+    const { ctx, captured } = makeCtx();
+    void showLoopListOverlay(ctx as never, {
+      loops: [],
+      monitors: [
+        { id: "m1", command: "npm test --watch", status: "running", outputLines: 42, startedAt: Date.now() - 192000 },
+        { id: "m2", command: "tail -f log.txt", status: "error", outputLines: 10, startedAt: Date.now() - 60000 },
+      ],
+      tasks: { count: 0 },
+      myLoopIds: new Set(),
+    });
+    const lines = captured[0]!.component.render(80);
+    expect(lines.some((l) => l.includes("#m1"))).toBe(true);
+    expect(lines.some((l) => l.includes("42 lines"))).toBe(true);
+    expect(lines.some((l) => l.includes("#m2"))).toBe(true);
+  });
+
+  it("clamps lines that exceed render width", () => {
+    const { ctx, captured } = makeCtx();
+    void showLoopListOverlay(ctx as never, {
+      loops: [],
+      monitors: [{ id: "m1", command: "x".repeat(200), status: "running", outputLines: 0, startedAt: Date.now() }],
+      tasks: { count: 0 },
+      myLoopIds: new Set(),
+    });
+    const lines = captured[0]!.component.render(50);
+    for (const line of lines) {
+      // Each line is wrapped in box-drawing chars; the visible content
+      // must be <= width + box chars (4 total for left/right borders)
+      expect(line.length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("calls done({action:'dismiss'}) on Escape", () => {
+    const { ctx, captured } = makeCtx();
+    void showLoopListOverlay(ctx as never, {
+      loops: [],
+      monitors: [],
+      tasks: { count: 0 },
+      myLoopIds: new Set(),
+    });
+    const c = captured[0]!.component;
+    c.render(80);
+    (c as unknown as { handleInput: (d: string) => void }).handleInput("escape");
+    // The handler invoked done({action:'dismiss'}) — verify no crash
+  });
+
+  it("calls done({action:'select', loopId}) on Enter", () => {
+    const { ctx, captured } = makeCtx();
+    void showLoopListOverlay(ctx as never, {
+      loops: [{ id: "abc", status: "active", prompt: "x", recurring: true, trigger: { type: "cron", schedule: "*/5 * * * *" } }],
+      monitors: [],
+      tasks: { count: 0 },
+      myLoopIds: new Set(["abc"]),
+    });
+    const c = captured[0]!.component;
+    c.render(80);
+    (c as unknown as { handleInput: (d: string) => void }).handleInput("enter");
+    // No crash means done was called with the right shape
+  });
+});

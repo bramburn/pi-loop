@@ -40,7 +40,7 @@ function makeTaskStore(tasks: TaskEntry[] = []) {
         description,
       } as TaskEntry;
       map.set(entry.id, entry);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return entry;
     }),
     get: vi.fn((id: string) => map.get(id)),
@@ -49,7 +49,7 @@ function makeTaskStore(tasks: TaskEntry[] = []) {
       if (!t) return undefined;
       const next = { ...t, status: "in_progress" as const };
       map.set(id, next);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return next;
     }),
     complete: vi.fn((id: string) => {
@@ -57,7 +57,7 @@ function makeTaskStore(tasks: TaskEntry[] = []) {
       if (!t) return undefined;
       const next = { ...t, status: "completed" as const };
       map.set(id, next);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return next;
     }),
     close: vi.fn((id: string) => {
@@ -65,7 +65,7 @@ function makeTaskStore(tasks: TaskEntry[] = []) {
       if (!t) return undefined;
       const next = { ...t, status: "closed" as const };
       map.set(id, next);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return next;
     }),
     reopen: vi.fn((id: string) => {
@@ -73,12 +73,12 @@ function makeTaskStore(tasks: TaskEntry[] = []) {
       if (!t) return undefined;
       const next = { ...t, status: "pending" as const };
       map.set(id, next);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return next;
     }),
     delete: vi.fn((id: string) => {
       const existed = map.delete(id);
-      listeners.forEach((l) => l());
+      listeners.forEach((l) => { l(); });
       return existed;
     }),
     onChange: (cb: () => void) => {

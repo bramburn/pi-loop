@@ -21,14 +21,14 @@ export default defineConfig({
       // the tool tests, so the floor is naturally a touch lower than pure-tool
       // code. Raise as coverage is grown.
       //
-      // v2.0 baseline (post-9-commit stack): 83.11% statements, 77.69%
-      // branches, 84.64% functions, 86.19% lines. Master pre-v2.0 baseline
-      // was 76.38% statements — v2.0 is a +6.7-point improvement.
+      // v2.0 baseline (post-9-commit stack): 84.97% statements, 79.42%
+      // branches, 85.31% functions, 86.97% lines. Master pre-v2.0 baseline
+      // was 76.38% statements — v2.0 is a +8.6-point improvement.
       thresholds: {
-        statements: 82,
-        branches: 76,
-        functions: 83,
-        lines: 85,
+        statements: 85,
+        branches: 78,
+        functions: 85,
+        lines: 86,
       },
     },
   },

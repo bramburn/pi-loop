@@ -72,7 +72,7 @@ export function renderWidgetLines(state: RenderWidgetState, theme: Theme, width:
   for (let i = 0; i < visibleMonitors.length; i++) {
     const monitor = visibleMonitors[i]!;
     const isLast = i === visibleMonitors.length - 1 && state.tasks.count === 0;
-    lines.push(renderMonitorRow(monitor, theme, safeWidth, isLast));
+    lines.push(renderMonitorRow(monitor, theme, safeWidth, now, isLast));
   }
 
   // Task row (compact — single line)
@@ -122,10 +122,10 @@ function renderLoopRow(
   return `  ${branch} ${header} ${promptPart} ${meta}${firingSuffix}`;
 }
 
-function renderMonitorRow(monitor: MonitorEntry, theme: Theme, width: number, isLast: boolean): string {
+function renderMonitorRow(monitor: MonitorEntry, theme: Theme, width: number, now: number, isLast: boolean): string {
   const icon = monitor.status === "running" ? ">" : "x";
   const statusColor = monitor.status === "running" ? "accent" : "error";
-  const age = Math.max(0, Math.floor((Date.now() - monitor.startedAt) / 1000));
+  const age = Math.max(0, Math.floor((now - monitor.startedAt) / 1000));
   const ageStr = formatDuration(age);
 
   const innerWidth = width - 6;

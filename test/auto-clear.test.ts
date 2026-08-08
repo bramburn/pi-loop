@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAutoClearManager } from "../src/auto-clear.js";
 import type { TaskStore } from "../src/task-store.js";
 import type { TaskEntry } from "../src/task-types.js";
@@ -66,10 +66,6 @@ describe("createAutoClearManager", () => {
       JSON.stringify({ autoClear }),
     );
   }
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
 
   it("creates a manager with reloadConfig()", () => {
     const mgr = createAutoClearManager({

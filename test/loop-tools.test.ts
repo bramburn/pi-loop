@@ -818,3 +818,64 @@ describe("LoopDelete", () => {
     expect(await h.text("LoopDelete", { id: "99", action: "delete" })).toBe("Loop #99 not found");
   });
 });
+
+describe("loop-tools coverage extras", () => {
+  let store: LoopStore;
+  let scheduler: any;
+  let monitorManager: any;
+  let triggerSystem: any;
+  let pi: any;
+
+  beforeEach(() => {
+    store = new LoopStore();
+    scheduler = { nextFire: vi.fn(() => undefined), pump: vi.fn() };
+    monitorManager = { get: vi.fn(() => undefined) };
+    triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn() };
+    pi = {
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      hasPendingMessages: vi.fn(() => false),
+    };
+  });
+
+  it("registers a tool with execute and render functions", () => {
+    registerLoopTools({
+      pi,
+      getStore: () => store,
+      getTriggerSystem: () => triggerSystem,
+      getScheduler: () => scheduler,
+      getMonitorManager: () => monitorManager,
+      updateWidget: vi.fn(),
+      maybeBootstrapTaskLoop: vi.fn(async () => false),
+      isTaskSystemReady: () => false,
+      closeWorkflowTask: vi.fn(async () => true),
+    });
+    expect(pi.registerTool).toHaveBeenCalled();
+    const tools = (pi.registerTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0].name);
+    expect(tools).toContain("LoopCreate");
+    expect(tools).toContain("LoopList");
+    expect(tools).toContain("LoopUpdate");
+    expect(tools).toContain("LoopDelete");
+  });
+
+  it("renders tool calls with theme formatting", () => {
+    let capturedRender: any;
+    pi.registerTool = vi.fn((def: any) => {
+      if (def.name === "LoopCreate") capturedRender = def.renderCall;
+    });
+    registerLoopTools({
+      pi,
+      getStore: () => store,
+      getTriggerSystem: () => triggerSystem,
+      getScheduler: () => scheduler,
+      getMonitorManager: () => monitorManager,
+      updateWidget: vi.fn(),
+      maybeBootstrapTaskLoop: vi.fn(async () => false),
+      isTaskSystemReady: () => false,
+      closeWorkflowTask: vi.fn(async () => true),
+    });
+    const theme = { fg: (_: string, t: string) => t, bold: (t: string) => t } as never;
+    const out = capturedRender({ prompt: "test" }, theme);
+    expect(out).toBeDefined();
+  });
+});

@@ -109,13 +109,14 @@ export function syncLoopTools(
 
 /** Convert a `LoopEntry`-shaped record to a `LoopSnapshot` for visibility. */
 export function snapshotFromLoop(loop: {
+  id?: string;
   status: string;
   dynamic?: unknown;
   taskBacklog?: boolean;
   workflow?: unknown;
 }): LoopSnapshot {
   return {
-    id: "", // not needed for the predicate; placeholder for the type
+    id: loop.id ?? "",
     status: loop.status === "paused" ? "paused" : "active",
     hasDynamic: loop.dynamic !== undefined && loop.dynamic !== null,
     isTaskBacklog: loop.taskBacklog === true,

@@ -59,7 +59,7 @@ The migration is idempotent — re-running does nothing if the v2 file already e
 
 ### Test coverage
 
-- **625 tests** pass (was 561 in v1.3.0; +64 new in v2.0).
+- **848 tests** pass (was 561 in v1.3.0; +287 new in v2.0 across 7 new test files and 3 extensions).
 - Full state × tool matrix tests for tool visibility gating.
 - Width matrix tests for the widget (6 widths × pathological counts).
 - Migration round-trip tests (v1 file → v2 file, env vars → v2 file, idempotency).
