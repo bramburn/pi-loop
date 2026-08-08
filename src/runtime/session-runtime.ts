@@ -23,7 +23,7 @@ export interface SessionRuntimeOptions {
   clearAllLoops: () => void;
   getStore: () => LoopStore;
   getScheduler: () => { nextFire(id: string): number | undefined; pump(now: number, filter?: (entry: { id: string }) => boolean): void };
-  getTriggerSystem: () => { start(): void; stop(): void };
+  getTriggerSystem: () => { start(): void; stop(): void; add(entry: { id: string }): void };
   setLatestCtx: (ctx: ExtensionContext) => void;
   setSessionId: (sessionId: string | undefined) => void;
   widget: { setUICtx(ui: ExtensionContext["ui"]): void; update(): void };
@@ -110,6 +110,28 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
   // Register global keybindings. Per ADR-004: Ctrl+Shift+L opens the loop
   // list overlay; Escape during a pending fire opens the skip/continue/cancel
   // dialog. Returns { consume: true } only when consuming the key.
+  // Crash recovery helper: when session_start fires with reason === 'resume',
+  // scan the store for paused loops and prompt the user per loop. Mirrors
+  // pragmaxim's extensions/goal.ts:3437. Headless mode is a no-op.
+  async function offerResumePausedLoops(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.hasUI) return;
+    const paused = getStore().list().filter((l) => l.status === "paused");
+    if (paused.length === 0) return;
+    for (const entry of paused) {
+      const shouldResume = await ctx.ui.confirm(
+        `Resume paused loop #${entry.id}?`,
+        entry.prompt.slice(0, 80),
+      );
+      if (shouldResume) {
+        const resumed = getStore().resume(entry.id);
+        if (resumed) {
+          getTriggerSystem().add(resumed);
+          ctx.ui.notify(`Loop #${entry.id} resumed`, "info");
+        }
+      }
+    }
+  }
+
   function registerKeybindings(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
     terminalInputUnsubscribe?.();
@@ -181,7 +203,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     getScheduler().pump(Date.now(), (entry) => !pendingTasks.has(entry.id));
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     setLatestCtx(ctx);
     setSessionId(ctx.sessionManager.getSessionId());
     widget.setUICtx(ctx.ui);
@@ -189,6 +211,15 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     ensureHeartbeat();
     await showPersistedLoops();
     registerKeybindings(ctx);
+
+    // Per ADR-001 and pragmaxim's extensions/goal.ts:3437: on crash recovery
+    // (event.reason === 'resume'), offer to resume paused loops. Fresh
+    // session starts (reason unset or 'new') do NOT prompt — the user
+    // should pick deliberately via /loop-list.
+    if (event?.reason === "resume") {
+      await offerResumePausedLoops(ctx);
+    }
+
     widget.update();
   });
 

@@ -223,6 +223,7 @@ export function createCtx(options: boolean | MockCtxOptions = false) {
       notify(message: string, level?: string) {
         notifications.push({ message, level });
       },
+      confirm: vi.fn(async () => false),
       onTerminalInput(handler: (data: string) => { consume?: boolean } | undefined): () => void {
         terminalInputs.push(handler);
         return () => {

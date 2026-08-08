@@ -18,7 +18,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     clearAllLoops: vi.fn(),
     getStore: () => store as any,
     getScheduler: () => scheduler as any,
-    getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn() }),
+    getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn(), add: vi.fn() }),
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
@@ -44,12 +44,16 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
   };
   // Don't double-pass store/getStore/showLoopListOverlayFn/showEscapeDialogFn
   if (!("store" in overrides)) delete (options as { store?: unknown }).store;
+  if (!("resumeConfirmed" in overrides)) delete (options as { resumeConfirmed?: unknown }).resumeConfirmed;
   registerSessionRuntimeHooks(options);
   let lastCtx = createCtx();
-  const drive = async (name: string) => {
+  const drive = async (name: string, event?: Record<string, unknown>) => {
     for (const handler of extensionHandlers.get(name) ?? []) {
       lastCtx = createCtx();
-      await handler(null, lastCtx);
+      if (overrides.resumeConfirmed === true) {
+        (lastCtx.ui.confirm as ReturnType<typeof vi.fn>).mockResolvedValueOnce(true);
+      }
+      await handler(event ?? null, lastCtx);
     }
   };
   return {
@@ -211,5 +215,92 @@ describe("session-runtime keybindings", () => {
     // short-circuit path by passing a sequence that won't match any key.
     const result = handler("zzzz");
     expect(result).toBeUndefined();
+  });
+});
+
+describe("session-runtime crash recovery", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("session_start with reason 'resume' prompts per paused loop", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "weekly report",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+    expect(store.list()[0]?.status).toBe("paused");
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    // confirm() should have been called once for the paused loop
+    const ctx = ctxForDrive();
+    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.confirm.mock.calls[0]?.[0]).toContain(`#${entry.id}`);
+  });
+
+  it("session_start with reason 'resume' does NOT prompt when no paused loops", async () => {
+    const store = new LoopStore();
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "active loop",
+      { recurring: true },
+    );
+    expect(store.list()[0]?.status).toBe("active");
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    expect(ctxForDrive().ui.confirm).not.toHaveBeenCalled();
+    // entry should still be active — no resume attempted
+    expect(store.list()[0]?.status).toBe("active");
+  });
+
+  it("session_start WITHOUT reason does NOT prompt (fresh start)", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+
+    const { drive, ctxForDrive } = setup({ store });
+    await drive("session_start", undefined);
+    expect(ctxForDrive().ui.confirm).not.toHaveBeenCalled();
+    expect(store.list()[0]?.status).toBe("paused");
+  });
+
+  it("user declining the resume prompt leaves the loop paused", async () => {
+    const store = new LoopStore();
+    store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    ).id;
+    // Pause the most recently created loop
+    const lastId = store.list()[0]!.id;
+    store.pause(lastId);
+
+    const { drive } = setup({ store });
+    await drive("session_start", { reason: "resume" });
+    // confirm returns false by default (user declines)
+    expect(store.list()[0]?.status).toBe("paused");
+  });
+
+  it("user accepting the resume prompt activates the loop", async () => {
+    const store = new LoopStore();
+    const entry = store.create(
+      { type: "cron", schedule: "*/5 * * * *" },
+      "paused loop",
+      { recurring: true },
+    );
+    store.pause(entry.id);
+
+    const { drive } = setup({ store, resumeConfirmed: true });
+    await drive("session_start", { reason: "resume" });
+    expect(store.list()[0]?.status).toBe("active");
   });
 });
