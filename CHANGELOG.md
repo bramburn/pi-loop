@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 (unreleased — v2.0 milestone)
+## 2.0.0 (2026-08-08)
 
 ### BREAKING CHANGES
 

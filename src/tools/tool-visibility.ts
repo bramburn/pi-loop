@@ -78,14 +78,21 @@ export function computeActiveTools(
  * Safe to call from `before_agent_start` and after store mutations.
  * Returns the new active tool list, or `undefined` on failure (with an
  * error logged via `console.error`).
+ *
+ * Defensive against older mock pi implementations that don't yet expose
+ * `getActiveTools`/`setActiveTools`: silently skips the sync when either
+ * method is missing. Real pi-coding-agent always exposes both.
  */
 export function syncLoopTools(
-  pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">,
+  pi: Partial<Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">>,
   loops: readonly LoopSnapshot[],
   options: SyncLoopToolsOptions = {},
 ): string[] | undefined {
   const logger = options.logger ?? console.error;
   try {
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") {
+      return undefined;
+    }
     const initial = options.initialTools ?? pi.getActiveTools();
     if (!Array.isArray(initial)) {
       logger(`[pi-loop] syncLoopTools: pi.getActiveTools() did not return an array, got ${typeof initial}`);

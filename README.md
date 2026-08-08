@@ -22,14 +22,20 @@ LoopDelete id="1"
 
 pi-loop renders an above-editor widget showing every loop, monitor, and task at a glance:
 
-```text
-  pi-loop · 3 loops · 1 monitor · 2 tasks
-    ├─ * #1 [active] check deploy (cron: */5 * * * *) next: 4m
-    ├─ * #2 [active] tail logs (event: tool_execution_start)
-    ├─ - #3 [paused] weekly report
-    ├─ > #4 [running] npm test … (3m 12s, 42 lines)
-    └─ 2 tasks: active: Foo
 ```
+  pi-loop · 3 loops · 1 monitor · 3 tasks
+    ├─ * #1 [active] check deploy status (cron: */5 * * * *) → firing (2s ago)
+    ├─ * #2 [active] tail logs (event: tool_execution_start)
+    ├─ * #3 [active] weekly report (cron: 0 9 * * 1 · auto-task)
+    ├─ > #5 [running] npm test --watch (42 lines, 3m)
+  └─ 3 tasks: active: wire validator into tests
+```
+
+Render snapshots (text-based, generated from `renderWidgetLines`):
+
+- [`docs/screenshots/widget-default-80-width-80.txt`](docs/screenshots/widget-default-80-width-80.txt) — 80-column terminal
+- [`docs/screenshots/widget-wide-120-width-120.txt`](docs/screenshots/widget-wide-120-width-120.txt) — 120-column terminal
+- [`docs/screenshots/widget-narrow-50-width-50.txt`](docs/screenshots/widget-narrow-50-width-50.txt) — width-safety net (clamped to 50 cols)
 
 When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing every second. Press `Ctrl+Shift+L` for a scrollable loop list overlay. Press `Escape` during a long-running fire to skip or cancel.
 
@@ -81,10 +87,10 @@ Works with [@tintinweb/pi-tasks](https://github.com/tintinweb/pi-tasks). Pass `a
 
 If `pi-tasks` does not respond during startup detection, `pi-loop` registers a native fallback task system for the session:
 
-- session- or project-scoped task files under `.pi/tasks/` depending on `PI_LOOP_SCOPE`
+- session- or project-scoped task files under `.pi/tasks/` per `settings.taskScope`
 - `TaskCreate`, `TaskList`, `TaskUpdate`, `TaskDelete`
 - `/tasks` interactive viewer
-- compact status-line task tracking
+- above-editor widget task tracking (replaces the v1.x status-line task summary)
 
 
 This fallback is session-sticky: `pi-loop` decides once at startup whether `pi-tasks` or native tasks own task management for that session.
@@ -107,11 +113,10 @@ Only task counts and the single active/next task are shown there so attention st
 
 ## Configuration
 
-| Variable | Effect | Default |
+**All configuration lives in `.pi/pi-loop-settings.json`** — see `userflow/settings-v2.md` for the full schema and migration guide. The v2.0 release removes the v1.x `PI_LOOP_*` environment variables (see `CHANGELOG.md` for the clean break). To change `loopScope`, `taskScope`, debug logging, auto-clear behaviour, sort order, or backlog threshold, run `/loop-settings` (no environment variables needed).
+
+| Sentry | Effect | Default |
 |---|---|---|
-| `PI_LOOP` | Store path override. `off` to disable, absolute or project-relative path | unset → derived from `PI_LOOP_SCOPE` |
-| `PI_LOOP_SCOPE` | `memory` (ephemeral), `session` (per-session file), `project` (shared, persists across sessions) | `project` |
-| `PI_LOOP_DEBUG` | Debug logging to stderr | unset |
 | `SENTRY_DSN` | Enable anonymous crash + log reporting (Sentry). Set to your project DSN to opt in. | unset → telemetry disabled |
 | `SENTRY_ENVIRONMENT` | Environment tag for events (e.g. `production`, `development`) | `development` |
 | `SENTRY_TRACES_SAMPLE_RATE` | Performance transaction sample rate (`0.0`–`1.0`) | `0.1` |
@@ -122,7 +127,7 @@ In `project` scope (default), loop and task files are saved to `.pi/loops/loops.
 
 ### Recommended scope policy
 
-`PI_LOOP_SCOPE=project` is the default and best balance for normal use.
+`loopScope: project` is the default and best balance for normal use.
 
 - `project` is the default: loops and tasks persist across sessions and process restarts in the same repo, so a 5m cron loop survives closing and reopening pi.
 - `session` is best when you want each pi session isolated (e.g. concurrent worktrees, throwaway explorations). Loops disappear when the session ID changes.
