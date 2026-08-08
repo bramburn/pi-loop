@@ -210,6 +210,8 @@ export default function (pi: ExtensionAPI) {
     releaseTaskBacklogWakes,
     hasPendingTasks,
     cleanDoneTasks,
+    showLoopListOverlayFn: undefined,
+    showEscapeDialogFn: undefined,
   });
 
   // ── Loop fire → delivery ──

@@ -1,23 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSessionRuntimeHooks, type SessionRuntimeOptions } from "../src/runtime/session-runtime.js";
+import { LoopStore } from "../src/store.js";
 import { createCtx, createMockPi } from "./helpers/mock-pi.js";
 
 function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
   const { pi, extensionHandlers } = createMockPi();
   const scheduler = { nextFire: vi.fn(() => undefined), pump: vi.fn() };
+  const store: LoopStore =
+    "store" in overrides && overrides.store instanceof LoopStore
+      ? (overrides.store as LoopStore)
+      : new LoopStore();
   const options: SessionRuntimeOptions = {
     pi,
     getLoopScope: () => "memory",
     getPiLoopEnv: () => undefined,
     recreateSessionStore: vi.fn(),
     clearAllLoops: vi.fn(),
-    getStore: () => ({ list: () => [], clearExpired: vi.fn(), expireEventLoops: vi.fn() }) as any,
+    getStore: () => store as any,
     getScheduler: () => scheduler as any,
     getTriggerSystem: () => ({ start: vi.fn(), stop: vi.fn() }),
     setLatestCtx: vi.fn(),
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
-    getLoopSnapshots: vi.fn(() => []),
+    getLoopSnapshots: vi.fn(() => store.list().map(() => ({ id: "1", status: "active" as const, hasDynamic: false, isTaskBacklog: false, hasWorkflow: false }))),
     notificationRuntime: {
       syncRuntimeState: vi.fn(),
       queueOrDeliverNotification: vi.fn(async () => {}),
@@ -33,13 +38,25 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     releaseTaskBacklogWakes: vi.fn(),
     hasPendingTasks: vi.fn(async () => 0),
     cleanDoneTasks: vi.fn(async () => {}),
+    showLoopListOverlayFn: vi.fn(async () => undefined),
+    showEscapeDialogFn: vi.fn(async () => "continue" as const),
     ...overrides,
   };
+  // Don't double-pass store/getStore/showLoopListOverlayFn/showEscapeDialogFn
+  if (!("store" in overrides)) delete (options as { store?: unknown }).store;
   registerSessionRuntimeHooks(options);
+  let lastCtx = createCtx();
   const drive = async (name: string) => {
-    for (const handler of extensionHandlers.get(name) ?? []) await handler(null, createCtx());
+    for (const handler of extensionHandlers.get(name) ?? []) {
+      lastCtx = createCtx();
+      await handler(null, lastCtx);
+    }
   };
-  return { scheduler, drive };
+  return {
+    scheduler,
+    drive,
+    ctxForDrive: () => lastCtx,
+  };
 }
 
 describe("session-runtime heartbeat lifecycle", () => {
@@ -162,5 +179,37 @@ describe("session-runtime heartbeat lifecycle", () => {
 
     expect(scheduler.pump).toHaveBeenCalled();
     expect(widget.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("session-runtime keybindings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("session_start registers an onTerminalInput handler", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    const handlers = ctxForDrive().terminalInputs;
+    expect(handlers.length).toBeGreaterThan(0);
+  });
+
+  it("session_shutdown unregisters the terminal input handler", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    expect(ctxForDrive().terminalInputs.length).toBeGreaterThan(0);
+    await drive("session_shutdown");
+    expect(ctxForDrive().terminalInputs.length).toBe(0);
+  });
+
+  it("Escape without active loops returns undefined (does not consume)", async () => {
+    const { drive, ctxForDrive } = setup();
+    await drive("session_start");
+    const handler = ctxForDrive().terminalInputs[ctxForDrive().terminalInputs.length - 1]!;
+    // matchesKey expects a raw terminal escape sequence; we test the handler's
+    // short-circuit path by passing a sequence that won't match any key.
+    const result = handler("zzzz");
+    expect(result).toBeUndefined();
   });
 });

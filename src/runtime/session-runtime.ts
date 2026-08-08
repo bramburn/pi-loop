@@ -1,6 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { LoopStore } from "../store.js";
 import { type LoopSnapshot, syncLoopTools } from "../tools/tool-visibility.js";
+import { showEscapeDialog } from "../ui/escape-dialog.js";
+import { showLoopListOverlay } from "../ui/overlays.js";
 import type { NotificationRuntime } from "./notification-runtime.js";
 import type { LoopScope } from "./scope.js";
 
@@ -29,6 +32,10 @@ export interface SessionRuntimeOptions {
   getLoopSnapshots: () => LoopSnapshot[];
   /** Optional override of the runtime sync fn for tests. */
   syncLoopToolsFn?: typeof syncLoopTools;
+  /** Optional override for the loop overlay (for tests). */
+  showLoopListOverlayFn?: typeof showLoopListOverlay;
+  /** Optional override for the escape dialog (for tests). */
+  showEscapeDialogFn?: typeof showEscapeDialog;
   notificationRuntime: NotificationRuntime;
   flushPendingNotifications: (options?: { ignorePendingMessages?: boolean }) => Promise<void>;
   migrateTaskBacklogLoops: () => number;
@@ -62,12 +69,15 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     releaseTaskBacklogWakes,
     hasPendingTasks,
     cleanDoneTasks,
+    showLoopListOverlayFn,
+    showEscapeDialogFn,
   } = options;
 
   let storeUpgraded = false;
   let persistedShown = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let agentStartFireCounts: ReadonlyMap<string, number> | undefined;
+  let terminalInputUnsubscribe: (() => void) | undefined;
 
   // The CronScheduler is pump-driven; without this heartbeat it only advances at
   // turn boundaries (turn_start/agent_end), so a loop whose fire time elapses
@@ -95,6 +105,43 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     if (!heartbeatTimer) return;
     clearInterval(heartbeatTimer);
     heartbeatTimer = undefined;
+  }
+
+  // Register global keybindings. Per ADR-004: Ctrl+Shift+L opens the loop
+  // list overlay; Escape during a pending fire opens the skip/continue/cancel
+  // dialog. Returns { consume: true } only when consuming the key.
+  function registerKeybindings(ctx: ExtensionContext): void {
+    if (!ctx.hasUI) return;
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+      // Ctrl+Shift+L — always available when idle and has UI.
+      if (matchesKey(data, "ctrl+shift+l")) {
+        void (showLoopListOverlayFn ?? showLoopListOverlay)(ctx, {
+          loops: getStore().list(),
+          monitors: [],
+          tasks: { count: 0 },
+          myLoopIds: new Set(getStore().list().map((l) => l.id)),
+        });
+        return { consume: true };
+      }
+      // Escape — only consumed when an operation is in flight. Otherwise the
+      // TUI handles Escape (e.g. clearing editor text).
+      if (matchesKey(data, "escape")) {
+        const hasRecentFire = getStore().list().some((l) => l.status === "active");
+        if (!hasRecentFire) return undefined;
+        void (showEscapeDialogFn ?? showEscapeDialog)(ctx, {
+          operationLabel: "Loop firing",
+        }).then((choice) => {
+          if (choice === "cancel") {
+            ctx.ui.notify("Operation cancelled via Escape", "info");
+          } else if (choice === "skip") {
+            ctx.ui.notify("Iteration skipped via Escape", "info");
+          }
+        });
+        return { consume: true };
+      }
+      return undefined;
+    });
   }
 
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
@@ -141,6 +188,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     upgradeStoreIfNeeded(ctx);
     ensureHeartbeat();
     await showPersistedLoops();
+    registerKeybindings(ctx);
     widget.update();
   });
 
@@ -195,6 +243,8 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   pi.on("session_shutdown", async () => {
     stopHeartbeat();
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = undefined;
     releaseTaskBacklogWakes();
     notificationRuntime.clear("session_shutdown");
   });
