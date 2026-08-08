@@ -19,7 +19,9 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
+import { registerSettingsCommand } from "./commands/settings-command.js";
 import { atMaxFires } from "./loop-reducer.js";
+import { migrateV1ToV2 } from "./migration/v1-to-v2.js";
 import { MonitorManager } from "./monitor-manager.js";
 import { BindingsStore } from "./runtime/bindings-store.js";
 import {
@@ -29,6 +31,7 @@ import {
 import { type LoopScope, resolveBindingsPath, resolveLoopStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
 import { CronScheduler } from "./scheduler.js";
+import { loadSettings, type PiLoopSettings } from "./settings.js";
 import { LoopStore } from "./store.js";
 import { addBreadcrumb, initSentry, isSentryInitialized, logDebug, wrapToolExecute } from "./telemetry/sentry.js";
 import { registerLoopTools } from "./tools/loop-tools.js";
@@ -39,7 +42,22 @@ import { LoopWidget } from "./ui/widget.js";
 
 initSentry();
 
-const DEBUG = !!process.env.PI_LOOP_DEBUG;
+// Per ADR-003, v2.0 reads settings from .pi/pi-loop-settings.json. Env vars
+// (PI_LOOP_SCOPE, PI_LOOP_DEBUG, PI_LOOP_TASK_THRESHOLD, PI_LOOP) are
+// captured once by the v1-to-v2 migration into the file and ignored
+// thereafter.
+function loadInitialSettings(): PiLoopSettings {
+  const cwd = process.cwd();
+  const result = migrateV1ToV2(cwd, process.env);
+  if (result.migrated && result.banner) {
+    console.error(`[pi-loop] ${result.banner}`);
+  }
+  return loadSettings(cwd);
+}
+
+let _initialSettings = loadInitialSettings();
+
+const DEBUG = _initialSettings.debug;
 function debug(...args: unknown[]) {
   if (DEBUG) console.error("[pi-loop]", ...args);
   if (isSentryInitialized()) logDebug("[pi-loop]", ...args);
@@ -69,13 +87,11 @@ export default function (pi: ExtensionAPI) {
 
   addBreadcrumb("extension_loaded");
 
-  const piLoopEnv = process.env.PI_LOOP;
-  const piLoopScope = process.env.PI_LOOP_SCOPE as LoopScope | undefined;
-  // Default to "project" so loops persist across chat sessions at
-  // <cwd>/.pi/loops/loops.json (mirroring pi-goal-x's .pi/goals/ pattern).
-  // Override with PI_LOOP_SCOPE=session for the per-session behaviour, or
-  // PI_LOOP_SCOPE=memory to disable on-disk persistence entirely.
-  const loopScope: LoopScope = piLoopScope ?? "project";
+  // Per ADR-003, settings come from .pi/pi-loop-settings.json (with v1.x
+  // migration already applied at module load). PI_LOOP_SCOPE and PI_LOOP
+  // env vars are no longer read — use /loop-settings to change loopScope.
+  const piLoopEnv: string | undefined = undefined;
+  const loopScope: LoopScope = _initialSettings.loopScope;
 
   const getScopeOptions = () => ({ piLoopEnv, loopScope });
 
@@ -232,5 +248,10 @@ export default function (pi: ExtensionAPI) {
       refreshToolVisibility();
     },
     maybeBootstrapTaskLoop,
+  });
+
+  registerSettingsCommand({
+    pi,
+    getCwd: () => process.cwd(),
   });
 }
