@@ -139,5 +139,7 @@ describe("migrateV1ToV2", () => {
     expect(result.migrated).toBe(true);
     const v2 = JSON.parse(readFileSync(join(dir, ".pi", "pi-loop-settings.json"), "utf-8"));
     expect(v2.loopScope).toBe("memory");
+    // Per ADR-003 follow-up: the corrupt path is exposed for caller reporting
+    expect(result.corruptV1Path).toBe(v1Path);
   });
 });

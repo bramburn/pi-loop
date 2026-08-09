@@ -50,7 +50,7 @@ export function getWorkflowOutcomeAvailability(run: WorkflowRunState): WorkflowO
 }
 
 export function validateWorkflowDefinition(definition: WorkflowDefinition): string | undefined {
-  if (!definition || definition.version !== 1) return "Workflow version must be 1";
+  if (definition?.version !== 1) return "Workflow version must be 1";
   if (!definition.states || typeof definition.states !== "object") return "Workflow states must be an object";
   if (!definition.initialState || !definition.states[definition.initialState]) {
     return `Initial state "${definition.initialState}" is not defined`;

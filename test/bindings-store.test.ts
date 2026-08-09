@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -211,6 +211,99 @@ describe("BindingsStore", () => {
       // Mutating A does not touch B
       reloadA.remove("1");
       expect(reloadB.has("1")).toBe(false);
+    });
+});
+  describe("getOtherSessionBindingCounts", () => {
+    it("returns empty map in memory scope", () => {
+      const store = new BindingsStore(undefined, "memory");
+      const counts = store.getOtherSessionBindingCounts();
+      expect(counts.size).toBe(0);
+    });
+
+    it("aggregates counts from other sessions' binding files", () => {
+      const dir = join(cwd, ".pi", "loops");
+      mkdirSync(dir, { recursive: true });
+      // Write two other-session binding files
+      writeFileSync(join(dir, "bindings-session-a.json"), JSON.stringify({ loopIds: ["1", "2", "3"] }));
+      writeFileSync(join(dir, "bindings-session-b.json"), JSON.stringify({ loopIds: ["1", "4"] }));
+      const store = new BindingsStore(join(dir, "bindings-session-c.json"), "project");
+      const counts = store.getOtherSessionBindingCounts();
+      // Loop 1 is bound by 2 other sessions; loops 2, 3, 4 are bound by 1
+      expect(counts.get("1")).toBe(2);
+      expect(counts.get("2")).toBe(1);
+      expect(counts.get("3")).toBe(1);
+      expect(counts.get("4")).toBe(1);
+    });
+
+    it("skips corrupt other-session binding files", () => {
+      const dir = join(cwd, ".pi", "loops");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "bindings-good.json"), JSON.stringify({ loopIds: ["1"] }));
+      writeFileSync(join(dir, "bindings-bad.json"), "{ not valid json");
+      const store = new BindingsStore(join(dir, "bindings-current.json"), "project");
+      const counts = store.getOtherSessionBindingCounts();
+      // Only the good file contributes
+      expect(counts.get("1")).toBe(1);
+      expect(counts.size).toBe(1);
+    });
+
+    it("skips other-session files with non-array loopIds", () => {
+      const dir = join(cwd, ".pi", "loops");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "bindings-bad-shape.json"), JSON.stringify({ loopIds: "not-an-array" }));
+      const store = new BindingsStore(join(dir, "bindings-current.json"), "project");
+      const counts = store.getOtherSessionBindingCounts();
+      expect(counts.size).toBe(0);
+    });
+
+    it("returns empty map when the directory cannot be read", () => {
+      const store = new BindingsStore("/nonexistent/.pi/loops/bindings-x.json", "project");
+      const counts = store.getOtherSessionBindingCounts();
+      expect(counts.size).toBe(0);
+    });
+  });
+
+  describe("corrupt-file recovery", () => {
+    it("quarantines corrupt files and loads defaults", () => {
+      const path = join(cwd, ".pi", "loops", "bindings-session.json");
+      mkdirSync(join(cwd, ".pi", "loops"), { recursive: true });
+      writeFileSync(path, "{ this is not json");
+      const store = new BindingsStore(path, "project");
+      const loaded = store.load();
+      expect(loaded).toBe(false);
+      expect(store.list()).toEqual([]);
+      // The corrupt file should have been renamed to .corrupt.<ts>
+      expect(existsSync(path)).toBe(false);
+      const files = readdirSync(join(cwd, ".pi", "loops"));
+      const quarantined = files.find((f) => f.startsWith("bindings-session.json.corrupt."));
+      expect(quarantined).toBeDefined();
+    });
+
+    it("reload() forces a fresh load from disk", () => {
+      const path = join(cwd, ".pi", "loops", "bindings-session.json");
+      mkdirSync(join(cwd, ".pi", "loops"), { recursive: true });
+      writeFileSync(path, JSON.stringify({ loopIds: ["1", "2"] }));
+      const store = new BindingsStore(path, "project");
+      store.load();
+      expect(store.list()).toEqual(["1", "2"]);
+      // Mutate external file
+      writeFileSync(path, JSON.stringify({ loopIds: ["3", "4"] }));
+      // reload() should pick up the new contents
+      store.reload();
+      expect(store.list()).toEqual(["3", "4"]);
+    });
+  });
+
+  describe("path accessor", () => {
+    it("exposes the configured file path", () => {
+      const path = join(cwd, ".pi", "loops", "bindings-test.json");
+      const store = new BindingsStore(path, "project");
+      expect(store.path).toBe(path);
+    });
+
+    it("exposes undefined path in memory scope", () => {
+      const store = new BindingsStore(undefined, "memory");
+      expect(store.path).toBeUndefined();
     });
   });
 });

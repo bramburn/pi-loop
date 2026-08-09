@@ -25,6 +25,8 @@ export interface MigrationResult {
   banner?: string;
   /** Path the v2 settings file lives at. */
   v2Path: string;
+  /** Path of the v1 file that was corrupt (if any). Caller can decide whether to surface this. */
+  corruptV1Path?: string;
 }
 
 interface V1TasksConfig {
@@ -48,6 +50,7 @@ function isV1LoopScope(value: unknown): value is "memory" | "session" | "project
 export function migrateV1ToV2(cwd: string, env: NodeJS.ProcessEnv = process.env): MigrationResult {
   const v2Path = join(cwd, ".pi", V2_CONFIG_FILE);
   const v1Path = join(cwd, ".pi", V1_CONFIG_FILE);
+  let corruptV1Path: string | undefined;
 
   // Already migrated (or no prior data) — nothing to do.
   if (existsSync(v2Path)) {
@@ -77,8 +80,11 @@ export function migrateV1ToV2(cwd: string, env: NodeJS.ProcessEnv = process.env)
       if (typeof raw.showAll === "boolean") merged.showAll = raw.showAll;
       if (raw.hiddenAt !== undefined) merged.hiddenAt = raw.hiddenAt;
       if (raw.autoClearCompleted !== undefined) merged.autoClear = raw.autoClearCompleted;
-    } catch {
+    } catch (err) {
       // Corrupt v1 file — fall through to env-var capture, leave v1 in place.
+      // Surface the error so the user can recover the file manually.
+      console.error(`[pi-loop] migration: failed to parse ${v1Path}: ${err instanceof Error ? err.message : String(err)}`);
+      corruptV1Path = v1Path;
     }
   }
 
@@ -108,6 +114,11 @@ export function migrateV1ToV2(cwd: string, env: NodeJS.ProcessEnv = process.env)
 
   const bannerParts = [`pi-loop v2.0 migrated your config to .pi/${V2_CONFIG_FILE}.`];
   if (hasV1File) bannerParts.push(`The v1 file is at .pi/${V1_CONFIG_FILE}.v1.bak.`);
+  if (corruptV1Path) {
+    bannerParts.push(
+      `Warning: ${corruptV1Path} was corrupt and could not be parsed; defaults applied for missing fields. Inspect the file manually.`,
+    );
+  }
   if (hasV1EnvVars) {
     bannerParts.push(
       "PI_LOOP_SCOPE / PI_LOOP_DEBUG / PI_LOOP_TASK_THRESHOLD env vars are no longer read; their values were captured into the file.",
@@ -118,5 +129,6 @@ export function migrateV1ToV2(cwd: string, env: NodeJS.ProcessEnv = process.env)
     migrated: true,
     banner: bannerParts.join(" "),
     v2Path,
+    corruptV1Path,
   };
 }

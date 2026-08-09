@@ -173,7 +173,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
   ): LoopEntry | undefined {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry || entry.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow) return undefined;
+      if (entry?.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow) return undefined;
       if (expected && (
         entry.status !== expected.status
         || entry.dynamic.iteration !== expected.iteration
@@ -209,7 +209,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
   ): boolean {
     return this.withLock(() => {
       const entry = this.entries.get(id);
-      if (!entry || entry.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow
+      if (entry?.trigger.type !== "dynamic" || !entry.dynamic || entry.workflow
         || entry.status !== expected.status
         || entry.dynamic.iteration !== expected.iteration
         || entry.updatedAt !== expected.updatedAt) return false;

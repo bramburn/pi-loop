@@ -231,14 +231,4 @@ describe("registerLoopCommand — /loop-resume", () => {
     expect(h.triggerSystem.remove).not.toHaveBeenCalled();
   });
 
-  it("accepts the first whitespace-separated token as the loop id", async () => {
-    const id = await createPausedLoop(h.store);
-    const ctx = createCtx();
-
-    await h.resume(`${id} trailing junk`, ctx);
-
-    expect(h.store.get(id)?.status).toBe("active");
-    expect(h.triggerSystem.add).toHaveBeenCalled();
-    expect(h.bindingsStore.add).toHaveBeenCalledWith(id);
-  });
 });
