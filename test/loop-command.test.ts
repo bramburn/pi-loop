@@ -10,16 +10,25 @@ function setup() {
   const updateWidget = vi.fn();
   const maybeBootstrapTaskLoop = vi.fn(async () => false);
   const onDynamicLoopActivated = vi.fn();
+  const bindingsStore = {
+    list: vi.fn(() => [] as string[]),
+    add: vi.fn(),
+    remove: vi.fn(),
+    load: vi.fn(() => true),
+    save: vi.fn(),
+    fileExists: vi.fn(() => false),
+  };
   registerLoopCommand({
     pi,
     getStore: () => store as any,
     getTriggerSystem: () => triggerSystem as any,
+    getBindingsStore: () => bindingsStore as any,
     updateWidget,
     maybeBootstrapTaskLoop,
     onDynamicLoopActivated,
   });
   const command = commandMap.get("loop")!;
-  return { store, triggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated, command };
+  return { store, triggerSystem, updateWidget, maybeBootstrapTaskLoop, onDynamicLoopActivated, bindingsStore, command };
 }
 
 describe("registerLoopCommand", () => {
@@ -47,6 +56,7 @@ describe("registerLoopCommand", () => {
     expect(ctx.notifications).toHaveLength(1);
     expect(ctx.notifications[0].message).toContain("Loop #1 created");
     expect(ctx.notifications[0].level).toBe("info");
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("warns when an interval is given without a prompt", async () => {
@@ -132,6 +142,7 @@ describe("registerLoopCommand", () => {
     expect(h.store.get("1")?.trigger.type).toBe("cron");
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("Loop #1 created"), "info");
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("edge: an unparseable interval typed interactively surfaces a notify error and creates nothing", async () => {
@@ -167,6 +178,7 @@ describe("registerLoopCommand", () => {
     expect(h.store.get("1")?.trigger).toEqual({ type: "event", source: "tool_execution_start" });
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("Event loop #1 created"), "info");
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("free-text input defaults to a dynamic goal loop without prompting for mode", async () => {
@@ -187,6 +199,7 @@ describe("registerLoopCommand", () => {
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(h.onDynamicLoopActivated).toHaveBeenCalledWith(h.store.get("1"));
     expect(ctx.notifications[0].message).toContain("Dynamic loop #1 created");
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("keeps numeric free-text goals in dynamic mode", async () => {
@@ -199,6 +212,7 @@ describe("registerLoopCommand", () => {
     expect(h.store.get("1")?.prompt).toBe("2026 release must ship by Friday");
     expect(h.onDynamicLoopActivated).toHaveBeenCalledWith(h.store.get("1"));
     expect(ctx.notifications[0].message).toContain("Dynamic loop #1 created");
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("rejects cron-shaped invalid expressions without persisting a loop", async () => {
@@ -244,6 +258,7 @@ describe("registerLoopCommand", () => {
     expect(h.store.get("1")?.maxFires).toBe(25);
     expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
     expect(h.maybeBootstrapTaskLoop).toHaveBeenCalledWith(h.store.get("1"));
+    expect(h.bindingsStore.add).toHaveBeenCalledWith("1");
   });
 
   it("reports when a slash-created task worker adopts an existing backlog", async () => {

@@ -213,6 +213,7 @@ export function createCtx(options: boolean | MockCtxOptions = false) {
   const opts = typeof options === "boolean" ? { hasPendingMessages: options } : options;
   const notifications: Array<{ message: string; level?: string }> = [];
   const statuses: Array<{ key: string; text: string | undefined }> = [];
+  const terminalInputs: Array<(data: string) => { consume?: boolean } | undefined> = [];
   return {
     ui: {
       setStatus(key: string, text: string | undefined) {
@@ -222,11 +223,21 @@ export function createCtx(options: boolean | MockCtxOptions = false) {
       notify(message: string, level?: string) {
         notifications.push({ message, level });
       },
+      confirm: vi.fn(async () => false),
+      onTerminalInput(handler: (data: string) => { consume?: boolean } | undefined): () => void {
+        terminalInputs.push(handler);
+        return () => {
+          const idx = terminalInputs.indexOf(handler);
+          if (idx >= 0) terminalInputs.splice(idx, 1);
+        };
+      },
     },
     notifications,
     statuses,
+    terminalInputs,
     cwd: opts.cwd ?? process.cwd(),
     isIdle: () => opts.isIdle ?? true,
+    hasUI: opts.hasUI ?? true,
     hasPendingMessages: () => opts.hasPendingMessages ?? false,
     sessionManager: { getSessionId: () => opts.sessionId ?? "test-session" },
     ...(opts.modelRegistry ? { modelRegistry: opts.modelRegistry } : {}),

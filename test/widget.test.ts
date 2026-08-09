@@ -1,202 +1,309 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoopStore } from "../src/store.js";
 import { LoopWidget } from "../src/ui/widget.js";
+import { clampStatusLine, type RenderWidgetState, renderWidgetLines } from "../src/ui/widget-render.js";
 
-function createMockMonitorManager() {
-  const monitors: Array<{
-    id: string;
-    command: string;
-    description?: string;
-    status: string;
-    startedAt: number;
-    outputLines: number;
-  }> = [];
+// Minimal Theme stub — the render function only uses fg(), bold(), and string
+// passthrough. Real styling is exercised by integration tests.
+function makeTheme() {
+  const passthrough = (s: string) => s;
   return {
-    list: () => [...monitors],
-    _add: (m: typeof monitors[0]) => monitors.push(m),
-    _clear: () => { monitors.length = 0; },
+    fg: (_name: string, text: string) => text,
+    bold: passthrough,
   };
 }
 
-describe("LoopWidget status rendering", () => {
+function makeMonitor(
+  id: string,
+  status: "running" | "completed" | "error" | "stopped" = "running",
+  outputLines = 0,
+): import("../src/types.js").MonitorEntry {
+  return {
+    id,
+    command: `command for ${id}`,
+    timeout: 60_000,
+    status,
+    startedAt: Date.now() - 60_000,
+    completedAt: status === "running" ? undefined : Date.now(),
+    outputLines,
+    outputBuffer: [],
+  };
+}
+
+function makeLoop(
+  id: string,
+  status: "active" | "paused" = "active",
+  prompt = `Loop ${id} prompt`,
+  overrides: Partial<RenderWidgetState["loops"][number]> = {},
+): RenderWidgetState["loops"][number] {
+  return {
+    id,
+    status,
+    prompt,
+    recurring: true,
+    trigger: { type: "cron", schedule: "*/5 * * * *" },
+    autoTask: false,
+    taskBacklog: false,
+    dynamic: null,
+    ...overrides,
+  };
+}
+
+describe("clampStatusLine", () => {
+  it("returns the input unchanged when shorter than maxWidth", () => {
+    expect(clampStatusLine("hello", 80)).toBe("hello");
+  });
+
+  it("returns the input unchanged when exactly at maxWidth", () => {
+    const line = "x".repeat(80);
+    expect(clampStatusLine(line, 80)).toBe(line);
+  });
+
+  it("truncates when longer than maxWidth and includes an ellipsis marker", () => {
+    const line = "x".repeat(200);
+    const out = clampStatusLine(line, 80);
+    expect(visibleWidth(out)).toBeLessThanOrEqual(80);
+    const stripped = out.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(stripped.endsWith("…")).toBe(true);
+  });
+
+  it("rounds up widths below the 20-column floor to a safe minimum", () => {
+    const out = clampStatusLine("hello world", 5);
+    expect(visibleWidth(out)).toBeLessThanOrEqual(20);
+  });
+
+  it("treats empty input as a no-op", () => {
+    expect(clampStatusLine("", 80)).toBe("");
+  });
+});
+
+describe("renderWidgetLines", () => {
+  const theme = makeTheme();
+
+  it("returns an empty array when no loops, monitors, or tasks are visible", () => {
+    const lines = renderWidgetLines({ loops: [], monitors: [], tasks: { count: 0 } }, theme, 80);
+    expect(lines).toEqual([]);
+  });
+
+  it("renders a header line with counts when there is any state", () => {
+    const lines = renderWidgetLines(
+      { loops: [makeLoop("1")], monitors: [], tasks: { count: 0 } },
+      theme,
+      80,
+    );
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines[0]).toContain("pi-loop");
+    expect(lines[0]).toContain("1 loop");
+  });
+
+  it("renders one row per visible (non-paused) loop", () => {
+    const loops = [makeLoop("1"), makeLoop("2", "paused"), makeLoop("3", "active", "Loop 3 prompt")];
+    const lines = renderWidgetLines({ loops, monitors: [], tasks: { count: 0 } }, theme, 80);
+    // header + 2 active rows (paused is hidden) = 3 lines
+    expect(lines.length).toBe(3);
+    expect(lines.some((l) => l.includes("#1"))).toBe(true);
+    expect(lines.some((l) => l.includes("#3"))).toBe(true);
+  });
+
+  it("hides paused loops by default", () => {
+    const lines = renderWidgetLines(
+      { loops: [makeLoop("1", "paused")], monitors: [], tasks: { count: 0 } },
+      theme,
+      80,
+    );
+    // Empty — paused loops are not visible
+    expect(lines).toEqual([]);
+  });
+
+  it("hides one-shot monitor:done loops", () => {
+    const loop = makeLoop("1", "active", "auto wake", {
+      recurring: false,
+      trigger: { type: "event", source: "monitor:done" },
+    });
+    const lines = renderWidgetLines({ loops: [loop], monitors: [], tasks: { count: 0 } }, theme, 80);
+    expect(lines).toEqual([]);
+  });
+
+  it("shows the firing flash when fired within the window", () => {
+    const loops = [makeLoop("7")];
+    const lines = renderWidgetLines(
+      { loops, monitors: [], tasks: { count: 0 }, firingLoopId: "7", firedAt: Date.now(), now: Date.now() + 2000 },
+      theme,
+      80,
+    );
+    expect(lines.some((l) => l.includes("firing"))).toBe(true);
+    expect(lines.some((l) => l.includes("2s ago"))).toBe(true);
+  });
+
+  it("hides the firing flash after the 5-second window expires", () => {
+    const loops = [makeLoop("7")];
+    const lines = renderWidgetLines(
+      {
+        loops,
+        monitors: [],
+        tasks: { count: 0 },
+        firingLoopId: "7",
+        firedAt: Date.now(),
+        now: Date.now() + 10_000,
+      },
+      theme,
+      80,
+    );
+    expect(lines.some((l) => l.includes("firing"))).toBe(false);
+  });
+
+  it("renders monitor rows with status and line count", () => {
+    const monitors = [makeMonitor("5", "running", 42)];
+    const lines = renderWidgetLines({ loops: [], monitors, tasks: { count: 0 } }, theme, 80);
+    expect(lines.some((l) => l.includes("#5"))).toBe(true);
+    expect(lines.some((l) => l.includes("42 lines"))).toBe(true);
+  });
+
+  it("renders the task summary on the final line", () => {
+    const lines = renderWidgetLines(
+      { loops: [], monitors: [], tasks: { count: 3, focusText: "active: Foo" } },
+      theme,
+      80,
+    );
+    expect(lines.some((l) => l.includes("3 tasks"))).toBe(true);
+    expect(lines.some((l) => l.includes("Foo"))).toBe(true);
+  });
+
+  // Pragmaxim's regression test matrix from commit a45b43d.
+  for (const width of [50, 70, 80, 100, 109, 120]) {
+    it(`clamps every line at width ${width} under pathological counts`, () => {
+      const loops = Array.from({ length: 25 }, (_, i) => makeLoop(String(i + 1), "active", `prompt #${i}`));
+      const monitors = Array.from({ length: 25 }, (_, i) =>
+        makeMonitor(`m${i}`, "running", i),
+      );
+      const lines = renderWidgetLines(
+        { loops, monitors, tasks: { count: 25, focusText: "x".repeat(200) } },
+        theme,
+        width,
+      );
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    });
+  }
+});
+
+describe("LoopWidget v2.0 surface", () => {
   let store: LoopStore;
-  let monitorManager: ReturnType<typeof createMockMonitorManager>;
+  let monitorManager: { list: () => import("../src/types.js").MonitorEntry[] };
   let widget: LoopWidget;
-  let setStatus: ReturnType<typeof vi.fn>;
+  let setWidgetCalls: Array<{ key: string; content: unknown; options?: unknown }>;
+  let setStatusCalls: Array<{ key: string; text: string | undefined }>;
 
   beforeEach(() => {
     store = new LoopStore();
-    monitorManager = createMockMonitorManager();
-    widget = new LoopWidget(store, monitorManager as any);
-    setStatus = vi.fn();
+    monitorManager = { list: () => [] };
+    widget = new LoopWidget(store, monitorManager as never);
+    setWidgetCalls = [];
+    setStatusCalls = [];
     widget.setUICtx({
-      setStatus,
-      setWidget: vi.fn(),
-    } as any);
+      setWidget: (key, content, options) => {
+        setWidgetCalls.push({ key, content, options });
+      },
+      setStatus: (key, text) => {
+        setStatusCalls.push({ key, text });
+      },
+    } as never);
   });
 
-  afterEach(() => {
+  afterEach(() => widget.dispose());
+
+  it("registers the widget above the editor on first setUICtx", () => {
+    expect(setWidgetCalls.length).toBeGreaterThan(0);
+    const last = setWidgetCalls[setWidgetCalls.length - 1]!;
+    expect(last.key).toBe("loops");
+    expect(last.options).toEqual({ placement: "aboveEditor" });
+    expect(typeof last.content).toBe("function");
+  });
+
+  it("does NOT call setStatus in v2.0", () => {
+    // setStatus is the v1.x surface — v2.0 replaces it entirely.
+    expect(setStatusCalls.length).toBe(0);
+  });
+
+  it("re-registers the widget on update()", () => {
+    const initial = setWidgetCalls.length;
+    store.create({ type: "cron", schedule: "*/5 * * * *" }, "x", { recurring: true });
+    widget.update();
+    expect(setWidgetCalls.length).toBeGreaterThan(initial);
+  });
+
+  it("dispose() unregisters the widget via setWidget(undefined)", () => {
+    const before = setWidgetCalls.length;
     widget.dispose();
+    const last = setWidgetCalls[setWidgetCalls.length - 1]!;
+    expect(setWidgetCalls.length).toBe(before + 1);
+    expect(last.key).toBe("loops");
+    expect(last.content).toBeUndefined();
   });
 
-  function latestStatusCall() {
-    const calls = setStatus.mock.calls.filter((call) => call[0] === "loops");
-    return calls[calls.length - 1];
-  }
-
-  it("clears status when no loops or monitors are active", () => {
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", undefined]);
+  it("setFiringStatus() invalidates the widget without calling setStatus", () => {
+    const before = setWidgetCalls.length;
+    widget.setFiringStatus("42", "check build");
+    expect(setWidgetCalls.length).toBeGreaterThan(before);
+    expect(setStatusCalls.length).toBe(0);
   });
 
-  it("shows a compact monitor count in status", () => {
-    monitorManager._add({
-      id: "1",
-      command: "bash -lc 'set -euo pipefail\nwhile sleep 30; do hut builds show 1769753; done'",
-      description: "Watch SourceHut build",
-      status: "running",
-      startedAt: Date.now(),
-      outputLines: 42,
-    });
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "1 monitor"]);
+  it("setStore() re-registers the widget with the new store's data", () => {
+    const newStore = new LoopStore();
+    newStore.create({ type: "cron", schedule: "*/5 * * * *" }, "from new store", { recurring: true });
+    widget.setStore(newStore);
+    // Verify the registered factory reads the new store: invoke it with mock
+    // tui/theme, then call render on the returned component.
+    const factory = setWidgetCalls[setWidgetCalls.length - 1]!.content as (
+      tui: unknown,
+      theme: unknown,
+    ) => { render: (w: number) => string[] };
+    const component = factory({ requestRender: () => {} } as never, makeTheme() as never);
+    const rendered = component.render(80);
+    expect(rendered.some((l) => l.includes("from new store"))).toBe(true);
   });
 
-  it("shows compact loop and monitor counts in status", () => {
-    store.create(
-      { type: "cron", schedule: "*/5 * * * *" },
-      "Check CI status",
-      { recurring: true },
-    );
-    monitorManager._add({
-      id: "2",
-      command: "curl -s https://api.github.com/repos/u/r/actions/runs",
-      status: "running",
-      startedAt: Date.now(),
-      outputLines: 0,
-    });
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "1 loop · 1 monitor"]);
-  });
-
-  it("does not count one-shot monitor completion loops as visible loops in status", () => {
-    store.create(
-      { type: "event", source: "monitor:done", filter: '{"monitorId":"5"}' },
-      "Summarize the GitHub Actions run result",
-      { recurring: false },
-    );
-    monitorManager._add({
-      id: "5",
-      command: "curl -s https://api.github.com/repos/u/r/actions/runs",
-      status: "running",
-      startedAt: Date.now(),
-      outputLines: 0,
-    });
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "1 monitor"]);
-  });
-
-  it("shows task counts and only the active task focus text", () => {
-    widget.setTaskSummaryProvider(() => ({
-      count: 2,
-      focusText: "active: Fix native task fallback",
-    }));
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "2 tasks | active: Fix native task fallback"]);
-  });
-
-  it("shows next task when no task is in progress", () => {
-    widget.setTaskSummaryProvider(() => ({
-      count: 3,
-      focusText: "next: Write README updates",
-    }));
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "3 tasks | next: Write README updates"]);
-  });
-
-  it("clears status after active content disappears", () => {
-    monitorManager._add({
-      id: "x", command: "true", status: "running", startedAt: Date.now(), outputLines: 0,
-    });
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "1 monitor"]);
-
-    monitorManager._clear();
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", undefined]);
-  });
-
-  it("shows blockedBy lines inline after focus text", () => {
-    widget.setTaskSummaryProvider(() => ({
-      count: 1,
-      focusText: "active: Implement widget",
-      blockedByLines: [
-        "Setup dependencies (blocked by #2, #3)",
-      ],
-    }));
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "1 task | active: Implement widget › Setup dependencies (blocked by #2, #3)"]);
-  });
-
-  it("shows multiple blockedBy lines after focus text", () => {
-    widget.setTaskSummaryProvider(() => ({
-      count: 2,
-      focusText: "active: Implement widget",
-      blockedByLines: [
-        "Setup deps (blocked by #2)",
-        "Write tests (blocked by #3)",
-      ],
-    }));
-
-    widget.update();
-    expect(latestStatusCall()).toEqual(["loops", "2 tasks | active: Implement widget › Setup deps (blocked by #2) › Write tests (blocked by #3)"]);
-  });
-
-  it("shows firing flash when setFiringStatus is called", () => {
+  it("setFiringStatus installs a ticker that re-registers the widget at 1Hz", () => {
     vi.useFakeTimers();
     try {
-      widget.setFiringStatus("3", "check the build status");
-      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: check the build status"]);
-      // Advances time so the flash auto-clears
-      vi.advanceTimersByTime(5000);
-      expect(latestStatusCall()).toEqual(["loops", undefined]); // no loops/monitors
+      const initial = setWidgetCalls.length;
+      widget.setFiringStatus("42", "check build");
+      expect(setWidgetCalls.length).toBeGreaterThan(initial);
+      setWidgetCalls.length = initial; // reset
+      // Advance 2 ticks → at least 2 re-registrations (each tick calls invalidate())
+      vi.advanceTimersByTime(2200);
+      expect(setWidgetCalls.length).toBeGreaterThanOrEqual(2);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("resets the firing timer when setFiringStatus is called again for the same loop", () => {
+  it("ticker self-disables after the firing-flash window expires", () => {
     vi.useFakeTimers();
     try {
-      widget.setFiringStatus("3", "first prompt");
-      vi.advanceTimersByTime(3000); // not enough to clear (threshold is 5000)
-      widget.setFiringStatus("3", "second prompt");
-      vi.advanceTimersByTime(3000); // another 3s from reset → still not enough
-      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: second prompt"]);
-      vi.advanceTimersByTime(2000); // now at 5s from last call → clears
-      expect(latestStatusCall()).toEqual(["loops", undefined]);
+      widget.setFiringStatus("42", "check build");
+      // Advance past the 5-second firing-flash window plus 1 tick
+      vi.advanceTimersByTime(6100);
+      // The ticker cleared itself and triggered one final repaint
+      const after = setWidgetCalls.length;
+      // Advance another 3 seconds: ticker should be silent now
+      vi.advanceTimersByTime(3000);
+      const later = setWidgetCalls.length;
+      expect(later).toBe(after);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("clears the firing timer on dispose", () => {
+  it("dispose() clears the ticker", () => {
     vi.useFakeTimers();
     try {
-      widget.setFiringStatus("3", "prompt");
-      expect(latestStatusCall()).toEqual(["loops", "Loop #3 → firing: prompt"]);
+      widget.setFiringStatus("42", "check build");
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval");
       widget.dispose();
-      // After dispose, the widget no longer manages the status, but we can
-      // verify the timer was cleared by advancing time — no re-entry from the widget.
-      vi.advanceTimersByTime(5000);
-      // No assertion needed — the important thing is no error thrown from the cleared timer.
+      expect(clearIntervalSpy).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

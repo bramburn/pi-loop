@@ -24,6 +24,8 @@
 | TaskOutput (background process output) | ✅ | ❌ | **Deferred** | Requires process tracker |
 | TaskStop (stop background process) | ✅ | ❌ | **Deferred** | Requires process tracker |
 | TaskExecute (subagent execution) | ✅ | ❌ | **Deferred** | Requires @tintinweb/pi-subagents |
+| **LoopCreate / LoopList / LoopUpdate / LoopDelete** | n/a | ✅ | **Done** (always available) | |
+| **Tool visibility gating** (syncLoopTools) | n/a | ✅ | **Done** (v2.0) | LoopUpdate hidden when no dynamic loop, LoopDelete hidden when no paused/backlog loop, WorkflowTransition hidden unless workflow loop |
 
 **Status key:** ✅ Done | ⚠️ Partial | ❌ Missing | **Deferred** (blocked by external dependency)
 
@@ -63,14 +65,19 @@
 
 | Feature | pi-tasks | pi-loop | Status |
 |---------|----------|---------|--------|
-| taskScope: memory / session / project | ✅ | ❌ | **Missing** |
-| sortOrder: id / status / recent / oldest | ✅ | ❌ | **Missing** |
-| maxVisible: 5–100 | ✅ | ❌ | **Missing** |
-| showAll: true / false | ✅ | ❌ | **Missing** |
-| hiddenAt: top / bottom | ✅ | ❌ | **Missing** |
-| autoClearCompleted: never / on_list_complete / on_task_complete | ✅ | ❌ | **Missing** |
-| Persisted to .pi/tasks-config.json | ✅ | ❌ | **Missing** |
-| SettingsList TUI component | ✅ | ❌ | **Missing** |
+| Single unified settings file (.pi/pi-loop-settings.json) | n/a | ✅ | **Done** (v2.0) |
+| Strict schema validation (additionalProperties: false) | n/a | ✅ | **Done** (v2.0) |
+| taskScope: memory / session / project | ✅ | ✅ | **Done** (v2.0) |
+| loopScope: memory / session / project | n/a | ✅ | **Done** (v2.0) |
+| sortOrder: id / status / recent / oldest | ✅ | ✅ | **Done** (v2.0) |
+| maxVisible: 5–100 | ✅ | ✅ | **Done** (v2.0) |
+| showAll: true / false | ✅ | ✅ | **Done** (v2.0) |
+| hiddenAt: top / bottom | ✅ | ✅ | **Done** (v2.0) |
+| autoClear: never / on_list_complete / on_task_complete | ✅ | ✅ | **Done** (v2.0) |
+| debug: boolean | n/a | ✅ | **Done** (v2.0) |
+| taskThreshold: positive integer | n/a | ✅ | **Done** (v2.0) |
+| SettingsList TUI component (`/loop-settings`) | ✅ | ✅ | **Done** (v2.0) |
+| Env-var migration (one-shot on first v2 startup) | n/a | ✅ | **Done** (v2.0) |
 
 ---
 
@@ -78,14 +85,21 @@
 
 | Feature | pi-tasks | pi-loop | Status |
 |---------|----------|---------|--------|
-| Status icons (✔ ◼ ◻ ✳/✽ spinner) | ✅ | ⚠️ Partial | **Partial** | Has ok/>/\* icons, no spinner |
+| Above-editor widget (multi-line tree) | ✅ | ✅ | **Done** (v2.0) |
+| Status icons (✔ ◼ ◻ ✳/✽ spinner) | ✅ | ✅ | **Done** (v2.0) |
 | Task count summary | ✅ | ✅ | **Done** |
-| Strikethrough on completed | ✅ | ❌ | **Missing** |
-| Active task elapsed time + token counts | ✅ | ❌ | **Missing** |
-| blockedBy inline (› blocked by #1) | ✅ | ❌ | **Missing** |
-| sortOrder support | ✅ | ❌ | **Missing** |
-| maxVisible / showAll support | ✅ | ❌ | **Missing** |
-| hiddenAt support | ✅ | ❌ | **Missing** |
+| Strikethrough on completed | ✅ | ❌ | **Deferred** (v3.0) |
+| Active task elapsed time + token counts | ✅ | ✅ | **Done** (v2.0) — loop age in widget |
+| blockedBy inline (› blocked by #1) | ✅ | ✅ | **Done** (v2.0) — preserved from v1.x |
+| sortOrder support | ✅ | ✅ | **Done** (v2.0) — settings.sortOrder |
+| maxVisible / showAll support | ✅ | ✅ | **Done** (v2.0) — settings.maxVisible / showAll |
+| hiddenAt support | ✅ | ✅ | **Done** (v2.0) — settings.hiddenAt |
+| Width-safety net (truncateToWidth on every line) | ✅ | ✅ | **Done** (v2.0) |
+| Live ticker (1Hz repaint during fires) | n/a | ✅ | **Done** (v2.0) |
+| Firing flash (→ firing Ns ago) | n/a | ✅ | **Done** (v2.0) |
+| Ctrl+Shift+L scrollable loop list overlay | n/a | ✅ | **Done** (v2.0) |
+| Escape dialog during long-running operations | n/a | ✅ | **Done** (v2.0) |
+| Crash-recovery prompt for paused loops | n/a | ✅ | **Done** (v2.0) |
 
 ---
 
