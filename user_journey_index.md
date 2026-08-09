@@ -30,6 +30,10 @@ Flows are organized by **role concern** (Loop Management, Monitor Management, Ta
 | L6 | Re-arm a stored loop (Governor) | `/loop-resume` (no args) | Governor picker opens; user selects which loops this terminal arms | `userflow/loop-governor.md` | 2026-07-04 |
 | L7 | Manage per-session bindings (multi-terminal) | Multiple pi terminals in same repo | Each terminal arms a disjoint subset; no contention | `userflow/per-session-bindings.md` | 2026-07-04 |
 | L8 | Self-paced loop (agent decides next interval) | `/loop` with no interval | Agent fires once, decides next interval via `updateMetadata` reschedule | `userflow/self-paced-loop.md` | 2026-07-04 |
+| L9 | Above-editor widget (v2.0) | Extension startup → multi-line widget registers above editor | User sees per-loop + per-monitor + per-task rows with live 1Hz ticker | `userflow/widget-loop-monitor-task.md` | 2026-08-08 |
+| L10 | Modal overlay keybindings (v2.0) | `Ctrl+Shift+L` opens loop overlay; `Escape` opens operation dialog | User navigates loops with arrows + 'a' toggle; dismisses with Esc | `userflow/keybindings.md` | 2026-08-08 |
+| L11 | Tool visibility gating (v2.0) | Every store mutation | LLM cannot call banned tools (LoopDelete after fire, LoopUpdate when no dynamic loop, etc.) | `userflow/keybindings.md` (notes) / `src/tools/tool-visibility.ts` | 2026-08-08 |
+| L12 | Crash-recovery prompt (v2.0) | `session_start` with `reason: 'resume'` | User is prompted per paused loop; accepts → resumed; declines → stays paused | `userflow/crash-recovery.md` | 2026-08-08 |
 
 ---
 

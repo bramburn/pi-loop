@@ -50,6 +50,8 @@ export class LoopWidget {
   private firingLoopId: string | undefined;
   private firedAt: number | undefined;
   private tickerTimer: ReturnType<typeof setInterval> | undefined;
+  private tui: TUI | undefined;
+  private registered = false;
 
   constructor(
     private store: LoopStore,
@@ -81,13 +83,18 @@ export class LoopWidget {
     this.ensureTicker();
   }
 
+  /** Returns true when a component factory has been registered with the TUI. */
+  isRegistered(): boolean {
+    return this.registered;
+  }
+
   /** Start (or reset) the live ticker that repaints the widget at 1 Hz
    *  while a firing indicator is visible. Self-disables after
-   *  FIRING_FLASH_MS of inactivity. */
+   *  5_000ms of inactivity. */
   private ensureTicker(): void {
     if (this.tickerTimer) {
       // Already ticking; the new firing resets the flash window implicitly
-      // (we re-check firedAt on every tick).
+      // (we re-read firedAt on every tick).
       return;
     }
     this.tickerTimer = setInterval(() => {
@@ -109,7 +116,10 @@ export class LoopWidget {
     }
   }
 
-  /** Trigger a widget re-render. Called after every store mutation. */
+  /** Trigger a widget re-render. Called after every store mutation.
+   *  Delegates to the TUI's requestRender() — does NOT re-register the
+   *  component factory (which would tear down and rebuild the closure
+   *  on every update). */
   update(): void {
     this.invalidate();
   }
@@ -119,6 +129,8 @@ export class LoopWidget {
     this.stopTicker();
     if (!this.uiCtx) return;
     this.uiCtx.setWidget(WIDGET_KEY, undefined);
+    this.registered = false;
+    this.tui = undefined;
   }
 
   /** Read-only snapshot of the state the widget renders. Used both by the
@@ -145,17 +157,22 @@ export class LoopWidget {
     };
   }
 
+  /** Trigger a repaint via the TUI's requestRender(). Captures the tui
+   *  handle on first registration so subsequent updates don't need to
+   *  re-register the component. */
   private invalidate(): void {
-    // We don't hold a direct handle to the component — the factory captures
-    // this via closures and re-reads state on every render. To trigger a
-    // repaint, we re-register the same factory. The TUI diffs the output.
-    if (!this.uiCtx) return;
-    this.registerComponent();
+    if (this.tui) {
+      this.tui.requestRender();
+    }
   }
 
+  /** Register the widget component with the TUI. Called once on setUICtx.
+   *  Subsequent store mutations trigger repaints via invalidate() →
+   *  tui.requestRender(); they do NOT re-register. */
   private registerComponent(): void {
     if (!this.uiCtx) return;
     const factory = (tui: TUI, theme: Parameters<typeof renderWidgetLines>[1]): LoopWidgetComponent => {
+      this.tui = tui;
       return new LoopWidgetComponent({
         tui,
         theme,
@@ -163,6 +180,7 @@ export class LoopWidget {
       });
     };
     this.uiCtx.setWidget(WIDGET_KEY, factory, { placement: "aboveEditor" });
+    this.registered = true;
   }
 }
 

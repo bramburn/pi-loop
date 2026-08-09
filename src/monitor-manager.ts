@@ -238,7 +238,7 @@ export class MonitorManager {
 
   async stop(id: string, reason: "manual" | "timeout" = "manual"): Promise<boolean> {
     const bp = this.processes.get(id);
-    if (!bp || bp.entry.status !== "running") return false;
+    if (bp?.entry.status !== "running") return false;
 
     this.emitOutputProgress(id, bp);
     this.applyReducerEvent({
@@ -313,7 +313,7 @@ export class MonitorManager {
 
   updateProgress(id: string, progress: Omit<MonitorProgress, "source" | "updatedAt">): MonitorEntry | undefined {
     const bp = this.processes.get(id);
-    if (!bp || bp.entry.status !== "running") return undefined;
+    if (bp?.entry.status !== "running") return undefined;
     this.applyProgress(id, { ...progress, source: "agent" });
     return this.get(id);
   }
