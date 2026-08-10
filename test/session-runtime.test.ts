@@ -39,6 +39,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
       queueOrDeliverMonitorStarted: vi.fn(async () => {}),
       discardMonitorStarted: vi.fn(),
       flushPendingNotifications: vi.fn(async () => {}),
+      dispatchUrgentFlush: vi.fn(async () => {}),
       clear: vi.fn(),
     },
     flushPendingNotifications: vi.fn(async () => {}),

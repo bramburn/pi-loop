@@ -1,4 +1,4 @@
-import type { DynamicLoopState, LoopEntry, Trigger, WorkflowDefinition } from "./types.js";
+import type { DynamicLoopState, LoopEntry, LoopPriority, Trigger, WorkflowDefinition } from "./types.js";
 import { createWorkflowRun, transitionWorkflowRun } from "./workflow-reducer.js";
 
 export const MAX_LOOP_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -35,6 +35,7 @@ export type LoopReducerEvent =
       taskBacklog?: boolean;
       readOnly?: boolean;
       maxFires?: number;
+      priority?: LoopPriority;
       dynamic?: Partial<DynamicLoopState>;
       workflow?: WorkflowDefinition;
     };
@@ -142,6 +143,7 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
       readOnly: event.payload.readOnly,
       maxFires: event.payload.maxFires,
       fireCount: 0,
+      priority: event.payload.priority,
       dynamic: event.payload.trigger.type === "dynamic" || event.payload.dynamic
         ? {
             goal: event.payload.dynamic?.goal ?? event.payload.prompt,

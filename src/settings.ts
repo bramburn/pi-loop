@@ -19,6 +19,17 @@ export type SortOrder = "id" | "status" | "recent" | "oldest";
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
 export type HiddenAt = "top" | "bottom";
 
+export interface UrgentFlushThresholds {
+  /** Defer-priority age (ms) before force-flush. Default: 24h — defer waits for all higher priority. */
+  defer: number;
+  /** Normal-priority age (ms) before force-flush. Default: 5 minutes. */
+  normal: number;
+  /** Urgent-priority age (ms) before force-flush. Default: 30 seconds. */
+  urgent: number;
+  /** Critical-priority age (ms) before force-flush. Default: 0 (immediate). */
+  critical: number;
+}
+
 export interface PiLoopSettings {
   /** Where loop state is persisted. */
   loopScope: LoopScope;
@@ -38,6 +49,8 @@ export interface PiLoopSettings {
   showAll: boolean;
   /** Threshold for auto-creating a backlog worker loop. */
   taskThreshold: number;
+  /** Priority-based aging thresholds for force-flushing queued notifications. */
+  urgentFlushThresholds: UrgentFlushThresholds;
 }
 
 export const DEFAULT_SETTINGS: PiLoopSettings = {
@@ -50,6 +63,12 @@ export const DEFAULT_SETTINGS: PiLoopSettings = {
   maxVisible: 10,
   showAll: false,
   taskThreshold: 5,
+  urgentFlushThresholds: {
+    defer: 86_400_000,   // 24 hours
+    normal: 300_000,      // 5 minutes
+    urgent: 30_000,      // 30 seconds
+    critical: 0,          // immediate
+  },
 };
 
 const CONFIG_DIR = ".pi";
@@ -65,6 +84,7 @@ const ALLOWED_KEYS = new Set<keyof PiLoopSettings | string>([
   "maxVisible",
   "showAll",
   "taskThreshold",
+  "urgentFlushThresholds",
 ]);
 
 function resolveConfigPath(cwd: string): string {
@@ -110,6 +130,28 @@ function asPositiveInt(value: unknown): number | undefined {
   return undefined;
 }
 
+function asNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isNaN(n) && n >= 0) return n;
+  }
+  return undefined;
+}
+
+function asUrgentFlushThresholds(value: unknown): UrgentFlushThresholds | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const obj = value as Record<string, unknown>;
+  const defer = asNonNegativeInt(obj.defer);
+  const normal = asNonNegativeInt(obj.normal);
+  const urgent = asNonNegativeInt(obj.urgent);
+  const critical = asNonNegativeInt(obj.critical);
+  if (defer === undefined || normal === undefined || urgent === undefined || critical === undefined) {
+    return undefined;
+  }
+  return { defer, normal, urgent, critical };
+}
+
 /**
  * Parse raw JSON into a PiLoopSettings object. Rejects unknown keys
  * (strict schema). Returns defaults for missing or invalid fields.
@@ -142,6 +184,8 @@ export function parseSettings(raw: unknown): PiLoopSettings {
   if (maxVisible !== undefined) next.maxVisible = maxVisible;
   if (showAll !== undefined) next.showAll = showAll;
   if (taskThreshold !== undefined) next.taskThreshold = taskThreshold;
+  const urgentFlushThresholds = asUrgentFlushThresholds(record.urgentFlushThresholds);
+  if (urgentFlushThresholds !== undefined) next.urgentFlushThresholds = urgentFlushThresholds;
   return next;
 }
 

@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { type LoopReducerEvent, type LoopReducerState, reduceLoopState } from "./loop-reducer.js";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
-import type { DynamicLoopState, LoopDeletionTombstone, LoopDeletionTombstoneInput, LoopEntry, LoopStoreData, Trigger, WorkflowDefinition, WorkflowTerminalStatus } from "./types.js";
+import type { DynamicLoopState, LoopDeletionTombstone, LoopDeletionTombstoneInput, LoopEntry, LoopPriority, LoopStoreData, Trigger, WorkflowDefinition, WorkflowTerminalStatus } from "./types.js";
 import { isTerminalWorkflowRun, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure, type WorkflowTransitionInput } from "./workflow-reducer.js";
 
 const LOOPS_DIR = join(homedir(), ".pi", "loops");
@@ -26,7 +26,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     );
   }
 
-  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; dynamic?: Partial<DynamicLoopState>; workflow?: WorkflowDefinition }): LoopEntry {
+  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; priority?: LoopPriority; dynamic?: Partial<DynamicLoopState>; workflow?: WorkflowDefinition }): LoopEntry {
     return this.withLock(() => {
       if (this.entries.size >= MAX_LOOPS) {
         throw new Error(`Maximum of ${MAX_LOOPS} loops reached. Delete some before creating new ones.`);
@@ -50,6 +50,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           taskBacklog: opts.taskBacklog,
           readOnly: opts.readOnly,
           maxFires: opts.maxFires,
+          priority: opts.priority,
           dynamic: opts.dynamic,
           workflow: opts.workflow,
         },

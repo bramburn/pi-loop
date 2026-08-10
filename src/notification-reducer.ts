@@ -1,6 +1,21 @@
-import type { DynamicLoopState, WorkflowRunState } from "./types.js";
+import type { DynamicLoopState, LoopPriority, WorkflowRunState } from "./types.js";
 
 type ReducerSource = "tool" | "command" | "scheduler" | "eventbus" | "monitor" | "session" | "coordinator" | "system";
+
+/** Age in ms before a notification of each priority is force-flushed. */
+export interface UrgentFlushThresholds {
+  defer: number;
+  normal: number;
+  urgent: number;
+  critical: number;
+}
+
+export const DEFAULT_FLUSH_THRESHOLDS: UrgentFlushThresholds = {
+  defer: 86_400_000,   // 24 hours
+  normal: 300_000,      // 5 minutes
+  urgent: 30_000,       // 30 seconds
+  critical: 0,          // immediate
+};
 
 export interface ReducerNotification {
   key: string;
@@ -13,6 +28,10 @@ export interface ReducerNotification {
   autoTask?: boolean;
   taskBacklog?: boolean;
   readOnly?: boolean;
+  fireCount?: number;
+  firstFireAt?: number;
+  lastFireAt?: number;
+  priority?: LoopPriority;
   dynamic?: DynamicLoopState;
   workflow?: WorkflowRunState;
 }
@@ -66,6 +85,14 @@ export type NotificationReducerEvent =
     entityType?: "notification";
     entityId?: string;
     payload: { agentRunning: boolean; hasPendingMessages: boolean };
+  }
+  | {
+    type: "REQUEST_URGENT_FLUSH";
+    at: number;
+    source: ReducerSource;
+    entityType?: "notification";
+    entityId?: string;
+    payload: { thresholds: UrgentFlushThresholds };
   };
 
 export type NotificationReducerEffect =
@@ -99,7 +126,22 @@ export function reduceNotificationState(
 ): NotificationReduceResult {
   if (event.type === "NOTIFICATION_QUEUED") {
     const next = cloneState(state);
-    next.notificationsByKey[event.payload.notification.key] = event.payload.notification;
+    const incoming = event.payload.notification;
+    const existing = next.notificationsByKey[incoming.key];
+    if (existing) {
+      // Coalesce: increment fireCount, preserve firstFireAt, update lastFireAt and message.
+      // Create a new object so we don't mutate the original notification reference.
+      next.notificationsByKey[incoming.key] = {
+        ...existing,
+        fireCount: (existing.fireCount ?? 1) + 1,
+        firstFireAt: existing.firstFireAt ?? existing.timestamp,
+        lastFireAt: incoming.timestamp,
+        message: incoming.message,
+        priority: incoming.priority ?? existing.priority,
+      };
+    } else {
+      next.notificationsByKey[incoming.key] = incoming;
+    }
     return {
       state: next,
       effects: [{ type: "REQUEST_NOTIFICATION_FLUSH", payload: {} }],
@@ -155,6 +197,58 @@ export function reduceNotificationState(
         payload: { notification: nextNotification },
       }],
     };
+  }
+
+  // REQUEST_URGENT_FLUSH: scan all queued notifications and force-deliver any
+  // that have sat in the queue longer than their priority threshold. Defer-priority
+  // notifications are never force-flushed (they wait for explicit flush or age-out).
+  if (event.type === "REQUEST_URGENT_FLUSH") {
+    if (state.agentRunning) return { state, effects: [] };
+
+    const { thresholds } = event.payload;
+    const now = event.at;
+    const queued = Object.values(state.notificationsByKey);
+    const toForceFlush: ReducerNotification[] = [];
+
+    for (const n of queued) {
+      const priority = n.priority ?? "normal";
+      const threshold = thresholds[priority];
+      if (threshold === undefined) continue;
+      if (priority === "defer") continue; // defer never preempts
+      const age = now - n.timestamp;
+      if (age >= threshold) {
+        toForceFlush.push(n);
+      }
+    }
+
+    if (toForceFlush.length === 0) return { state, effects: [] };
+
+    // Sort by priority (ascending: critical → urgent → normal) then timestamp.
+    const PRIORITY_ORDER: Record<LoopPriority, number> = {
+      critical: 0,
+      urgent: 1,
+      normal: 2,
+      defer: 3,
+    };
+    toForceFlush.sort((a, b) => {
+      const pa = PRIORITY_ORDER[a.priority ?? "normal"];
+      const pb = PRIORITY_ORDER[b.priority ?? "normal"];
+      if (pa !== pb) return pa - pb;
+      return a.timestamp - b.timestamp;
+    });
+
+    const next = cloneState(state);
+    const effects: NotificationReducerEffect[] = [];
+    for (const n of toForceFlush) {
+      delete next.notificationsByKey[n.key];
+      effects.push({
+        type: "DELIVER_NOTIFICATION",
+        entityType: "notification",
+        entityId: n.key,
+        payload: { notification: n },
+      });
+    }
+    return { state: next, effects };
   }
 
   return { state, effects: [] };

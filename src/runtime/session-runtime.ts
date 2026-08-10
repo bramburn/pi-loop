@@ -95,6 +95,9 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
         .catch(() => {})
         .then(() => widget.update())
         .catch(() => {});
+      // Dispatch urgent flush every heartbeat tick — checks priority thresholds
+      // and force-delivers any notification that has aged past its threshold.
+      void notificationRuntime.dispatchUrgentFlush().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
   }

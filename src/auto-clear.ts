@@ -30,6 +30,12 @@ export function createAutoClearManager(options: AutoClearOptions) {
       maxVisible: 10,
       showAll: false,
       taskThreshold: 5,
+      urgentFlushThresholds: {
+        defer: 86_400_000,
+        normal: 300_000,
+        urgent: 30_000,
+        critical: 0,
+      },
     };
   }
 

@@ -41,6 +41,7 @@ const KEY_ORDER: SettingKey[] = [
   "maxVisible",
   "showAll",
   "taskThreshold",
+  "urgentFlushThresholds",
 ];
 
 function formatValue(key: SettingKey, value: PiLoopSettings[SettingKey]): string {
@@ -61,6 +62,15 @@ function formatValue(key: SettingKey, value: PiLoopSettings[SettingKey]): string
       return `${value}`;
     case "taskThreshold":
       return `${value}`;
+    case "urgentFlushThresholds": {
+      const t = value as PiLoopSettings["urgentFlushThresholds"];
+      const fmt = (ms: number) =>
+        ms >= 86_400_000 ? `${ms / 86_400_000}d`
+        : ms >= 3_600_000 ? `${ms / 3_600_000}h`
+        : ms >= 60_000 ? `${ms / 60_000}m`
+        : `${ms / 1000}s`;
+      return `defer:${fmt(t.defer)} normal:${fmt(t.normal)} urgent:${fmt(t.urgent)} critical:${fmt(t.critical)}`;
+    }
     default:
       return String(value);
   }
@@ -77,6 +87,7 @@ function settingLabel(key: SettingKey): string {
     maxVisible: "Max visible tasks",
     showAll: "Show all tasks",
     taskThreshold: "Backlog worker threshold",
+    urgentFlushThresholds: "Priority aging thresholds",
   };
   return labels[key];
 }
@@ -117,6 +128,13 @@ function nextValue(key: SettingKey, current: PiLoopSettings[SettingKey]): PiLoop
       const idx = steps.indexOf(current as number);
       return steps[(idx + 1) % steps.length]!;
     }
+    case "urgentFlushThresholds": {
+      // Cycle the defer threshold; keep others
+      const t = current as PiLoopSettings["urgentFlushThresholds"];
+      const deferSteps = [3_600_000, 86_400_000, 604_800_000];
+      const idx = deferSteps.indexOf(t.defer);
+      return { ...t, defer: deferSteps[(idx + 1) % deferSteps.length]! };
+    }
     default:
       return current;
   }
@@ -126,7 +144,7 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
   const { pi, getCwd, load = loadSettings, save = saveSettings } = options;
 
   pi.registerCommand("loop-settings", {
-    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold).",
+    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold, urgentFlushThresholds).",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const ui = ctx.ui;
       let settings: PiLoopSettings;

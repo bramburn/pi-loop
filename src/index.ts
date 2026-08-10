@@ -63,6 +63,8 @@ function debug(...args: unknown[]) {
   if (isSentryInitialized()) logDebug("[pi-loop]", ...args);
 }
 
+const _getFlushThresholds = () => _initialSettings.urgentFlushThresholds;
+
 export default function (pi: ExtensionAPI) {
   // Wrap every tool's execute() with a Sentry-capturing try/catch. Done once
   // here so the tool registrations in src/tools/*.ts don't need per-call
@@ -139,6 +141,7 @@ export default function (pi: ExtensionAPI) {
     hasPendingTasks,
     cleanDoneTasks,
     getHasPendingMessages: () => _latestCtx?.hasPendingMessages() ?? false,
+    getFlushThresholds: _getFlushThresholds,
     debug,
   });
 
@@ -167,6 +170,7 @@ export default function (pi: ExtensionAPI) {
       readOnly: entry.readOnly,
       recurring: entry.recurring,
       autoTask: entry.autoTask,
+      priority: entry.priority,
     });
   }
 
