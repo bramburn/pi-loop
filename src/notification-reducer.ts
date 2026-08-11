@@ -1,21 +1,9 @@
+import { type UrgentFlushThresholds } from "./settings.js";
 import type { DynamicLoopState, LoopPriority, WorkflowRunState } from "./types.js";
 
 type ReducerSource = "tool" | "command" | "scheduler" | "eventbus" | "monitor" | "session" | "coordinator" | "system";
 
-/** Age in ms before a notification of each priority is force-flushed. */
-export interface UrgentFlushThresholds {
-  defer: number;
-  normal: number;
-  urgent: number;
-  critical: number;
-}
-
-export const DEFAULT_FLUSH_THRESHOLDS: UrgentFlushThresholds = {
-  defer: 86_400_000,   // 24 hours
-  normal: 300_000,      // 5 minutes
-  urgent: 30_000,       // 30 seconds
-  critical: 0,          // immediate
-};
+export type { UrgentFlushThresholds };
 
 export interface ReducerNotification {
   key: string;
@@ -183,8 +171,14 @@ export function reduceNotificationState(
 
     const queued = Object.values(state.notificationsByKey)
       .sort((left, right) => left.timestamp - right.timestamp);
-    const nextNotification = queued[0];
-    if (!nextNotification) return { state, effects: [] };
+    if (queued.length === 0) return { state, effects: [] };
+
+    // Defer-priority notifications are shielded from priority inversion:
+    // if any non-defer notification is queued, deliver the oldest of those
+    // rather than a defer. This satisfies the ADR claim that defer "will not
+    // be delivered until all higher-priority notifications are delivered".
+    const nonDefer = queued.filter((n) => (n.priority ?? "normal") !== "defer");
+    const nextNotification = nonDefer[0] ?? queued[0]!;
 
     const next = cloneState(state);
     delete next.notificationsByKey[nextNotification.key];
@@ -224,15 +218,16 @@ export function reduceNotificationState(
     if (toForceFlush.length === 0) return { state, effects: [] };
 
     // Sort by priority (ascending: critical → urgent → normal) then timestamp.
-    const PRIORITY_ORDER: Record<LoopPriority, number> = {
+    // Defer notifications are filtered out above, so the only priorities
+    // present are critical/urgent/normal — the sort key covers all three.
+    const PRIORITY_ORDER: Record<Exclude<LoopPriority, "defer">, number> = {
       critical: 0,
       urgent: 1,
       normal: 2,
-      defer: 3,
     };
     toForceFlush.sort((a, b) => {
-      const pa = PRIORITY_ORDER[a.priority ?? "normal"];
-      const pb = PRIORITY_ORDER[b.priority ?? "normal"];
+      const pa = PRIORITY_ORDER[(a.priority ?? "normal") as Exclude<LoopPriority, "defer">];
+      const pb = PRIORITY_ORDER[(b.priority ?? "normal") as Exclude<LoopPriority, "defer">];
       if (pa !== pb) return pa - pb;
       return a.timestamp - b.timestamp;
     });

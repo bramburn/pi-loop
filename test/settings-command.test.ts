@@ -267,7 +267,7 @@ describe("/loop-settings command", () => {
     expect(saveFn).not.toHaveBeenCalled();
   });
 
-  it("renders all 9 settings in the menu", async () => {
+  it("renders all 10 settings in the menu", async () => {
     const { pi, ui } = setupCommand();
     let observedOptions: string[] | undefined;
     (ui.select as ReturnType<typeof vi.fn>).mockImplementation(async (title: string, options: string[]) => {

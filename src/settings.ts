@@ -19,6 +19,7 @@ export type SortOrder = "id" | "status" | "recent" | "oldest";
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
 export type HiddenAt = "top" | "bottom";
 
+/** Age in ms before a notification of each priority is force-flushed. */
 export interface UrgentFlushThresholds {
   /** Defer-priority age (ms) before force-flush. Default: 24h — defer waits for all higher priority. */
   defer: number;
@@ -29,6 +30,15 @@ export interface UrgentFlushThresholds {
   /** Critical-priority age (ms) before force-flush. Default: 0 (immediate). */
   critical: number;
 }
+
+/** Default thresholds for REQUEST_URGENT_FLUSH. Single source of truth;
+ *  imported by the notification reducer and tests rather than duplicated. */
+export const DEFAULT_FLUSH_THRESHOLDS: UrgentFlushThresholds = {
+  defer: 86_400_000,   // 24 hours
+  normal: 300_000,     // 5 minutes
+  urgent: 30_000,      // 30 seconds
+  critical: 0,         // immediate
+};
 
 export interface PiLoopSettings {
   /** Where loop state is persisted. */

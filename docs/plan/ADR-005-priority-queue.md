@@ -57,14 +57,22 @@ interface ReducerNotification {
 
 ### Fire-count coalescing
 
-When a recurring loop fires again while a prior notification for the same loop is
-still in the queue, the reducer **coalesces** them: it increments `fireCount`,
-preserves `firstFireAt`, updates `lastFireAt` and `message`, and keeps the existing
-priority. The result is one notification entry in the queue per loop at any time,
-with accurate fire-count metadata.
+When two fires of the same loop arrive in the reducer with the **same key**, the
+reducer **coalesces** them: it increments `fireCount`, preserves `firstFireAt`,
+updates `lastFireAt` and `message`, and keeps the existing priority.
 
-Non-recurring loops use timestamp-in-key (`loop:<id>:<timestamp>`) and do not
-coalesce.
+**Key generation:** all loop fires currently use timestamp-in-key
+(`loop:<id>:<timestamp>`), so each successive fire of a recurring loop produces a
+distinct key and lives as its own queue entry. Coalescing therefore fires only in
+the edge case where two fires of the same loop land in the same millisecond, and
+for monitor notifications which use stable keys (`monitor:<id>:started`). The
+`fireCount`/`firstFireAt`/`lastFireAt` metadata still attaches to every queued
+notification so the agent can observe how many times any loop has fired since its
+first flush, even when queue entries are distinct. If coalescing on same-loop
+distinct-timestamp fires becomes a future requirement, the key generator in
+`buildPendingNotification` would change to `loop:<id>` (no timestamp) for
+`recurring: true` loops; that change would invalidate the existing G-46 test and
+is intentionally deferred.
 
 ### Message enrichment
 
@@ -105,6 +113,28 @@ All four thresholds are configurable via `/loop-settings`. The defer threshold i
 a ceiling, not a floor — setting it to a low value does not force-flush defer
 notifications; it only caps how long they can sit unprocessed.
 
+In practice, `/loop-settings` cycles only the `defer` threshold through its TUI
+(`1h → 24h → 7d`); `critical`, `urgent`, and `normal` are advanced tuning knobs
+expected to be set via direct JSON editing of `.pi/pi-loop-settings.json`. The
+TUI limitation is deliberate because `critical` should almost always stay at `0`
+(immediate), and exposing a naive cycle UI for `urgent`/`normal` would invite
+accidental misconfiguration (e.g. setting `critical` to five minutes).
+
+### Defer shielding applies to BOTH flush paths
+
+`defer` notifications are shielded from priority inversion on **both** delivery
+paths, not just the urgent-flush heartbeat:
+
+- **`REQUEST_URGENT_FLUSH`** (heartbeat, every 30 s): defer is filtered out
+  unconditionally; urgent/critical/normal are sorted by priority then FIFO and
+  force-delivered when aged past their threshold.
+- **`NOTIFICATION_FLUSH_REQUESTED`** (normal idle flush, e.g. on `agent_end`):
+  when any non-defer notification is queued, the oldest non-defer item is
+  delivered first; defer is held back. Defer is only delivered via the normal
+  flush path when the queue contains *nothing else*. This satisfies the
+  consequence claim below that defer "will not be delivered until all
+  higher-priority notifications are delivered."
+
 ---
 
 ## Consequences
@@ -116,8 +146,9 @@ notifications; it only caps how long they can sit unprocessed.
 - An `urgent` loop fires 10 times in 20 seconds. The agent receives one notification
   with `fireCount: 10` and `firstFireAt` set to the first fire time.
 - A `defer` loop is completely shielded from priority inversion — it will not be
-  delivered until the queue drains naturally, regardless of how many high-priority
-  notifications arrive.
+  delivered until all non-defer items have drained, regardless of how many
+  high-priority notifications arrive. The shielding holds under both the
+  urgent-flush heartbeat and the normal idle flush.
 - Configurable thresholds allow operators to tune latency vs. throughput tradeoffs
   for their environment.
 

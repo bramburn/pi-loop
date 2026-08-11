@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_FLUSH_THRESHOLDS,
   type NotificationReducerEvent,
   type NotificationReducerState,
   type ReducerNotification,
   reduceNotificationState,
 } from "../src/notification-reducer.js";
+import { DEFAULT_FLUSH_THRESHOLDS } from "../src/settings.js";
 
 function makeNotification(overrides: Partial<ReducerNotification> = {}): ReducerNotification {
   return {
@@ -302,5 +302,57 @@ describe("priority — defer never preempts", () => {
     });
     expect(effects).toHaveLength(1);
     expect((effects[0]!.payload as { notification: ReducerNotification }).notification.loopId).toBe("d");
+  });
+});
+
+describe("priority — normal flush skips defer when higher-priority exist (rec #2)", () => {
+  // NOTIFICATION_FLUSH_REQUESTED must skip a defer-priority notification if
+  // any non-defer notification is in the queue. Otherwise "drains naturally"
+  // would let a defer block higher-priority items at agent_end.
+
+  it("normal flush skips defer when higher-priority notifications exist", () => {
+    const defer = makeNotification({ key: "d", loopId: "d", priority: "defer", timestamp: 100, fireCount: 1, firstFireAt: 100, lastFireAt: 100 });
+    const critical = makeNotification({ key: "c", loopId: "c", priority: "critical", timestamp: 200, fireCount: 1, firstFireAt: 200, lastFireAt: 200 });
+    const urgent = makeNotification({ key: "u", loopId: "u", priority: "urgent", timestamp: 300, fireCount: 1, firstFireAt: 300, lastFireAt: 300 });
+
+    const { state, effects } = apply(makeState([defer, critical, urgent]), {
+      type: "NOTIFICATION_FLUSH_REQUESTED",
+      at: 1000,
+      source: "system",
+      payload: { ignorePendingMessages: true },
+    });
+
+    // Highest non-defer (critical, oldest) wins; defer stays in queue.
+    expect(effects).toHaveLength(1);
+    expect((effects[0]!.payload as { notification: ReducerNotification }).notification.loopId).toBe("c");
+    expect(state.notificationsByKey.d).toBeDefined();
+    expect(state.notificationsByKey.u).toBeDefined();
+    expect(state.notificationsByKey.c).toBeUndefined();
+  });
+
+  it("normal flush delivers defer only when queue contains nothing else", () => {
+    const defer = makeNotification({ key: "d", loopId: "d", priority: "defer", timestamp: 100, fireCount: 1, firstFireAt: 100, lastFireAt: 100 });
+    const { effects } = apply(makeState([defer]), {
+      type: "NOTIFICATION_FLUSH_REQUESTED",
+      at: 200,
+      source: "system",
+      payload: {},
+    });
+    expect(effects).toHaveLength(1);
+    expect((effects[0]!.payload as { notification: ReducerNotification }).notification.loopId).toBe("d");
+  });
+
+  it("normal flush FIFO within non-defer items", () => {
+    const newer = makeNotification({ key: "n", loopId: "n", priority: "normal", timestamp: 200, fireCount: 1, firstFireAt: 200, lastFireAt: 200 });
+    const older = makeNotification({ key: "o", loopId: "o", priority: "urgent", timestamp: 100, fireCount: 1, firstFireAt: 100, lastFireAt: 100 });
+
+    const { effects } = apply(makeState([newer, older]), {
+      type: "NOTIFICATION_FLUSH_REQUESTED",
+      at: 300,
+      source: "system",
+      payload: {},
+    });
+    expect(effects).toHaveLength(1);
+    expect((effects[0]!.payload as { notification: ReducerNotification }).notification.loopId).toBe("o");
   });
 });

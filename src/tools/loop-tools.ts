@@ -245,7 +245,18 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
       maxFires: Type.Optional(Type.Integer({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops.", minimum: 1 })),
-      priority: Type.Optional(Type.String({ description: "Delivery priority: defer, normal, urgent, critical (default: normal). Defer notifications are held until all higher-priority notifications are delivered.", enum: ["defer", "normal", "urgent", "critical"], default: "normal" })),
+      priority: Type.Optional(Type.Union(
+        [
+          Type.Literal("defer"),
+          Type.Literal("normal"),
+          Type.Literal("urgent"),
+          Type.Literal("critical"),
+        ],
+        {
+          description: "Delivery priority: defer, normal, urgent, critical (default: normal). Defer notifications are held until all higher-priority notifications are delivered.",
+          default: "normal",
+        },
+      )),
     }),
     async execute(_toolCallId, params) {
       const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires, priority } = params;
@@ -316,7 +327,7 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
         taskBacklog,
         readOnly,
         maxFires: maxFires ?? (taskBacklog ? 25 : undefined),
-        priority: (priority as LoopPriority) ?? "normal",
+        priority: priority ?? "normal",
         dynamic: trigger.type === "dynamic"
           ? { goal: prompt, iteration: 0 }
           : undefined,
