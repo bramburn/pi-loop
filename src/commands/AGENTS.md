@@ -22,6 +22,8 @@ Slash commands are the agent-facing menu surface, registered via `pi.registerCom
 - The commands share store references via the `getXxx()` getters passed in `LoopCommandOptions` / `TasksCommandOptions` / `MonitorsCommandOptions`. This is the same pattern the tools use.
 - `updateWidget()` is called after every mutation so the status bar reflects the new state.
 - The native tasks command is only registered when `pi-tasks` is absent (after the 6s fallback window). Don't assume it's always present.
+- **`/loop-settings` reads fresh settings on every call** — the handler in `commands/settings-command.ts` calls `load(getCwd())` per invocation (no module-level cache), so changes to `.pi/pi-loop-settings.json` between menu opens are reflected immediately. This is consistent with `getFlushThresholds` in `index.ts` reading fresh settings per heartbeat tick (rec #1: settings staleness fix).
+- **Display-only fields are not cycle-editable** — the `urgentFlushThresholds` setting displays all four sub-values (`defer`, `normal`, `urgent`, `critical` in human-readable form like `defer:24h normal:5m urgent:30s critical:0s`), but only `defer` cycles. Editing `normal` / `urgent` / `critical` requires the JSON file. See ADR-005 for the rationale.
 
 ## When adding a new command
 

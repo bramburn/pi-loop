@@ -3,6 +3,8 @@
 ## Overview
 `pi-loop` is a pi extension providing cron/event-based agent re-wake loops and background process monitoring. Modeled after Claude Code's `/loop`, `CronCreate`, and `MonitorCreate` tools.
 
+In its current v2.1 build, the `Monitor*` tools, `Task*` tools, `/monitors`, `/tasks`, and `workflow-tools` are **unregistered** (per the upstream constraint that this build runs without `pi-monitor`, `pi-tasks`, and `pi-workflow`). The extension entry point still imports them defensively and exports stub callbacks, so re-enabling is a wiring change, not a refactor. The remaining surface — `LoopCreate` / `LoopList` / `LoopUpdate` / `LoopDelete`, `/loop`, `/loop-resume`, `/loop-settings`, the above-editor widget, and the priority-aware notification queue — is fully functional.
+
 ## Stack
 - TypeScript 6.x (strict, ES2022 target, bundler module resolution)
 - `typebox` for tool parameter validation
@@ -14,27 +16,27 @@
 ```
 src/
 ├── index.ts              # Extension entry: 4 loop tools + /loop + /loop-resume + widget + /loop-settings
-├── types.ts              # LoopKind, Trigger spec, LoopEntry, MonitorEntry, LoopConfig
+├── types.ts              # LoopKind, Trigger, LoopEntry (with priority), MonitorEntry, Workflow types
 ├── store.ts              # File-backed CRUD (.pi/loops/loops.json) with file locking
 ├── scheduler.ts          # Timer-based cron scheduler with jitter + 7-day expiry
 ├── trigger-system.ts     # Unified trigger engine: cron timers + pi event subscriptions + hybrid
 ├── monitor-manager.ts    # ChildProcess tracking, output buffering, event emission, stop
 ├── loop-parse.ts         # Human interval → cron expression, next-fire computation, jitter
-├── settings.ts           # v2.0 unified settings (parseSettings, loadSettings, saveSettings, updateSettings)
+├── settings.ts           # v2.0 unified settings + UrgentFlushThresholds (priority queue)
 ├── migration/            # v1 → v2 migration tooling
 │   └── v1-to-v2.ts       # One-shot idempotent migration from tasks-config.json + PI_LOOP_* env vars
 ├── telemetry/            # Sentry integration (opt-in via SENTRY_DSN)
 │   ├── sentry.ts         # initSentry, captureException, addBreadcrumb, log*, scrubPii, wrapToolExecute
 │   └── index.ts          # Public re-exports
 ├── tools/                # Tool registration and tool-visibility gating
-│   ├── loop-tools.ts     # LoopCreate / LoopList / LoopUpdate / LoopDelete / WorkflowTransition
-│   ├── workflow-tools.ts # Workflow state-machine tools
-│   ├── monitor-tools.ts  # MonitorCreate / MonitorList / MonitorStop / MonitorDelete
-│   ├── native-task-tools.ts  # Native task CRUD (pi-tasks fallback)
+│   ├── loop-tools.ts     # LoopCreate (with priority) / LoopList / LoopUpdate / LoopDelete
+│   ├── workflow-tools.ts # Workflow state-machine tools (DISABLED in this build)
+│   ├── monitor-tools.ts  # MonitorCreate / MonitorList / MonitorStop / MonitorDelete (DISABLED)
+│   ├── native-task-tools.ts  # Native task CRUD (DISABLED in this build)
 │   └── tool-visibility.ts # syncLoopTools — gates LLM tool set on loop state
 ├── runtime/              # Long-running behaviour
-│   ├── session-runtime.ts    # Session lifecycle hooks + keybindings + crash recovery
-│   ├── notification-runtime.ts  # Fire / monitor-wake buffering + delivery
+│   ├── session-runtime.ts    # Session lifecycle hooks + keybindings + crash recovery + heartbeat
+│   ├── notification-runtime.ts  # Priority queue + drain-all flush + REQUEST_URGENT_FLUSH dispatch
 │   ├── bindings-store.ts     # Per-session loop bindings (multi-terminal isolation)
 │   ├── monitor-ondone-runtime.ts  # One-shot monitor:done cleanup
 │   ├── native-task-rpc.ts    # Cross-extension task RPC bridge
@@ -47,9 +49,9 @@ src/
 │   └── fruit-loops/node-hygiene.ts # DEPRECATED legacy node cleanup
 ├── commands/             # Slash-command handlers
 │   ├── loop-command.ts    # /loop [interval] [prompt] + /loop-resume [id]
-│   ├── settings-command.ts # /loop-settings (TUI editor for unified settings)
-│   ├── tasks-command.ts    # /tasks (native task viewer + CRUD)
-│   └── monitors-command.ts # /monitors (manage background processes)
+│   ├── settings-command.ts # /loop-settings (TUI editor for unified settings + urgentFlushThresholds)
+│   ├── tasks-command.ts    # /tasks (DISABLED in this build)
+│   └── monitors-command.ts # /monitors (DISABLED in this build)
 ├── ui/                   # TUI components
 │   ├── widget.ts         # LoopWidget — above-editor Component registered via setWidget("loops", ..., {placement:"aboveEditor"})
 │   ├── widget-render.ts  # Pure renderWidgetLines(state, theme, width) — clamp + tree
@@ -60,11 +62,22 @@ src/
 │   └── cross-extension-rpc.ts
 ├── workflow-reducer.ts   # State machine for workflow runs (validate/create/transition)
 ├── reducer-backed-store.ts # Atomic-write persistence pattern (tmp + rename)
-└── docs/plan/            # v2.0 architecture decision records (ADRs)
+├── notification-reducer.ts # NOTIFICATION_QUEUED coalescing + REQUEST_URGENT_FLUSH priority aging
+├── auto-clear.ts         # Auto-clear completed native tasks
+├── api.ts                # Public API surface (cross-extension consumers)
+├── coordinator.ts        # Generic reducer+effects coordinator used by notification runtime
+├── loop-format.ts        # Trigger / workflow / transition formatting helpers
+├── loop-reducer.ts       # LOOP_CREATED + LOOP_PAUSED + LOOP_DELETED + LOOP_DYNAMIC_UPDATED
+├── task-reducer.ts       # Task reducer (native task fallback)
+├── task-store.ts         # TaskStore (file-backed CRUD)
+├── task-types.ts         # TaskEntry / TaskStatus types
+├── notification-coordinator.test.ts (test) # coordinator contract test
+└── docs/plan/            # Architecture decision records (ADRs)
     ├── ADR-001-widget-key-naming.md
     ├── ADR-002-tool-visibility-call-site.md
     ├── ADR-003-settings-file-schema.md
-    └── ADR-004-overlay-keybindings.md
+    ├── ADR-004-overlay-keybindings.md
+    └── ADR-005-priority-queue.md
 ```
 
 ## Conventions (mirror pi-tasks)
@@ -95,6 +108,22 @@ Schema (all fields required, defaults from `DEFAULT_SETTINGS` in `src/settings.t
 | `maxVisible` | integer ≥ 1 | `10` | Max tasks shown in widget |
 | `showAll` | `boolean` | `false` | Show all tasks regardless of `maxVisible` |
 | `taskThreshold` | integer ≥ 1 | `5` | Backlog-worker loop auto-creation threshold |
+| `urgentFlushThresholds` | `UrgentFlushThresholds` | `{defer:86400000, normal:300000, urgent:30000, critical:0}` | Priority-aging thresholds (ADR-005) |
+
+## Priority Queue (ADR-005)
+
+Each `LoopEntry` carries an optional `priority: "defer" | "normal" | "urgent" | "critical"` (default `"normal"`). Loop fires produce `ReducerNotification` entries that carry `fireCount`, `firstFireAt`, `lastFireAt`, and `priority` metadata. Two delivery paths exist:
+
+- **`REQUEST_URGENT_FLUSH`** (heartbeat, every 30s in `session-runtime.ts`): force-delivers by priority (critical → urgent → normal), skipping `defer` and items whose age is below their per-priority threshold.
+- **`NOTIFICATION_FLUSH_REQUESTED`** (normal idle flush, e.g. on `agent_end`): drains the queue end-to-end via the empty-queue guard at the top of `flushPendingNotifications`. Defer-priority items are skipped when any non-defer item is queued, so defer is shielded from priority inversion on both flush paths.
+
+The heartbeat pump in `session-runtime.ts` calls `notificationRuntime.dispatchUrgentFlush()` alongside `pumpLoops()`. Both run on every 30s tick. `urgentFlushThresholds` controls the age at which each priority level is force-delivered. `deliverNotification` does **not** mutate `agentRunning` — that state is owned strictly by the `agent_start` / `agent_end` hooks; setting it during delivery would block the drain loop.
+
+`cleanDoneTasks` emits `tasks:rpc:clean` with a unique requestId when an `autoTask` wake is dropped because `hasPendingTasks() === 0`. This is part of the public RPC contract even when the native task system is disabled (the broadcast is harmless with no listener).
+
+## /loop-settings TUI limitation
+
+The cyclic TUI editor only rotates the `defer` threshold (1h → 24h → 7d). The other three thresholds (`critical`, `urgent`, `normal`) are advanced tuning knobs expected to be set via direct JSON editing of `.pi/pi-loop-settings.json`. This is intentional: `critical` should almost always stay at `0`, and exposing a naive cycle UI for `urgent`/`normal` invites accidental misconfiguration.
 
 ## Loop Persistence Scope
 
