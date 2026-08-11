@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.1.0 (2026-08-11)
+
+### Features
+
+- **Priority-aware aging notification queue (ADR-005).** Each loop can be tagged with a priority (`defer`, `normal`, `urgent`, `critical`) via `LoopCreate priority`. The notification queue now coalesces same-key fires with a `fireCount` (preserving `firstFireAt`, updating `lastFireAt`), and force-flushes by priority on a 30-second heartbeat poll. `defer` is shielded from priority inversion on both the urgent-flush heartbeat and the normal idle flush. `urgentFlushThresholds` is configurable via `.pi/pi-loop-settings.json` (defaults: `critical: 0`, `urgent: 30s`, `normal: 5m`, `defer: 24h`). Delivered messages surface fire-count and priority markers: `[pi-loop] Loop #N fired 7× since 2026-01-20T...` and `[Priority: urgent] ...`. Workflows with `taskBacklog` are unaffected; `autoTask` wake-drop still emits `tasks:rpc:clean`.
+
+### Bug fixes
+
+- **G-46 drain-all regression (commit 8101661/c6ed147).** `flushPendingNotifications` was exiting after the first delivery instead of draining the queue. The `c6ed147` refactor preserved a stale `syncRuntimeState({ agentRunning: true })` call inside `deliverNotification` that blocked the drain-all loop. The G-39 fix in commit `e3d6cf9` updated the test to expect 2 messages from 2 distinct fires but could never deliver them. Fixed by removing the spurious `syncRuntimeState({ agentRunning: true })` (the agent's running state is tracked strictly by `agent_start` / `agent_end` events) and restoring the empty-queue guard at the top of the flush loop. The `keeps one-shot buffered wakes independent` test now also uses drain-all semantics (both one-shot wakes land after a single `agent_end`), removing the contradictory incremental-delivery expectation.
+- **`tasks:rpc:clean` was never emitted.** `cleanDoneTasks` was a no-op after the disabled-tools contract took effect, but the autoTask test (`respondToTaskPing: true`) and the original `tasks:rpc:clean` RPC contract require the broadcast. `cleanDoneTasks` now emits `tasks:rpc:clean` with a unique requestId so downstream listeners (mocked or real pi-tasks) can sweep done tasks.
+
+### Internal
+
+- `src/notification-reducer.ts` — new `REQUEST_URGENT_FLUSH` event + reducer handler with priority threshold table; `NOTIFICATION_QUEUED` coalesces same-key entries with `fireCount` / `firstFireAt` / `lastFireAt` / `priority` metadata; `NOTIFICATION_FLUSH_REQUESTED` filter out defer-priority items when any non-defer item is queued.
+- `src/runtime/notification-runtime.ts` — `dispatchUrgentFlush()` method; `buildPendingNotification` adds fire timing; `deliverNotification` (no longer mutates `agentRunning`); `[Priority: P]` and `[N× since X]` message prefixes.
+- `src/runtime/session-runtime.ts` — heartbeat pump now calls `dispatchUrgentFlush()` alongside `pumpLoops()`.
+- `src/settings.ts` — `UrgentFlushThresholds` interface + strict parser + defaults.
+- `src/commands/settings-command.ts` — `/loop-settings` cycles the `defer` threshold.
+- `src/tools/loop-tools.ts` — `LoopCreate` accepts `priority` enum (default `normal`).
+- `docs/plan/ADR-005-priority-queue.md` — 158 lines.
+
+### Tests
+
+- `test/notification-reducer-priority.test.ts` (new, 17 tests) — fire-count coalescing, 4×4 priority matrix, age force-flush ordering, defer-never-preempts.
+- `test/notification-reducer-priority.test.ts` (extended) — normal flush skips defer when higher-priority exist (3 new tests).
+- `test/session-runtime.test.ts` — heartbeat integration test asserts `dispatchUrgentFlush` fires every 30s.
+- `test/settings-command.test.ts` — settings fixture includes `urgentFlushThresholds`.
+- `test/injection.test.ts` — pre-existing G-46 and autoTask failures resolved; 9 / 9 pass.
+
+### Quality gates
+
+- 888 / 888 vitest pass (was 886 / 888 before this release).
+- Coverage: statements 85.8% / branches 80.38% / functions 87.21% / lines 88.43% — all above floors.
+
 ## 2.0.0 (2026-08-08)
 
 ### BREAKING CHANGES
