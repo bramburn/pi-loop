@@ -134,7 +134,14 @@ export default function (pi: ExtensionAPI) {
   // dependency-injected callbacks. Provide no-ops so loops can fire without
   // any task coordination.
   const hasPendingTasks = async (): Promise<number> => 0;
-  const cleanDoneTasks = async (): Promise<void> => {};
+  // cleanupDoneTasks emits tasks:rpc:clean so that pi-tasks — when present
+  // — can sweep any stale rows whose owners have stopped running. Even with
+  // the native task system disabled, the RPC broadcast is harmless (no
+  // listener) and is part of the public contract that downstream tests and
+  // consumers rely on.
+  const cleanDoneTasks = async (): Promise<void> => {
+    pi.events.emit("tasks:rpc:clean", { requestId: `clean-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  };
   const migrateTaskBacklogLoops = (): number => 0;
   const cleanupTaskBacklogLoops = async (): Promise<number> => 0;
   const adoptTaskBacklogLoops = async (_baseline?: ReadonlyMap<string, number>): Promise<number> => 0;

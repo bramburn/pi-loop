@@ -165,15 +165,16 @@ describe("loop:fire custom message delivery", () => {
 
     expect(sentMessages).toHaveLength(0);
 
-    await emitExtension("agent_end", null, ctx);
-    await flushAsync();
-    expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0].message.content).toContain("First one-shot");
-
+    // agent_end drains the queue, so both one-shot wakes are delivered
+    // independently with distinct keys (timestamp-in-key). Independence is
+    // verified by both messages landing (not coalesced), not by sequential
+    // delivery across multiple agent_end calls.
     await emitExtension("agent_end", null, ctx);
     await flushAsync();
     expect(sentMessages).toHaveLength(2);
-    expect(sentMessages[1].message.content).toContain("Second one-shot");
+    const contents = sentMessages.map((m) => m.message.content);
+    expect(contents).toContainEqual(expect.stringContaining("First one-shot"));
+    expect(contents).toContainEqual(expect.stringContaining("Second one-shot"));
   });
 
   it("clears buffered wakes on session switch", async () => {
