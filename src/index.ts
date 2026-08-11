@@ -11,13 +11,15 @@
  *   MonitorStop   — Stop a running monitor
  *
  * Commands:
- *   /loop    — Schedule or manage re-wake loops, including /loop <goal>
- *   /tasks   — View or manage native fallback tasks when pi-tasks is absent
+ *   /loop       — Schedule or manage re-wake loops, including /loop <goal>
+ *   /loop-edit  — Pick a stored loop from a TUI list and edit its prompt, trigger, priority, recurring, maxFires, readOnly, or autoTask
+ *   /tasks      — View or manage native fallback tasks when pi-tasks is absent
  */
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
+import { registerLoopEditCommand } from "./commands/loop-edit-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { MonitorManager } from "./monitor-manager.js";
 import { createMonitorOnDoneRuntime } from "./runtime/monitor-ondone-runtime.js";
@@ -361,6 +363,15 @@ export default function (pi: ExtensionAPI) {
     maybeBootstrapTaskLoop,
     onDynamicLoopActivated: (entry) => {
       onLoopFire(entry);
+    },
+  });
+
+  registerLoopEditCommand({
+    pi,
+    getStore: () => store,
+    getTriggerSystem: () => triggerSystem,
+    updateWidget: () => {
+      widget.update();
     },
   });
 

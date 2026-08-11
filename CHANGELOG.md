@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+
+### Features
+
+* **edit:** add `/loop-edit` command to pick a stored loop from a TUI list and edit its prompt, trigger, priority, recurring, maxFires, readOnly, or autoTask. Persists via `LoopStore.updateMetadata` (extended to accept the new fields with structural trigger-equality check) and re-arms the trigger only when the trigger actually changed and the loop is active. `LoopPriority` type and optional `LoopEntry.priority` field added. `LoopStore.clearMaxFires` helper added for explicit clearing of the `maxFires` cap.
+
 ## [0.7.1](https://github.com/trvon/pi-loop/compare/pi-loop-v0.7.0...pi-loop-v0.7.1) (2026-08-04)
 
 

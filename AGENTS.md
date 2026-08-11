@@ -55,6 +55,7 @@ src/
 │   └── tool-result.ts                # textResult() helper
 ├── commands/
 │   ├── loop-command.ts               # /loop interactive loop creation
+│   ├── loop-edit-command.ts          # /loop-edit TUI picker + cyclic field editor
 │   └── tasks-command.ts              # /tasks native task viewer/manager
 └── ui/
     └── widget.ts                     # Persistent widget: active loops + monitors + task summary
@@ -122,6 +123,10 @@ Monitor stdout/stderr lines are emitted as `pi.events("monitor:output", { monito
 ## /loop Self-Paced Mode
 
 When no interval is specified in `/loop prompt`, the loop runs in self-paced mode. The agent receives the prompt, acts on it, and uses `LoopCreate`/`LoopUpdate` to schedule the next iteration. The loop fires once, then the agent decides the next interval dynamically (matching Claude Code's dynamic interval behavior).
+
+## /loop-edit Command
+
+`/loop-edit` opens a TUI picker over every active + paused loop. After selection it shows a cyclic field form (same interaction pattern as `/loop-settings`) for the editable fields: `prompt`, `trigger`, `priority`, `recurring`, `maxFires`, `readOnly`, `autoTask`. `Save & Exit` persists via `LoopStore.updateMetadata`. If `trigger` is in `changedFields` AND the loop is active, the trigger is removed and re-added so the new schedule/event source takes effect immediately. Paused loops persist-only — they are not re-armed.
 
 ## Testing
 
