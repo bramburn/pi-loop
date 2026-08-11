@@ -11,6 +11,7 @@ export interface LoopDeletionTombstone {
 export type LoopDeletionTombstoneInput = Omit<LoopDeletionTombstone, "id" | "deletedAt" | "prompt">;
 
 export type LoopStatus = "active" | "paused";
+export type LoopPriority = "defer" | "normal" | "urgent" | "critical";
 
 export interface CronTrigger {
   type: "cron";
@@ -101,6 +102,7 @@ export interface LoopEntry {
   readOnly?: boolean;
   maxFires?: number;
   fireCount?: number;
+  priority?: LoopPriority;
   dynamic?: DynamicLoopState;
   workflow?: WorkflowRunState;
 }

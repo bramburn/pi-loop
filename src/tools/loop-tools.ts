@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatTrigger } from "../loop-format.js";
 import { parseInterval } from "../loop-parse.js";
-import type { LoopEntry, Trigger } from "../types.js";
+import type { LoopEntry, LoopPriority, Trigger } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
 import { displayRows, textResult } from "./tool-result.js";
 import { formatWorkflowSummary } from "./workflow-tools.js";
@@ -16,6 +16,7 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
+    priority?: LoopPriority;
     dynamic?: Partial<NonNullable<LoopEntry["dynamic"]>>;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
@@ -244,9 +245,21 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
       debounceMs: Type.Optional(Type.Number({ description: "Debounce for hybrid triggers (default: 30000)", default: 30000 })),
       readOnly: Type.Optional(Type.Boolean({ description: "Restrict the agent to read-only tools when this loop fires (default: false)", default: false })),
       maxFires: Type.Optional(Type.Integer({ description: "Auto-stop after N fires. Prevents infinite token burn on polling loops.", minimum: 1 })),
+      priority: Type.Optional(Type.Union(
+        [
+          Type.Literal("defer"),
+          Type.Literal("normal"),
+          Type.Literal("urgent"),
+          Type.Literal("critical"),
+        ],
+        {
+          description: "Delivery priority: defer, normal, urgent, critical (default: normal). Defer notifications are held until all higher-priority notifications are delivered.",
+          default: "normal",
+        },
+      )),
     }),
     async execute(_toolCallId, params) {
-      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires } = params;
+      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires, priority } = params;
 
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
@@ -314,6 +327,7 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
         taskBacklog,
         readOnly,
         maxFires: maxFires ?? (taskBacklog ? 25 : undefined),
+        priority: priority ?? "normal",
         dynamic: trigger.type === "dynamic"
           ? { goal: prompt, iteration: 0 }
           : undefined,

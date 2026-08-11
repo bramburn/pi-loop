@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadSettings, type PiLoopSettings } from "./settings.js";
+import { DEFAULT_SETTINGS, loadSettings, type PiLoopSettings } from "./settings.js";
 import type { TaskStore } from "./task-store.js";
 import type { TaskEntry } from "./task-types.js";
 
@@ -20,17 +20,7 @@ export function createAutoClearManager(options: AutoClearOptions) {
   try {
     config = loadSettings(cwd);
   } catch {
-    config = {
-      loopScope: "project",
-      taskScope: "session",
-      debug: false,
-      autoClear: "on_list_complete",
-      sortOrder: "id",
-      hiddenAt: "bottom",
-      maxVisible: 10,
-      showAll: false,
-      taskThreshold: 5,
-    };
+    config = { ...DEFAULT_SETTINGS };
   }
 
   let idleTurnsSinceCompletion = 0;

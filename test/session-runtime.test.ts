@@ -19,6 +19,15 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     fileExists: vi.fn(() => false),
   };
   const triggerSystem = { start: vi.fn(), stop: vi.fn(), add: vi.fn(), remove: vi.fn() };
+  const notificationRuntime = {
+    syncRuntimeState: vi.fn(),
+    queueOrDeliverNotification: vi.fn(async () => {}),
+    queueOrDeliverMonitorStarted: vi.fn(async () => {}),
+    discardMonitorStarted: vi.fn(),
+    flushPendingNotifications: vi.fn(async () => {}),
+    dispatchUrgentFlush: vi.fn(async () => {}),
+    clear: vi.fn(),
+  };
   const options: SessionRuntimeOptions = {
     pi,
     getLoopScope: () => "memory",
@@ -33,14 +42,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     setSessionId: vi.fn(),
     widget: { setUICtx: vi.fn(), update: vi.fn() },
     getLoopSnapshots: vi.fn(() => store.list().map(() => ({ id: "1", status: "active" as const, hasDynamic: false, isTaskBacklog: false, hasWorkflow: false }))),
-    notificationRuntime: {
-      syncRuntimeState: vi.fn(),
-      queueOrDeliverNotification: vi.fn(async () => {}),
-      queueOrDeliverMonitorStarted: vi.fn(async () => {}),
-      discardMonitorStarted: vi.fn(),
-      flushPendingNotifications: vi.fn(async () => {}),
-      clear: vi.fn(),
-    },
+    notificationRuntime,
     flushPendingNotifications: vi.fn(async () => {}),
     migrateTaskBacklogLoops: vi.fn(() => 0),
     cleanupTaskBacklogLoops: vi.fn(async () => 0),
@@ -72,6 +74,7 @@ function setup(overrides: Partial<SessionRuntimeOptions> = {}) {
     ctxForDrive: () => lastCtx,
     bindingsStore,
     triggerSystem,
+    notificationRuntime,
   };
 }
 
@@ -152,6 +155,20 @@ describe("session-runtime heartbeat lifecycle", () => {
     await vi.advanceTimersByTimeAsync(30000);
 
     expect(widget.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches urgent flush on every heartbeat tick (rec #3)", async () => {
+    vi.useFakeTimers();
+    const { drive, notificationRuntime } = setup();
+
+    await drive("turn_start");
+    notificationRuntime.dispatchUrgentFlush.mockClear();
+
+    // Two full heartbeat periods → expect two calls (one per tick).
+    await vi.advanceTimersByTimeAsync(30000);
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(notificationRuntime.dispatchUrgentFlush).toHaveBeenCalledTimes(2);
   });
 
   it("is idempotent — does not start a second interval across turn boundaries", async () => {

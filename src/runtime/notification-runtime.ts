@@ -12,7 +12,7 @@ import {
   type ReducerNotification,
   reduceNotificationState,
 } from "../notification-reducer.js";
-import type { DynamicLoopState, Trigger, WorkflowRunState } from "../types.js";
+import type { DynamicLoopState, LoopPriority, Trigger, WorkflowRunState } from "../types.js";
 import { getWorkflowOutcomeAvailability } from "../workflow-reducer.js";
 
 export interface LoopFireEvent {
@@ -25,6 +25,7 @@ export interface LoopFireEvent {
   persistent?: boolean;
   autoTask?: boolean;
   taskBacklog?: boolean;
+  priority?: LoopPriority;
   dynamic?: DynamicLoopState;
   workflow?: WorkflowRunState;
 }
@@ -32,6 +33,9 @@ export interface LoopFireEvent {
 export interface PendingNotification extends LoopFireEvent {
   key: string;
   message: string;
+  fireCount?: number;
+  firstFireAt?: number;
+  lastFireAt?: number;
 }
 
 export interface MonitorStartedEvent {
@@ -46,6 +50,7 @@ export interface NotificationRuntimeOptions {
   hasPendingTasks: () => Promise<number>;
   cleanDoneTasks: () => Promise<void>;
   getHasPendingMessages: () => boolean;
+  getFlushThresholds: () => { defer: number; normal: number; urgent: number; critical: number };
   debug?: (...args: unknown[]) => void;
 }
 
@@ -55,11 +60,12 @@ export interface NotificationRuntime {
   queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void>;
   discardMonitorStarted(monitorId: string): void;
   flushPendingNotifications(options?: { ignorePendingMessages?: boolean }): Promise<void>;
+  dispatchUrgentFlush(): Promise<void>;
   clear(reason: "session_shutdown" | "session_switch"): void;
 }
 
 export function createNotificationRuntime(options: NotificationRuntimeOptions): NotificationRuntime {
-  const { pi, hasPendingTasks, cleanDoneTasks, getHasPendingMessages, debug } = options;
+  const { pi, hasPendingTasks, cleanDoneTasks, getHasPendingMessages, getFlushThresholds, debug } = options;
 
   let notificationState: NotificationReducerState = {
     notificationsByKey: {},
@@ -188,10 +194,16 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
   }
 
   function buildPendingNotification(data: LoopFireEvent): PendingNotification {
-    const key = data.recurring ? `loop:${data.loopId}` : `loop:${data.loopId}:${data.timestamp}`;
+    // Use timestamp-in-key for ALL fires so each fire of a recurring loop gets a
+    // unique queue entry. fireCount is tracked on the notification itself for
+    // the agent to observe.
+    const key = `loop:${data.loopId}:${data.timestamp}`;
     return {
       ...data,
       key,
+      fireCount: 1,
+      firstFireAt: data.timestamp,
+      lastFireAt: data.timestamp,
       message: buildLoopFireMessage(data),
     };
   }
@@ -221,10 +233,21 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       }
     }
 
+    const fireCount = notification.fireCount ?? 1;
+    const firstFireAt = notification.firstFireAt ?? notification.timestamp;
+    let message = notification.message;
+    if (fireCount > 1) {
+      const firstDate = new Date(firstFireAt).toISOString();
+      message = `[pi-loop] Loop #${notification.loopId} fired ${fireCount}× since ${firstDate}\n\n${message}`;
+    }
+    if (notification.priority && notification.priority !== "normal") {
+      message = `[Priority: ${notification.priority}] ${message}`;
+    }
+
     syncRuntimeState({ agentRunning: true });
     pi.sendMessage({
       customType: "pi-loop",
-      content: notification.message,
+      content: message,
       display: false,
       details: {
         loopId: notification.loopId,
@@ -234,6 +257,10 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
         readOnly: notification.readOnly,
         autoTask: notification.autoTask,
         taskBacklog: notification.taskBacklog,
+        fireCount,
+        firstFireAt,
+        lastFireAt: notification.lastFireAt ?? notification.timestamp,
+        priority: notification.priority,
         dynamic: notification.dynamic,
         workflow: notification.workflow,
         timestamp: notification.timestamp,
@@ -282,6 +309,18 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     await flushPendingNotifications();
   }
 
+  async function dispatchUrgentFlush(): Promise<void> {
+    const thresholds = getFlushThresholds();
+    const results = await notificationCoordinator.dispatch({
+      type: "REQUEST_URGENT_FLUSH",
+      at: Date.now(),
+      source: "system",
+      entityType: "notification",
+      payload: { thresholds },
+    });
+    void results; // all effects are handled by the coordinator's DELIVER_NOTIFICATION handler
+  }
+
   async function queueOrDeliverMonitorStarted(data: MonitorStartedEvent): Promise<void> {
     const notification = buildMonitorStartedNotification(data);
     await notificationCoordinator.dispatch({
@@ -323,6 +362,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     queueOrDeliverMonitorStarted,
     discardMonitorStarted,
     flushPendingNotifications,
+    dispatchUrgentFlush,
     clear,
   };
 }

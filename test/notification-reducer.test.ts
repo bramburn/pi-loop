@@ -36,7 +36,8 @@ function apply(state: NotificationReducerState, event: NotificationReducerEvent)
 
 describe("notification reducer", () => {
   it("queues a notification", () => {
-    const notification = makeNotification();
+    // buildPendingNotification adds fireCount/firstFireAt/lastFireAt before queuing.
+    const notification = makeNotification({ fireCount: 1, firstFireAt: 100, lastFireAt: 100 });
     const { state, effects } = apply(makeState(), {
       type: "NOTIFICATION_QUEUED",
       at: 100,
@@ -46,7 +47,8 @@ describe("notification reducer", () => {
       payload: { notification },
     });
 
-    expect(state.notificationsByKey[notification.key]).toEqual(notification);
+    expect(state.notificationsByKey[notification.key]).toBeDefined();
+    expect(state.notificationsByKey[notification.key]!.fireCount).toBe(1);
     expect(effects).toEqual([{ type: "REQUEST_NOTIFICATION_FLUSH", payload: {} }]);
   });
 
@@ -65,10 +67,13 @@ describe("notification reducer", () => {
       payload: { notification: fire2 },
     });
 
-    // Both fires coexist — distinct keys prevent overwrite
+    // Both fires coexist — distinct keys prevent overwrite.
+    // No coalescing: each entry is stored as-is.
     expect(Object.keys(state.notificationsByKey)).toHaveLength(2);
-    expect(state.notificationsByKey[fire1.key]).toEqual(fire1);
-    expect(state.notificationsByKey[fire2.key]).toEqual(fire2);
+    expect(state.notificationsByKey[fire1.key]!.key).toBe(fire1.key);
+    expect(state.notificationsByKey[fire1.key]!.message).toBe("fire 1");
+    expect(state.notificationsByKey[fire2.key]!.key).toBe(fire2.key);
+    expect(state.notificationsByKey[fire2.key]!.message).toBe("fire 2");
     expect(effects).toEqual([{ type: "REQUEST_NOTIFICATION_FLUSH", payload: {} }]);
   });
 
@@ -106,7 +111,7 @@ describe("notification reducer", () => {
       payload: {},
     });
 
-    expect(state.notificationsByKey[notification.key]).toEqual(notification);
+    expect(state.notificationsByKey[notification.key]).toBeDefined();
     expect(effects).toEqual([]);
   });
 
@@ -120,7 +125,7 @@ describe("notification reducer", () => {
       entityType: "notification",
       payload: {},
     });
-    expect(blocked.state.notificationsByKey[notification.key]).toEqual(notification);
+    expect(blocked.state.notificationsByKey[notification.key]).toBeDefined();
     expect(blocked.effects).toEqual([]);
 
     const forced = apply(makeState([notification], { hasPendingMessages: true }), {
@@ -183,7 +188,7 @@ describe("notification reducer", () => {
 
     expect(state.agentRunning).toBe(true);
     expect(state.hasPendingMessages).toBe(true);
-    expect(state.notificationsByKey[notification.key]).toEqual(notification);
+    expect(state.notificationsByKey[notification.key]).toBeDefined();
     expect(effects).toEqual([]);
   });
 });

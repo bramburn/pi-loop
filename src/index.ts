@@ -55,13 +55,26 @@ function loadInitialSettings(): PiLoopSettings {
   return loadSettings(cwd);
 }
 
-let _initialSettings = loadInitialSettings();
+// _initialSettings is captured once at module load; DEBUG below reads from it
+// once and therefore requires a restart for /loop-settings debug changes to
+// take effect. This is intentional — debug verbosity is a session-level
+// concern, not a per-cycle concern.
+const _initialSettings = loadInitialSettings();
 
 const DEBUG = _initialSettings.debug;
 function debug(...args: unknown[]) {
   if (DEBUG) console.error("[pi-loop]", ...args);
   if (isSentryInitialized()) logDebug("[pi-loop]", ...args);
 }
+
+// urgentFlushThresholds MUST be read fresh on every call. The settings file
+// is small (~300 bytes) and the heartbeat invokes this once per 30s tick;
+// loadSettings already falls back to defaults on error, so disk failures
+// degrade gracefully. Without this, /loop-settings changes mid-session
+// (which writes the new thresholds to disk) would never reach the
+// notification runtime and the heartbeat would keep flushing against the
+// stale thresholds loaded at startup.
+const _getFlushThresholds = () => loadSettings(process.cwd()).urgentFlushThresholds;
 
 export default function (pi: ExtensionAPI) {
   // Wrap every tool's execute() with a Sentry-capturing try/catch. Done once
@@ -139,6 +152,7 @@ export default function (pi: ExtensionAPI) {
     hasPendingTasks,
     cleanDoneTasks,
     getHasPendingMessages: () => _latestCtx?.hasPendingMessages() ?? false,
+    getFlushThresholds: _getFlushThresholds,
     debug,
   });
 
@@ -167,6 +181,7 @@ export default function (pi: ExtensionAPI) {
       readOnly: entry.readOnly,
       recurring: entry.recurring,
       autoTask: entry.autoTask,
+      priority: entry.priority,
     });
   }
 

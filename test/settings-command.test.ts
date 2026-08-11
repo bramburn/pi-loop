@@ -56,6 +56,12 @@ describe("/loop-settings command", () => {
       maxVisible: 10,
       showAll: false,
       taskThreshold: 5,
+      urgentFlushThresholds: {
+        defer: 86_400_000,
+        normal: 300_000,
+        urgent: 30_000,
+        critical: 0,
+      },
     };
     loadFn = vi.fn(() => settings);
     saveFn = vi.fn();
@@ -261,7 +267,7 @@ describe("/loop-settings command", () => {
     expect(saveFn).not.toHaveBeenCalled();
   });
 
-  it("renders all 9 settings in the menu", async () => {
+  it("renders all 10 settings in the menu", async () => {
     const { pi, ui } = setupCommand();
     let observedOptions: string[] | undefined;
     (ui.select as ReturnType<typeof vi.fn>).mockImplementation(async (title: string, options: string[]) => {
@@ -271,7 +277,7 @@ describe("/loop-settings command", () => {
     });
     await pi.handler!("", { ui });
     expect(observedOptions).toBeDefined();
-    expect(observedOptions!.length).toBe(10); // 9 settings + < Back
+    expect(observedOptions!.length).toBe(11); // 10 settings + < Back
     expect(observedOptions!).toContain("Loop storage: project");
     expect(observedOptions!).toContain("Task storage: session");
     expect(observedOptions!).toContain("Debug logging: false");
