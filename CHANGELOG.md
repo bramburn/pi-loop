@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.1.1 (2026-08-11)
+
+### Bug fixes
+
+- **G-46 drain-all regression (commit 8101661/c6ed147).** `flushPendingNotifications` was exiting after the first delivery instead of draining the queue. The `c6ed147` refactor preserved a stale `syncRuntimeState({ agentRunning: true })` call inside `deliverNotification` that blocked the drain-all loop. The G-39 fix in commit `e3d6cf9` updated the test to expect 2 messages from 2 distinct fires but could never deliver them. Fixed by removing the spurious `syncRuntimeState({ agentRunning: true })` (the agent's running state is tracked strictly by `agent_start` / `agent_end` events) and restoring the empty-queue guard at the top of the flush loop. The `keeps one-shot buffered wakes independent` test now also uses drain-all semantics (both one-shot wakes land after a single `agent_end`), removing the contradictory incremental-delivery expectation.
+- **`tasks:rpc:clean` was never emitted.** `cleanDoneTasks` was a no-op after the disabled-tools contract took effect, but the autoTask test (`respondToTaskPing: true`) and the original `tasks:rpc:clean` RPC contract require the broadcast. `cleanDoneTasks` now emits `tasks:rpc:clean` with a unique requestId so downstream listeners (mocked or real pi-tasks) can sweep done tasks.
+
+### Internal
+
+- `package.json` — `files` field added (was previously absent, defaulting to `npm publish` including the entire cwd; this caused the published 2.1.0 to accidentally include `wt/` (27 MB of worktrees) at 18.5 MB unpacked). New `files` is `["dist", "src", "docs", "userflow", "README.md", "CHANGELOG.md", "LICENSE"]` — 1.6 MB unpacked, matching the prior published 2.0.0 size.
+
+### Tests
+
+- `test/injection.test.ts` — pre-existing G-46 and autoTask failures now pass (9 / 9).
+
+### Quality gates
+
+- 888 / 888 vitest pass (was 886 / 888 with 2 pre-existing failures before 2.1.0).
+- Coverage: statements 85.8% / branches 80.38% / functions 87.21% / lines 88.43% — all above floors.
+
 ## 2.1.0 (2026-08-11)
 
 ### Features
