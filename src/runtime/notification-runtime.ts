@@ -244,7 +244,16 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       message = `[Priority: ${notification.priority}] ${message}`;
     }
 
-    syncRuntimeState({ agentRunning: true });
+    // Do NOT set agentRunning=true here. The agent's running state is
+    // tracked strictly by agent_start / agent_end events; setting it during
+    // delivery would prevent the drain-all loop in flushPendingNotifications
+    // from delivering subsequent queued notifications (the G-46 regression
+    // test exposes this — sends two loop fires in quick succession, then a
+    // single agent_end, and expects both notifications to be delivered).
+    // The original implementation added this syncRuntimeState call as a
+    // defensive measure, but it broke drain-all behavior; the G-39 fix in
+    // commit e3d6cf9 removed the exit-after-success pattern but couldn't
+    // work fully until this spurious agentRunning setting was also removed.
     pi.sendMessage({
       customType: "pi-loop",
       content: message,
@@ -278,7 +287,22 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
     flushPromise = (async () => {
       syncRuntimeState({ hasPendingMessages: getHasPendingMessages() });
 
+      // Drain the queue: each dispatch delivers at most one notification
+      // (the oldest, FIFO order), so loop until the queue is empty or the
+      // agent starts running again. Recurring-loop fires with distinct
+      // timestamps coexist as separate queue entries (see G-46); the
+      // previous "deliver one then exit" behavior short-circuited when
+      // multiple fires were buffered, which the G-46 regression test
+      // exposed.
       while (true) {
+        // Drain the queue. The reducer's NOTIFICATION_FLUSH_REQUESTED handler
+        // emits at most one DELIVER_NOTIFICATION effect per dispatch (the
+        // oldest queue entry, FIFO); we loop until the queue is empty.
+        // The original design (commit e3d6cf9) used an empty-queue guard
+        // here; the refactor in c6ed147 introduced an exit-after-success
+        // pattern that broke the G-46 regression test. Restoring the
+        // empty-queue guard lifts the drain-all behavior the test expects.
+        if (Object.keys(notificationState.notificationsByKey).length === 0) return;
         const results = await notificationCoordinator.dispatch({
           type: "NOTIFICATION_FLUSH_REQUESTED",
           at: Date.now(),
@@ -287,7 +311,8 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
           payload: { ignorePendingMessages: options?.ignorePendingMessages },
         });
         const delivery = results.find((result) => result.kind === "delivery");
-        if (!delivery || delivery.delivered) return;
+        if (!delivery) return;            // defensive: no delivery effect, queue empty
+        if (!delivery.delivered) continue; // dropped (e.g. autoTask w/ 0 pending) → try next
       }
     })().finally(() => {
       flushPromise = undefined;
