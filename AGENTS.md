@@ -49,6 +49,7 @@ src/
 │   └── fruit-loops/node-hygiene.ts # DEPRECATED legacy node cleanup
 ├── commands/             # Slash-command handlers
 │   ├── loop-command.ts    # /loop [interval] [prompt] + /loop-resume [id]
+│   ├── loop-edit-command.ts # /loop-edit TUI picker + cyclic field editor for stored loops
 │   ├── settings-command.ts # /loop-settings (TUI editor for unified settings + urgentFlushThresholds)
 │   ├── tasks-command.ts    # /tasks (DISABLED in this build)
 │   └── monitors-command.ts # /monitors (DISABLED in this build)
@@ -195,6 +196,10 @@ When `@tintinweb/pi-tasks` is present, `LoopCreate` with `autoTask: true` fires 
 
 ## /loop Self-Paced Mode
 When no interval is specified in `/loop prompt`, the loop runs in self-paced mode. The agent receives the prompt, acts on it, and uses `LoopCreate`/`LoopUpdate` to schedule the next iteration. The loop fires once, then the agent decides the next interval dynamically (matching Claude Code's dynamic interval behavior).
+
+## /loop-edit Command
+
+`/loop-edit` opens a TUI picker over every active + paused loop. After selection it shows a cyclic field form (same interaction pattern as `/loop-settings`) for the editable fields: `prompt`, `trigger`, `priority`, `recurring`, `maxFires`, `readOnly`, `autoTask`. `Save & Exit` persists via `LoopStore.updateMetadata` (extended to accept all editable fields, with structural `triggerEquals` to avoid spurious re-arms). If `trigger` is in `changedFields` AND the loop is active, the trigger is removed and re-added so the new schedule/event source takes effect immediately. Paused loops persist-only — they are not re-armed. `maxFires` clearing uses `LoopStore.clearMaxFires` (TS erases `undefined` keys in `updateMetadata`).
 
 ## Testing
 - `vitest` with `describe`/`it` blocks
