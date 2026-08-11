@@ -53,6 +53,7 @@ The ticker is owned by the widget so `dispose()` can clean it up on session shut
 3. Add the state to the `snapshotState()` method in `widget.ts`.
 4. Verify the width-safety net still holds at widths 50, 80, 120 with pathological counts.
 5. Add a unit test in `test/widget.test.ts` covering the new state.
+6. **Priority badge is parked in the inline code review** — `LoopList` and the widget do not currently surface the loop's `priority` field. When this is added, the badge should match the priority: `critical` → `theme.fg("warning", "🔴 critical")`, `urgent` → `theme.fg("accent", "🟡 urgent")`, `defer` → `theme.fg("dim", "⏸ defer")`, default `normal` → no badge.
 
 ## When adding a new overlay
 
@@ -70,3 +71,4 @@ The ticker is owned by the widget so `dispose()` can clean it up on session shut
 - `docs/plan/ADR-001-widget-key-naming.md` — widget key decision
 - `docs/plan/ADR-002-tool-visibility-call-site.md` — tool gating decision
 - `docs/plan/ADR-004-overlay-keybindings.md` — overlay keybinding decision
+- `docs/plan/ADR-005-priority-queue.md` — priority queue decision (drives future widget priority badge work)
