@@ -207,3 +207,49 @@ Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it,
 **Env vars (full list in `.env.example`):** `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG`, `SENTRY_CAPTURE_LOGS`.
 
 **Out of scope:** source-map upload via auth tokens, server-side PII rules (rely on Sentry's defaults), CI-side secret wiring (no production deploy of this package).
+
+## Publishing to npm
+
+The repo has a CI release workflow at `.github/workflows/release.yml` that auto-publishes to npm on every `v*.*.*` tag push. **Do not run `npm publish` locally** — it conflicts with the CI workflow (403 "cannot publish over the previously published versions").
+
+### Release flow
+
+1. **Bump version** in `package.json` (semver: `major.minor.patch`).
+2. **Update `CHANGELOG.md`** with a new entry above the current top entry. Reference the PRs that landed since the last release.
+3. **Commit on a release branch** off `master` (e.g. `release/2.1.1`) with a descriptive message.
+4. **Push the branch** and **open a PR** against `master`.
+5. **Merge the PR** with `gh pr merge <N> --merge --delete-branch` (the `--delete-branch` flag cleans up the remote branch).
+6. **Tag the merged commit** on master: `git tag -a v<version> -m "v<version>: <summary>"` and `git push origin v<version>`.
+7. **CI takes over**: the workflow runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, then `npm publish --provenance --access public`. It does NOT require an OTP because the CI runner has `NPM_TOKEN` configured as a secret.
+8. **Verify**: `npm view @bramburn/pi-loop` shows the new version as `latest`.
+
+### Package contents — `package.json` `files` whitelist
+
+The package MUST declare a `files` whitelist in `package.json`. Without it, `npm publish` includes the entire cwd (excluding `.gitignore`/`.npmignore` entries, but those do not exclude the `wt/` worktree directory by default). One accidental publish shipped 18.5 MB of `wt/` content when the intended payload was ~1.6 MB.
+
+The current whitelist is:
+```json
+{
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "userflow",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}
+```
+
+`src/` is included because `pi.extensions` points to `./src/index.ts` (TypeScript source is loaded directly by the pi runtime). `dist/` is included for any consumer that prefers the compiled output. `wt/`, `test/`, `node_modules/`, `.github/`, `coverage/` are all excluded.
+
+### Local sanity check before tagging
+
+`npm run lint && npm run typecheck && npm test && npm run build` mirrors the CI pipeline. The full test suite (`npm run test:all`) includes `injection.test.ts` and `harness-state-steering.test.ts` which `npm test` excludes — run the full suite before tagging to catch integration regressions. Verify `npm pack --dry-run` shows the expected file count (currently ~228) and size (~1.6 MB unpacked) before pushing the tag.
+
+### What NOT to do
+
+- **Do not run `npm publish` locally.** It will read the OTP from the agent's authenticator and conflict with CI's auto-publish.
+- **Do not push a tag without first merging the release commit to master.** CI picks up the tag and the branch tip, and a tag on a non-merged commit leads to a published version that doesn't match what's in `master`.
+- **Do not skip the `files` whitelist.** Without it, `wt/` (27 MB of worktrees) ends up in the published tarball.
