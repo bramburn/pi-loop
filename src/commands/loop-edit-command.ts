@@ -157,7 +157,7 @@ async function editMaxFires(
   const trimmed = raw.trim();
   if (trimmed === "") return null;
   const n = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(n) || n < 1) {
+  if (!Number.isFinite(n) || n < 1 || String(n) !== trimmed) {
     ui.notify("maxFires must be a positive integer.", "error");
     return undefined;
   }
