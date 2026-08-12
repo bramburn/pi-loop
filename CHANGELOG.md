@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.1 (2026-08-12)
+
+
+### Bug Fixes
+
+* **edit:** integrate the Edit action into the `/loop` View loops per-loop actions menu, replacing the standalone `/loop-edit` command. The per-loop menu now shows `Edit`, `- Pause` (or `* Resume`), `x Delete`, and `< Back` together, so the edit workflow lives next to Pause/Resume/Delete rather than behind a separate command. The shared edit logic is exported as `editLoopInteractive` and `pickLoopForEdit` from `src/commands/loop-edit-command.ts` and consumed by `loop-command.ts`. The 2.2.0 `/loop-edit` command is removed.
+
 ## 2.2.0 (2026-08-12)
 
 
