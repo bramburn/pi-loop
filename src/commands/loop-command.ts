@@ -6,10 +6,11 @@ import type {
 import { formatTrigger } from "../loop-format.js";
 import { isValidCronExpression, parseInterval } from "../loop-parse.js";
 import type { BindingsStore } from "../runtime/bindings-store.js";
-import type { DynamicLoopState, LoopEntry, Trigger } from "../types.js";
+import type { DynamicLoopState, LoopEntry, LoopPriority, Trigger } from "../types.js";
 import { isTerminalWorkflowRun } from "../workflow-reducer.js";
+import { type LoopStoreLike as EditLoopStoreLike, type TriggerSystemLike as EditTriggerSystemLike, editLoopInteractive } from "./loop-edit-command.js";
 
-interface LoopStoreLike {
+interface LoopStoreLike extends EditLoopStoreLike {
   list(): LoopEntry[];
   get(id: string): LoopEntry | undefined;
   create(trigger: Trigger, prompt: string, options: {
@@ -18,6 +19,7 @@ interface LoopStoreLike {
     taskBacklog?: boolean;
     readOnly?: boolean;
     maxFires?: number;
+    priority?: LoopPriority;
     dynamic?: Partial<DynamicLoopState>;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
@@ -170,9 +172,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (match?.[1]) {
       const entry = getStore().get(match[1]);
       if (entry) {
-        const actions = ["x Delete"];
-        if (entry.status === "active") actions.unshift("- Pause");
-        else if (entry.status === "paused" && !isTerminalWorkflowRun(entry.workflow)) actions.unshift("* Resume");
+        const actions = ["Edit", "x Delete"];
+        if (entry.status === "active") actions.splice(1, 0, "- Pause");
+        else if (entry.status === "paused" && !isTerminalWorkflowRun(entry.workflow)) actions.splice(1, 0, "* Resume");
         actions.push("< Back");
 
         const action = await ui.select(
@@ -180,7 +182,15 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           actions,
         );
 
-        if (action === "x Delete") {
+        if (action === "Edit") {
+          await editLoopInteractive(
+            ui,
+            getStore() as EditLoopStoreLike,
+            getTriggerSystem() as EditTriggerSystemLike,
+            entry,
+            updateWidget,
+          );
+        } else if (action === "x Delete") {
           if (entry.workflow?.activeTaskId) {
             ui.notify(`Workflow #${entry.id} has active task #${entry.workflow.activeTaskId}; use LoopDelete with its claimId to cancel safely`, "warning");
             return viewLoops(ui);

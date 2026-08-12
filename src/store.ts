@@ -185,9 +185,9 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
   /**
    * Clear the optional maxFires cap on a loop. Returns true if the field was
    * previously set (and has now been removed); false if it was already unset
-   * or the loop is missing. Used by the /loop-edit command when the user
-   * explicitly empties the maxFires input — `updateMetadata` cannot signal
-   * "set the field to undefined" because TS erases the key.
+   * or the loop is missing. Used by the Edit action in the /loop View loops
+   * menu when the user explicitly empties the maxFires input — `updateMetadata`
+   * cannot signal "set the field to undefined" because TS erases the key.
    */
   clearMaxFires(id: string): boolean {
     return this.withLock(() => {

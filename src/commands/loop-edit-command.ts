@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { formatTrigger } from "../loop-format.js";
 import { isValidCronExpression, parseInterval } from "../loop-parse.js";
 import { triggerEquals } from "../store.js";
@@ -6,7 +6,7 @@ import type { LoopEntry, LoopPriority, Trigger } from "../types.js";
 
 const PRIORITY_OPTIONS: LoopPriority[] = ["defer", "normal", "urgent", "critical"];
 
-interface LoopStoreLike {
+export interface LoopStoreLike {
   list(): LoopEntry[];
   get(id: string): LoopEntry | undefined;
   updateMetadata(id: string, fields: {
@@ -22,16 +22,9 @@ interface LoopStoreLike {
   clearMaxFires(id: string): boolean;
 }
 
-interface TriggerSystemLike {
+export interface TriggerSystemLike {
   add(entry: LoopEntry): void;
   remove(id: string): void;
-}
-
-export interface LoopEditCommandOptions {
-  pi: ExtensionAPI;
-  getStore: () => LoopStoreLike;
-  getTriggerSystem: () => TriggerSystemLike;
-  updateWidget: () => void;
 }
 
 interface EditableDraft {
@@ -120,7 +113,7 @@ function parseTriggerInput(raw: string): Trigger | null {
   }
 }
 
-async function editTrigger(
+async function editTriggerField(
   ui: ExtensionCommandContext["ui"],
   current: Trigger,
 ): Promise<Trigger | undefined> {
@@ -138,7 +131,7 @@ async function editTrigger(
   return parsed;
 }
 
-async function editPriority(
+async function editPriorityField(
   ui: ExtensionCommandContext["ui"],
   current: LoopPriority,
 ): Promise<LoopPriority | undefined> {
@@ -150,7 +143,7 @@ async function editPriority(
   return PRIORITY_OPTIONS[idx];
 }
 
-async function editMaxFires(
+async function editMaxFiresField(
   ui: ExtensionCommandContext["ui"],
   current: number | undefined,
 ): Promise<number | undefined | null> {
@@ -167,13 +160,23 @@ async function editMaxFires(
   return n;
 }
 
-async function pickLoop(
+/**
+ * Show a TUI picker over active + paused loops. Returns the chosen entry, or
+ * undefined if the user backed out or there are no loops.
+ *
+ * Exported so /loop's per-loop actions menu (or any future caller) can share
+ * the same picker UI. The actions for the chosen loop (Edit, Pause, Resume,
+ * Delete) are the per-loop caller's responsibility.
+ */
+export async function pickLoopForEdit(
   ui: ExtensionCommandContext["ui"],
   store: LoopStoreLike,
+  title = "Edit loop",
+  emptyTitle = "No editable loops",
 ): Promise<LoopEntry | undefined> {
   const all = store.list().filter((l) => l.status === "active" || l.status === "paused");
   if (all.length === 0) {
-    await ui.select("No editable loops", ["< Back"]);
+    await ui.select(emptyTitle, ["< Back"]);
     return undefined;
   }
   const choices = all.map((l) => {
@@ -181,103 +184,106 @@ async function pickLoop(
     return `${icon} #${l.id} [${l.status}] ${truncate(l.prompt, 50)} (${describeTrigger(l.trigger)})`;
   });
   choices.push("< Back");
-  const choice = await ui.select("Edit loop", choices);
+  const choice = await ui.select(title, choices);
   if (!choice || choice === "< Back") return undefined;
   const match = choice.match(/#(\d+)/);
   if (!match?.[1]) return undefined;
   return store.get(match[1]);
 }
 
-export function registerLoopEditCommand(options: LoopEditCommandOptions): void {
-  const { pi, getStore, getTriggerSystem, updateWidget } = options;
+/**
+ * Run the cyclic edit form for an already-selected loop entry. Persists via
+ * LoopStore.updateMetadata (and LoopStore.clearMaxFires when the user clears
+ * maxFires) and re-arms the trigger only when the trigger actually changed
+ * AND the loop is active. Paused loops persist only.
+ *
+ * Exported so /loop's View loops menu can call this for the "Edit" action,
+ * keeping the edit flow in the same screen as Pause/Resume/Delete.
+ */
+export async function editLoopInteractive(
+  ui: ExtensionCommandContext["ui"],
+  store: LoopStoreLike,
+  triggerSystem: TriggerSystemLike,
+  entry: LoopEntry,
+  onAfterSave?: () => void,
+): Promise<void> {
+  const draft: EditableDraft = draftFromEntry(entry);
 
-  pi.registerCommand("loop-edit", {
-    description: "Pick a loop from a TUI list and edit its prompt, trigger, priority, recurring, maxFires, readOnly, or autoTask. Persists via LoopStore.updateMetadata and re-arms the trigger if needed.",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const ui = ctx.ui;
+  while (true) {
+    const choices = [
+      `prompt: ${truncate(draft.prompt, 40)}`,
+      `trigger: ${truncate(describeTrigger(draft.trigger), 40)}`,
+      `priority: ${draft.priority}`,
+      `recurring: ${draft.recurring}`,
+      `maxFires: ${draft.maxFires ?? "(none)"}`,
+      `readOnly: ${draft.readOnly}`,
+      `autoTask: ${draft.autoTask}`,
+      "Save & Exit",
+      "< Cancel",
+    ];
 
-      const entry = await pickLoop(ui, getStore());
-      if (!entry) return;
+    const choice = await ui.select(`Edit #${entry.id}\n${summarizeDraft(draft)}`, choices);
+    if (!choice || choice === "< Cancel") {
+      ui.notify("Edit cancelled", "info");
+      return;
+    }
+    if (choice === "Save & Exit") break;
 
-      const draft: EditableDraft = draftFromEntry(entry);
+    if (choice.startsWith("prompt: ")) {
+      const next = await ui.input(`Prompt (current: ${truncate(draft.prompt, 80)})`);
+      if (next?.trim()) draft.prompt = next.trim();
+    } else if (choice.startsWith("trigger: ")) {
+      const next = await editTriggerField(ui, draft.trigger);
+      if (next) draft.trigger = next;
+    } else if (choice.startsWith("priority: ")) {
+      const next = await editPriorityField(ui, draft.priority);
+      if (next) draft.priority = next;
+    } else if (choice.startsWith("recurring: ")) {
+      draft.recurring = !draft.recurring;
+    } else if (choice.startsWith("maxFires: ")) {
+      const next = await editMaxFiresField(ui, draft.maxFires);
+      if (next === null) draft.maxFires = undefined;
+      else if (next !== undefined) draft.maxFires = next;
+    } else if (choice.startsWith("readOnly: ")) {
+      draft.readOnly = !draft.readOnly;
+    } else if (choice.startsWith("autoTask: ")) {
+      draft.autoTask = !draft.autoTask;
+    }
+  }
 
-      while (true) {
-        const choices = [
-          `prompt: ${truncate(draft.prompt, 40)}`,
-          `trigger: ${truncate(describeTrigger(draft.trigger), 40)}`,
-          `priority: ${draft.priority}`,
-          `recurring: ${draft.recurring}`,
-          `maxFires: ${draft.maxFires ?? "(none)"}`,
-          `readOnly: ${draft.readOnly}`,
-          `autoTask: ${draft.autoTask}`,
-          "Save & Exit",
-          "< Cancel",
-        ];
+  const fields = entryFromDraft(draft, entry);
 
-        const choice = await ui.select(`Edit #${entry.id}\n${summarizeDraft(draft)}`, choices);
-        if (!choice || choice === "< Cancel") {
-          ui.notify("Edit cancelled", "info");
-          return;
-        }
-        if (choice === "Save & Exit") break;
+  const result = store.updateMetadata(entry.id, fields);
+  if (!result.entry) {
+    ui.notify(`Loop #${entry.id} not found`, "error");
+    return;
+  }
 
-        if (choice.startsWith("prompt: ")) {
-          const next = await ui.input(`Prompt (current: ${truncate(draft.prompt, 80)})`);
-          if (next?.trim()) draft.prompt = next.trim();
-        } else if (choice.startsWith("trigger: ")) {
-          const next = await editTrigger(ui, draft.trigger);
-          if (next) draft.trigger = next;
-        } else if (choice.startsWith("priority: ")) {
-          const next = await editPriority(ui, draft.priority);
-          if (next) draft.priority = next;
-        } else if (choice.startsWith("recurring: ")) {
-          draft.recurring = !draft.recurring;
-        } else if (choice.startsWith("maxFires: ")) {
-          const next = await editMaxFires(ui, draft.maxFires);
-          if (next === null) draft.maxFires = undefined;
-          else if (next !== undefined) draft.maxFires = next;
-        } else if (choice.startsWith("readOnly: ")) {
-          draft.readOnly = !draft.readOnly;
-        } else if (choice.startsWith("autoTask: ")) {
-          draft.autoTask = !draft.autoTask;
-        }
-      }
+  const wasMaxFiresCleared = draft.maxFires === undefined && entry.maxFires !== undefined;
+  if (wasMaxFiresCleared) {
+    const cleared = store.clearMaxFires(entry.id);
+    if (cleared && !result.changedFields.includes("maxFires")) {
+      result.changedFields.push("maxFires");
+    }
+  }
 
-      const fields = entryFromDraft(draft, entry);
-
-      const result = getStore().updateMetadata(entry.id, fields);
-      if (!result.entry) {
-        ui.notify(`Loop #${entry.id} not found`, "error");
-        return;
-      }
-
-      const wasMaxFiresCleared = draft.maxFires === undefined && entry.maxFires !== undefined;
-      if (wasMaxFiresCleared) {
-        const cleared = getStore().clearMaxFires(entry.id);
-        if (cleared && !result.changedFields.includes("maxFires")) {
-          result.changedFields.push("maxFires");
-        }
-      }
-
-      const triggerChanged = result.changedFields.includes("trigger");
-      if (triggerChanged && result.entry.status === "active") {
-        try {
-          getTriggerSystem().remove(result.entry.id);
-          getTriggerSystem().add(result.entry);
-        } catch {
-          ui.notify(
-            `Loop #${result.entry.id} saved, but the new trigger could not be activated. ` +
-              `Pause and resume the loop to retry.`,
-            "error",
-          );
-        }
-      }
-
-      updateWidget();
+  const triggerChanged = result.changedFields.includes("trigger");
+  if (triggerChanged && result.entry.status === "active") {
+    try {
+      triggerSystem.remove(result.entry.id);
+      triggerSystem.add(result.entry);
+    } catch {
       ui.notify(
-        `Loop #${result.entry.id} updated (${result.changedFields.join(", ") || "no changes"})`,
-        "info",
+        `Loop #${result.entry.id} saved, but the new trigger could not be activated. ` +
+          `Pause and resume the loop to retry.`,
+        "error",
       );
-    },
-  });
+    }
+  }
+
+  onAfterSave?.();
+  ui.notify(
+    `Loop #${result.entry.id} updated (${result.changedFields.join(", ") || "no changes"})`,
+    "info",
+  );
 }

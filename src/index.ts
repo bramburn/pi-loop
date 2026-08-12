@@ -7,9 +7,8 @@
  *   LoopList      — List all active loops with status and next-fire times
  *   LoopDelete    — Delete or pause a loop by ID
  *
-* Commands (registered):
+ * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]
- *   /loop-edit    — Pick a stored loop from a TUI list and edit its prompt, trigger, priority, recurring, maxFires, readOnly, or autoTask
  *   /loop-resume  — Re-arm a stored loop by ID (or open the picker with no args)
  *
  * DISABLED (per upstream constraint): MonitorXxx, TaskXxx, /monitors, /tasks,
@@ -20,7 +19,6 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
-import { registerLoopEditCommand } from "./commands/loop-edit-command.js";
 import { registerSettingsCommand } from "./commands/settings-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { migrateV1ToV2 } from "./migration/v1-to-v2.js";
@@ -286,14 +284,5 @@ export default function (pi: ExtensionAPI) {
   registerSettingsCommand({
     pi,
     getCwd: () => process.cwd(),
-  });
-
-  registerLoopEditCommand({
-    pi,
-    getStore: () => store,
-    getTriggerSystem: () => triggerSystem,
-    updateWidget: () => {
-      widget.update();
-    },
   });
 }

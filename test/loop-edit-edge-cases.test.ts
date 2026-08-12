@@ -1,25 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { registerLoopEditCommand } from "../src/commands/loop-edit-command.js";
+import {
+  editLoopInteractive,
+  type LoopStoreLike,
+  pickLoopForEdit,
+  type TriggerSystemLike,
+} from "../src/commands/loop-edit-command.js";
 import { LoopStore } from "../src/store.js";
-import { createMockPi } from "./helpers/mock-pi.js";
 
-function setup() {
-  const { pi, commandMap } = createMockPi();
+interface Setup {
+  store: LoopStore;
+  triggerSystem: { add: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
+  updateWidget: ReturnType<typeof vi.fn>;
+}
+
+function setup(): Setup {
   const store = new LoopStore();
   const triggerSystem = { add: vi.fn(), remove: vi.fn() };
   const updateWidget = vi.fn();
-  registerLoopEditCommand({
-    pi,
-    getStore: () => store as any,
-    getTriggerSystem: () => triggerSystem as any,
-    updateWidget,
-  });
-  const command = commandMap.get("loop-edit")!;
-  return { store, triggerSystem, updateWidget, command };
-}
-
-function ctxWithUi(ui: any) {
-  return { ui } as any;
+  return { store, triggerSystem, updateWidget };
 }
 
 function makeUi(overrides: Partial<{ select: any; input: any }> = {}) {
@@ -34,11 +32,26 @@ function makeUi(overrides: Partial<{ select: any; input: any }> = {}) {
   };
 }
 
+async function runEdit(
+  h: Setup,
+  entry: ReturnType<LoopStore["get"]>,
+  ui: any,
+  onAfterSave: () => void = h.updateWidget,
+) {
+  await editLoopInteractive(
+    ui,
+    h.store as unknown as LoopStoreLike,
+    h.triggerSystem as unknown as TriggerSystemLike,
+    entry!,
+    onAfterSave,
+  );
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Interval parsing — what the user explicitly asked about
 // ════════════════════════════════════════════════════════════════════════════
 
-describe("interval edits via /loop-edit", () => {
+describe("interval edits", () => {
   it.each([
     { input: "5m", cron: "*/5 * * * *", from: "*/30 * * * *" },
     { input: "10m", cron: "*/10 * * * *", from: "*/5 * * * *" },
@@ -61,7 +74,7 @@ describe("interval edits via /loop-edit", () => {
     const inputMock = vi.fn(async () => input);
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect((h.store.get("1")!.trigger as any).schedule).toBe(cron);
     expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
@@ -73,13 +86,12 @@ describe("interval edits via /loop-edit", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "7m");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     const schedule = (h.store.get("1")!.trigger as any).schedule;
     // 7m rounds to either 5m or 10m — accept either since both are valid
@@ -91,13 +103,12 @@ describe("interval edits via /loop-edit", () => {
     h.store.create({ type: "cron", schedule: "0 0 * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: 0 0 * * *)")
       .mockResolvedValueOnce("trigger: cron: 0 0 * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "30s");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect((h.store.get("1")!.trigger as any).schedule).toBe("*/1 * * * *");
     expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
@@ -120,13 +131,12 @@ describe("cron expression edits", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => cron);
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({ type: "cron", schedule: cron });
   });
@@ -136,13 +146,12 @@ describe("cron expression edits", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "cron 0 9 * * 1-5");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({ type: "cron", schedule: "0 9 * * 1-5" });
   });
@@ -152,13 +161,12 @@ describe("cron expression edits", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "0 9 * *"); // 4 fields, not 5
     const { ui, notifications } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({ type: "cron", schedule: "*/5 * * * *" });
     expect(notifications.some((n) => n.level === "error" && n.message.includes("Could not parse trigger"))).toBe(true);
@@ -175,13 +183,12 @@ describe("event trigger edits", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "event before_agent_start");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({ type: "event", source: "before_agent_start" });
     expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
@@ -193,13 +200,12 @@ describe("event trigger edits", () => {
     h.store.create({ type: "event", source: "tool_execution_start" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (event: tool_execution_start)")
       .mockResolvedValueOnce("trigger: event: tool_execution_start")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "10m");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({ type: "cron", schedule: "*/10 * * * *" });
     expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
@@ -215,13 +221,12 @@ describe("event trigger edits", () => {
     );
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (event: tool_execution_start)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "new prompt");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({
       type: "event",
@@ -236,13 +241,12 @@ describe("event trigger edits", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "event tool_execution_start regex:error timeout");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.trigger).toEqual({
       type: "event",
@@ -262,11 +266,10 @@ describe("trigger re-arm gating", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("Save & Exit");
     const { ui } = makeUi({ select });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.triggerSystem.remove).not.toHaveBeenCalled();
     expect(h.triggerSystem.add).not.toHaveBeenCalled();
@@ -278,13 +281,12 @@ describe("trigger re-arm gating", () => {
 
     // Use the trigger-edit branch so the draft goes through updateMetadata
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "5m"); // round-trips to "*/5 * * * *"
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.triggerSystem.remove).not.toHaveBeenCalled();
     expect(h.triggerSystem.add).not.toHaveBeenCalled();
@@ -295,13 +297,12 @@ describe("trigger re-arm gating", () => {
     h.store.create({ type: "event", source: "before_agent_start" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (event: before_agent_start)")
       .mockResolvedValueOnce("trigger: event: before_agent_start")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "5m");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
     expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
@@ -319,12 +320,11 @@ describe("state preservation", () => {
     const createdAt = h.store.get("1")!.createdAt;
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("recurring: true")
       .mockResolvedValueOnce("Save & Exit");
     const { ui } = makeUi({ select });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.createdAt).toBe(createdAt);
   });
@@ -335,13 +335,12 @@ describe("state preservation", () => {
     h.store.get("1")!.fireCount = 7;
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "new prompt");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.fireCount).toBe(7);
   });
@@ -351,13 +350,12 @@ describe("state preservation", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "new prompt");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.id).toBe("1");
   });
@@ -371,13 +369,12 @@ describe("state preservation", () => {
     );
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] achieve X (dynamic)")
       .mockResolvedValueOnce("prompt: achieve X")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "achieve Y");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     const entry = h.store.get("1")!;
     expect(entry.prompt).toBe("achieve Y");
@@ -397,13 +394,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "1");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBe(1);
   });
@@ -413,13 +409,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "0");
     const { ui, notifications } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBeUndefined();
     expect(notifications.some((n) => n.level === "error" && n.message.includes("positive integer"))).toBe(true);
@@ -430,13 +425,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "-5");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBeUndefined();
   });
@@ -446,13 +440,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "3.14");
     const { ui, notifications } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBeUndefined();
     expect(notifications.some((n) => n.level === "error")).toBe(true);
@@ -463,13 +456,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "  25  ");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBe(25);
   });
@@ -479,13 +471,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "999999999");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBe(999999999);
   });
@@ -495,13 +486,12 @@ describe("maxFires boundaries", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("maxFires: (none)")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "");
     const { ui, notifications } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.maxFires).toBeUndefined();
     expect(notifications.some((n) => n.message.includes("no changes"))).toBe(true);
@@ -518,13 +508,12 @@ describe("prompt edge cases", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "first line\nsecond line\nthird line");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.prompt).toBe("first line\nsecond line\nthird line");
   });
@@ -534,13 +523,12 @@ describe("prompt edge cases", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "check: 'quotes' & <html> tags");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.prompt).toBe("check: 'quotes' & <html> tags");
   });
@@ -550,13 +538,12 @@ describe("prompt edge cases", () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "   \t  ");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.prompt).toBe("p");
   });
@@ -567,13 +554,12 @@ describe("prompt edge cases", () => {
     const longPrompt = "x".repeat(5000);
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => longPrompt);
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.prompt).toBe(longPrompt);
   });
@@ -596,11 +582,11 @@ describe("picker with multiple loops", () => {
         capturedChoices = opts;
         return opts[0]; // pick the first loop
       }
-      return "Save & Exit";
+      return undefined;
     });
     const { ui } = makeUi({ select });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await pickLoopForEdit(ui, h.store as unknown as LoopStoreLike);
 
     expect(capturedChoices).toContain("* #1 [active] first (cron: */5 * * * *)");
     expect(capturedChoices).toContain("- #2 [paused] second (cron: */10 * * * *)");
@@ -622,7 +608,7 @@ describe("picker with multiple loops", () => {
     });
     const { ui } = makeUi({ select });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await pickLoopForEdit(ui, h.store as unknown as LoopStoreLike);
 
     expect(capturedChoices.some((c) => c.includes("remove me"))).toBe(false);
     expect(capturedChoices.some((c) => c.includes("keep"))).toBe(true);
@@ -638,7 +624,7 @@ describe("picker with multiple loops", () => {
     });
     const { ui } = makeUi({ select });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await pickLoopForEdit(ui, h.store as unknown as LoopStoreLike);
 
     expect(capturedTitle).toBe("No editable loops");
     expect(h.updateWidget).not.toHaveBeenCalled();
@@ -659,7 +645,6 @@ describe("multi-field edits", () => {
     );
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("recurring: true")
@@ -673,7 +658,7 @@ describe("multi-field edits", () => {
     });
     const { ui, notifications } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     const entry = h.store.get("1")!;
     expect(entry.prompt).toBe("new prompt");
@@ -703,7 +688,6 @@ describe("cancel discards draft", () => {
     const originalEntry = JSON.parse(JSON.stringify(h.store.get("1")));
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] original (cron: */5 * * * *)")
       .mockResolvedValueOnce("prompt: original")
       .mockResolvedValueOnce("trigger: cron: */5 * * * *")
       .mockResolvedValueOnce("recurring: true")
@@ -712,7 +696,7 @@ describe("cancel discards draft", () => {
     const inputMock = vi.fn(async () => "modified");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     const entry = h.store.get("1")!;
     expect(entry.prompt).toBe("original");
@@ -741,13 +725,12 @@ describe("hybrid trigger preservation", () => {
     h.store.create(hybridTrigger as any, "p", { recurring: true });
 
     const select = vi.fn()
-      .mockResolvedValueOnce("* #1 [active] p (hybrid)")
       .mockResolvedValueOnce("prompt: p")
       .mockResolvedValueOnce("Save & Exit");
     const inputMock = vi.fn(async () => "new prompt");
     const { ui } = makeUi({ select, input: inputMock });
 
-    await h.command.handler!("", ctxWithUi(ui));
+    await runEdit(h, h.store.get("1"), ui);
 
     expect(h.store.get("1")!.prompt).toBe("new prompt");
     expect(h.store.get("1")!.trigger).toEqual(hybridTrigger);
