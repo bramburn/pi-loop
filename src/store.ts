@@ -9,6 +9,17 @@ const LOOPS_DIR = join(homedir(), ".pi", "loops");
 const MAX_LOOPS = 25;
 const TOMBSTONE_TTL_MS = 10 * 60 * 1000;
 
+export function triggerEquals(a: Trigger, b: Trigger): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === "cron" && b.type === "cron") return a.schedule === b.schedule;
+  if (a.type === "event" && b.type === "event") return a.source === b.source && a.filter === b.filter;
+  if (a.type === "hybrid" && b.type === "hybrid") {
+    return a.cron === b.cron && a.event.source === b.event.source && a.event.filter === b.event.filter && a.debounceMs === b.debounceMs;
+  }
+  if (a.type === "dynamic" && b.type === "dynamic") return true;
+  return false;
+}
+
 export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, LoopReducerEvent, LoopStoreData> {
   private tombstones = new Map<string, LoopDeletionTombstone>();
 
@@ -123,7 +134,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
-  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; taskBacklog?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] } {
+  updateMetadata(id: string, fields: { trigger?: Trigger; prompt?: string; taskBacklog?: boolean; priority?: LoopPriority; recurring?: boolean; maxFires?: number; readOnly?: boolean; autoTask?: boolean }): { entry: LoopEntry | undefined; changedFields: string[] } {
     return this.withLock(() => {
       const current = this.entries.get(id);
       if (!current) return { entry: undefined, changedFields: [] };
@@ -131,7 +142,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
       const changedFields: string[] = [];
       const now = Date.now();
 
-      if (fields.trigger !== undefined) {
+      if (fields.trigger !== undefined && !triggerEquals(current.trigger, fields.trigger)) {
         current.trigger = fields.trigger;
         changedFields.push("trigger");
       }
@@ -143,11 +154,48 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
         current.taskBacklog = fields.taskBacklog;
         changedFields.push("taskBacklog");
       }
+      if (fields.priority !== undefined && fields.priority !== current.priority) {
+        current.priority = fields.priority;
+        changedFields.push("priority");
+      }
+      if (fields.recurring !== undefined && fields.recurring !== current.recurring) {
+        current.recurring = fields.recurring;
+        changedFields.push("recurring");
+      }
+      if (fields.maxFires !== undefined && fields.maxFires !== current.maxFires) {
+        current.maxFires = fields.maxFires;
+        changedFields.push("maxFires");
+      }
+      if (fields.readOnly !== undefined && fields.readOnly !== current.readOnly) {
+        current.readOnly = fields.readOnly;
+        changedFields.push("readOnly");
+      }
+      if (fields.autoTask !== undefined && fields.autoTask !== current.autoTask) {
+        current.autoTask = fields.autoTask;
+        changedFields.push("autoTask");
+      }
       if (changedFields.length > 0) {
         current.updatedAt = now;
       }
 
       return { entry: this.entries.get(id), changedFields };
+    });
+  }
+
+  /**
+   * Clear the optional maxFires cap on a loop. Returns true if the field was
+   * previously set (and has now been removed); false if it was already unset
+   * or the loop is missing. Used by the /loop-edit command when the user
+   * explicitly empties the maxFires input — `updateMetadata` cannot signal
+   * "set the field to undefined" because TS erases the key.
+   */
+  clearMaxFires(id: string): boolean {
+    return this.withLock(() => {
+      const current = this.entries.get(id);
+      if (!current || current.maxFires === undefined) return false;
+      delete current.maxFires;
+      current.updatedAt = Date.now();
+      return true;
     });
   }
 
