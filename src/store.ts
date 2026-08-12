@@ -9,7 +9,7 @@ const LOOPS_DIR = join(homedir(), ".pi", "loops");
 const MAX_LOOPS = 25;
 const TOMBSTONE_TTL_MS = 10 * 60 * 1000;
 
-function triggerEquals(a: Trigger, b: Trigger): boolean {
+export function triggerEquals(a: Trigger, b: Trigger): boolean {
   if (a.type !== b.type) return false;
   if (a.type === "cron" && b.type === "cron") return a.schedule === b.schedule;
   if (a.type === "event" && b.type === "event") return a.source === b.source && a.filter === b.filter;

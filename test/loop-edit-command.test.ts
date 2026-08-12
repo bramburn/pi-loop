@@ -479,6 +479,67 @@ describe("registerLoopEditCommand", () => {
     expect(h.triggerSystem.remove).not.toHaveBeenCalled();
   });
 
+  it("notifies error if trigger re-arm fails (add throws)", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
+
+    h.triggerSystem.add.mockImplementation(() => {
+      throw new Error("scheduler rejected trigger");
+    });
+
+    const select = vi.fn()
+      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
+      .mockResolvedValueOnce("trigger: cron: */5 * * * *")
+      .mockResolvedValueOnce("Save & Exit");
+    const inputMock = vi.fn(async () => "15m");
+    const { ui, notifications } = makeUi({ select, input: inputMock });
+
+    await h.command.handler!("", ctxWithUi(ui));
+
+    // Store still got the new trigger
+    expect(h.store.get("1")?.trigger).toEqual({ type: "cron", schedule: "*/15 * * * *" });
+    // remove() ran before the throw
+    expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
+    // add() was attempted but threw
+    expect(h.triggerSystem.add).toHaveBeenCalled();
+    // User got a clear error notification
+    expect(
+      notifications.some(
+        (n) =>
+          n.level === "error" &&
+          n.message.includes("could not be activated") &&
+          n.message.includes("Loop #1"),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves the trigger change when add throws and remove had already succeeded", async () => {
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
+
+    let addedOnce = false;
+    h.triggerSystem.add.mockImplementation(() => {
+      if (!addedOnce) {
+        addedOnce = true;
+        throw new Error("boom");
+      }
+    });
+
+    const select = vi.fn()
+      .mockResolvedValueOnce("* #1 [active] p (cron: */5 * * * *)")
+      .mockResolvedValueOnce("trigger: cron: */5 * * * *")
+      .mockResolvedValueOnce("Save & Exit");
+    const inputMock = vi.fn(async () => "15m");
+    const { ui } = makeUi({ select, input: inputMock });
+
+    await h.command.handler!("", ctxWithUi(ui));
+
+    // Loop is persisted with new trigger but not in trigger system — this is the
+    // documented degraded state. The notification tells the user to retry via
+    // pause/resume. This test pins the behavior so we don't regress silently.
+    expect((h.store.get("1")!.trigger as any).schedule).toBe("*/15 * * * *");
+    expect(h.triggerSystem.remove).toHaveBeenCalledTimes(1);
+    expect(h.triggerSystem.add).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies error if the loop disappears between picker and save", async () => {
     h.store.create({ type: "cron", schedule: "*/5 * * * *" } as any, "p", { recurring: true });
 

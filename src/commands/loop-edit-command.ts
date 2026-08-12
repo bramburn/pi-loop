@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { formatTrigger } from "../loop-format.js";
 import { isValidCronExpression, parseInterval } from "../loop-parse.js";
+import { triggerEquals } from "../store.js";
 import type { LoopEntry, LoopPriority, Trigger } from "../types.js";
 
 const PRIORITY_OPTIONS: LoopPriority[] = ["defer", "normal", "urgent", "critical"];
@@ -56,7 +57,9 @@ function draftFromEntry(entry: LoopEntry): EditableDraft {
 }
 
 function entryFromDraft(draft: EditableDraft, entry: LoopEntry): Partial<LoopEntry> {
-  const fields: Partial<LoopEntry> = { prompt: draft.prompt, trigger: draft.trigger };
+  const fields: Partial<LoopEntry> = {};
+  if (draft.prompt !== entry.prompt) fields.prompt = draft.prompt;
+  if (!triggerEquals(draft.trigger, entry.trigger)) fields.trigger = draft.trigger;
   if (draft.priority !== (entry.priority ?? "normal")) fields.priority = draft.priority;
   if (draft.recurring !== entry.recurring) fields.recurring = draft.recurring;
   if (draft.maxFires !== entry.maxFires) fields.maxFires = draft.maxFires;
@@ -86,7 +89,7 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
 
-function parseTriggerInput(raw: string, _current: Trigger): Trigger | null {
+function parseTriggerInput(raw: string): Trigger | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
@@ -127,7 +130,7 @@ async function editTrigger(
   );
   if (raw === undefined || raw === null) return undefined;
   if (raw.trim() === "") return current;
-  const parsed = parseTriggerInput(raw, current);
+  const parsed = parseTriggerInput(raw);
   if (!parsed) {
     ui.notify("Could not parse trigger. Use an interval (5m), cron (0 9 * * 1-5), or 'event <source>'.", "error");
     return undefined;
@@ -258,8 +261,16 @@ export function registerLoopEditCommand(options: LoopEditCommandOptions): void {
 
       const triggerChanged = result.changedFields.includes("trigger");
       if (triggerChanged && result.entry.status === "active") {
-        getTriggerSystem().remove(result.entry.id);
-        getTriggerSystem().add(result.entry);
+        try {
+          getTriggerSystem().remove(result.entry.id);
+          getTriggerSystem().add(result.entry);
+        } catch {
+          ui.notify(
+            `Loop #${result.entry.id} saved, but the new trigger could not be activated. ` +
+              `Pause and resume the loop to retry.`,
+            "error",
+          );
+        }
       }
 
       updateWidget();

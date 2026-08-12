@@ -5,7 +5,7 @@
 
 ### Features
 
-* **edit:** add `/loop-edit` command to pick a stored loop from a TUI list and edit its prompt, trigger, priority, recurring, maxFires, readOnly, or autoTask. Persists via `LoopStore.updateMetadata` (extended to accept the new fields with structural trigger-equality check) and re-arms the trigger only when the trigger actually changed and the loop is active. `LoopStore.clearMaxFires` helper added for explicit clearing of the `maxFires` cap.
+* **edit:** add `/loop-edit` command to pick a stored loop from a TUI list and edit its `prompt`, `trigger`, `priority`, `recurring`, `maxFires`, `readOnly`, or `autoTask`. Persists via `LoopStore.updateMetadata` (extended to accept the new fields with structural `triggerEquals` check to avoid spurious re-arms). Re-arms the trigger only when it actually changed AND the loop is active; paused loops persist only. `LoopStore.clearMaxFires` helper added for explicit clearing of the `maxFires` cap (TS erases `undefined` keys).
 
 ## 2.1.1 (2026-08-11)
 
