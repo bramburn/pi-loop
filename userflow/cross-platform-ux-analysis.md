@@ -264,15 +264,13 @@ pi.registerCommand("tasks", {
 
 ### U-04: `LoopResume` Only Available via Command
 
-**Severity: Low**
+**Status: Closed (ADR-006, branch `refactor/split-loop-pause-resume`)**
 
-`LoopDelete(id, "pause")` pauses a loop, but there's no tool to resume it — only the `/loop` interactive command supports resume.
-
-**Recommendation**: Add `LoopResume`:
+`LoopPause({id})` and `LoopResume({id})` are now first-class tools alongside `LoopDelete` (which no longer carries the `action: "pause"` overload). `LoopResume` flips status back to `"active"` and re-adds the loop to the trigger system. It does NOT touch the session bindings file — that remains `/loop-resume <id>`'s job.
 
 ```typescript
+LoopPause({ id: "1" })
 LoopResume({ id: "1" })
-// → Changes status to "active", re-adds trigger
 ```
 
 ---
