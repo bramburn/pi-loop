@@ -1,5 +1,51 @@
 # Changelog
 
+## 2.3.0 (2026-08-12)
+
+
+### Features
+
+* **tools:** add `LoopPause({id})` and `LoopResume({id})` as first-class tools. Pause and resume are now symmetric — agents no longer need to fall back to slash commands or the `/loop` TUI to flip status. `LoopPause` mirrors `store.pause()` + trigger teardown; `LoopResume` mirrors `store.resume()` + trigger re-arm and clears the dynamic-loop `awaitingUpdate` flag if set.
+* **tools:** drop the overloaded `action: "delete" \| "pause"` enum from `LoopDelete`. `LoopDelete` now only deletes. The pause path lives on `LoopPause`; the resume path lives on `LoopResume` or `/loop-resume <id>` (which also writes the session bindings file).
+* **tools (visibility):** add `LoopPause` and `LoopResume` predicates to `syncLoopTools`. `LoopPause` is visible when at least one active loop exists; `LoopResume` is visible when at least one paused loop exists. `LoopDelete`'s predicate is unchanged (still gated on paused or `taskBacklog`) to preserve the soft friction against casual deletion.
+
+### Breaking changes
+
+* `LoopDelete({action:"pause"})` is no longer a valid tool call. The `action` parameter has been removed from the schema. Any in-flight agent session calling the old shape will get a tool validation error. Migration: call `LoopPause({id})` instead.
+
+### Internal
+
+* `src/tools/tool-visibility.ts` — new `LOOP_TOOL_PAUSE` / `LOOP_TOOL_RESUME` constants and predicates; module-level doc updated.
+* `src/tools/loop-tools.ts` — `LoopStoreLike` interface gains `resume()`.
+* `src/tools/workflow-tools.ts` — error message at the \"all declared outcomes are unavailable\" branch now points at `LoopPause` instead of the removed `LoopDelete action=\"pause\"` shape.
+* `src/index.ts` — header doc lists `LoopPause` and `LoopResume` alongside the existing CRUD tools.
+
+### Tests
+
+* `test/loop-tools.test.ts` — five call sites that exercised `LoopDelete({action:\"pause\"})` now call `LoopPause({id})`. Three new describe blocks for `LoopPause` and `LoopResume` (8 new cases total) covering pause/resume happy path, idempotent re-resume, not-found, tombstone, and \"does not touch bindings\".
+* `test/index.test.ts` — `LOOP_TOOLS` constant extended to include the two new tools.
+* `test/tool-visibility.test.ts` — no behavior change required; the new predicates inherit the existing harness.
+
+### Docs
+
+* `docs/plan/ADR-006-split-loop-pause-resume.md` — new ADR capturing the decision, design, file-by-file plan, and acceptance criteria.
+* `docs/architecture/state-machine-reducer-event-model.md` — \"Current: LoopDelete(action=pause)\" heading updated to \"Current: LoopPause\".
+* `docs/architecture/state-machine-test-matrix.md` — L-04 row updated; L-04b row added for the new `LoopResume` tool path; L-05 row now mentions `/loop-resume <id>` as the bindings-aware path.
+* `docs/architecture/state-machine-transition-map.md` — transition table lists `LoopPause` and `LoopResume` as canonical tool paths for active↔paused; notes that `/loop-resume` also writes the bindings file.
+* `docs/plan/ADR-002-tool-visibility-call-site.md` — rationale enumerates the new predicates alongside `LoopDelete`'s.
+* `docs/MANUAL_TESTING.md` — tool visibility scenario expanded to cover `LoopPause` / `LoopResume` gating.
+* `userflow/loop-delete-pause.md` — full rewrite around the new tool trio; sequence diagrams and state machine updated.
+* `userflow/GAPS.md` — G-05 (\"resume only available via command\") marked closed.
+* `userflow/cross-platform-ux-analysis.md` — U-04 (\"no tool to resume\") marked closed.
+* `README.md` — Tools table updated; `LoopPause` and `LoopResume` rows added.
+
+### Quality gates
+
+* 973 / 973 vitest pass (was 965 / 965 before the new tests).
+* Coverage: statements / branches / functions / lines — unchanged from 2.2.1 baseline (above floors).
+* `npm run typecheck && npm run lint && npm test && npm run test:all` clean.
+* No data migration required. `LoopEntry.status: \"active\" \| \"paused\"` is unchanged. Stored loops work as-is.
+
 ## 2.2.1 (2026-08-12)
 
 
