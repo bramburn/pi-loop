@@ -593,40 +593,19 @@ This tool does not write to the session bindings file; for cross-session re-armi
   pi.registerTool({
     name: "LoopDelete",
     label: "LoopDelete",
-    renderCall: renderToolCall("Loop", (args) => `${String(toolArg(args, "action") ?? "delete")} · #${String(toolArg(args, "id") ?? "?")}`),
+    renderCall: renderToolCall("Loop", (args) => `delete · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Delete or pause a loop by its ID.
+    description: `Delete a loop by its ID.
 
-Use "pause" to temporarily stop a loop without removing it. Use "delete" to permanently remove it.
+This permanently removes the loop and tears down its trigger subscription. To temporarily stop a loop without removing it, use LoopPause; to make a paused loop active again, use LoopResume.
 
 Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Delete only when the user explicitly asks to cancel the loop or its stated stop condition is satisfied.`,
     parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to delete or pause" }),
-      action: Type.Optional(Type.String({ description: "delete or pause (default: delete)", enum: ["delete", "pause"], default: "delete" })),
+      id: Type.String({ description: "Loop ID to delete" }),
       claimId: Type.Optional(Type.String({ description: "Claim token for an active workflow task" })),
     }),
     async execute(_toolCallId, params) {
-      const { id, action } = params;
-
-      if (action === "pause") {
-        const entry = getStore().pause(id);
-        if (!entry) {
-          const tombstone = getStore().getDeletionTombstone(id);
-          if (tombstone) {
-            return Promise.resolve(textResult(formatDeletionTombstone(id, tombstone), {
-              kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [formatDeletionTombstone(id, tombstone)],
-            }));
-          }
-          return Promise.resolve(textResult(`Loop #${id} not found`, {
-            kind: "loop", action: "pause", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
-          }));
-        }
-        getTriggerSystem().remove(id);
-        updateWidget();
-        return Promise.resolve(textResult(`Loop #${id} paused`, {
-          kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} paused`, expanded: ["Use LoopList to inspect paused loops."],
-        }));
-      }
+      const { id } = params;
 
       const current = getStore().get(id);
       const activeTaskId = current?.workflow?.activeTaskId;
