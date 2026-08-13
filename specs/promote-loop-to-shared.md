@@ -1,7 +1,7 @@
 # Spec: Promote a Loop to Shared (cross-repo accessible)
 
 - **Slug:** promote-loop-to-shared
-- **Status:** proposed (awaiting human review)
+- **Status:** reviewed (approved by human 2026-08-13)
 - **Generated:** 2026-08-13
 - **Source:** greenfield specification; not yet implemented
 - **Owning layer(s):** commands layer (`src/commands/settings-command.ts`, `src/commands/loop-command.ts`); settings + scope layer (`src/settings.ts`, `src/runtime/scope.ts`); runtime boot path (`src/runtime/session-runtime.ts`)
