@@ -225,7 +225,7 @@ describe("LoopList", () => {
         triggerType: "cron",
       });
       vi.setSystemTime(new Date("2026-01-01T00:01:00Z"));
-      await h.text("LoopDelete", { id: "1", action: "pause" });
+      await h.text("LoopPause", { id: "1" });
       vi.setSystemTime(new Date("2026-01-01T01:00:00Z"));
       h.store.resume("1");
 
@@ -240,7 +240,7 @@ describe("LoopList", () => {
   it("omits age for paused loops", async () => {
     const h = setup();
     await h.text("LoopCreate", { trigger: "5m", prompt: "build check", triggerType: "cron" });
-    await h.text("LoopDelete", { id: "1", action: "pause" });
+    await h.text("LoopPause", { id: "1" });
     const out = await h.text("LoopList", {});
     expect(out).toContain("[paused]");
     expect(out).not.toContain("age:");
@@ -482,7 +482,7 @@ describe("Workflow tools", () => {
 
   it("resumes a paused nonterminal workflow when it transitions", async () => {
     await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
-    await h.text("LoopDelete", { id: "1", action: "pause" });
+    await h.text("LoopPause", { id: "1" });
     h.triggerSystem.add.mockClear();
 
     const out = await h.text("WorkflowTransition", { id: "1", outcome: "found", evidence: "Blocker resolved." });
@@ -795,7 +795,7 @@ describe("LoopDelete", () => {
   });
 
   it("pauses a loop without removing it", async () => {
-    const out = await h.text("LoopDelete", { id: "1", action: "pause" });
+    const out = await h.text("LoopPause", { id: "1" });
     expect(out).toBe("Loop #1 paused");
     expect(h.store.get("1")?.status).toBe("paused");
   });
@@ -811,7 +811,7 @@ describe("LoopDelete", () => {
     h.store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
     h.store.delete("1");
 
-    expect(await h.text("LoopDelete", { id: "1", action: "pause" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
+    expect(await h.text("LoopPause", { id: "1" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
   });
 
   it("reports not found for an unknown id", async () => {
