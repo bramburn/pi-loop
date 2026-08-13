@@ -819,6 +819,77 @@ describe("LoopDelete", () => {
   });
 });
 
+describe("LoopPause", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(() => {
+    h = setup();
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "build check", { recurring: true });
+  });
+
+  it("pauses an active loop without removing it", async () => {
+    const out = await h.text("LoopPause", { id: "1" });
+    expect(out).toBe("Loop #1 paused");
+    expect(h.store.get("1")?.status).toBe("paused");
+    expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
+  });
+
+  it("reports not found for an unknown id", async () => {
+    expect(await h.text("LoopPause", { id: "99" })).toBe("Loop #99 not found");
+  });
+
+  it("reports auto-deletion tombstones for already deleted loops", async () => {
+    h.store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
+    h.store.delete("1");
+    expect(await h.text("LoopPause", { id: "1" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
+  });
+});
+
+describe("LoopResume", () => {
+  let h: ReturnType<typeof setup>;
+  beforeEach(() => {
+    h = setup();
+    h.store.create({ type: "cron", schedule: "*/5 * * * *" }, "build check", { recurring: true });
+  });
+
+  it("resumes a paused loop and re-arms the trigger", async () => {
+    h.store.pause("1");
+    h.triggerSystem.remove.mockClear();
+    h.triggerSystem.add.mockClear();
+
+    const out = await h.text("LoopResume", { id: "1" });
+    expect(out).toBe("Loop #1 resumed");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
+  });
+
+  it("is idempotent for an already-active loop", async () => {
+    const out = await h.text("LoopResume", { id: "1" });
+    expect(out).toBe("Loop #1 resumed");
+    expect(h.store.get("1")?.status).toBe("active");
+    expect(h.triggerSystem.add).toHaveBeenCalledWith(h.store.get("1"));
+  });
+
+  it("reports not found for an unknown id", async () => {
+    expect(await h.text("LoopResume", { id: "99" })).toBe("Loop #99 not found");
+  });
+
+  it("reports auto-deletion tombstones for already deleted loops", async () => {
+    h.store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
+    h.store.delete("1");
+    expect(await h.text("LoopResume", { id: "1" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
+  });
+
+  it("does not touch session bindings (that is /loop-resume's job)", async () => {
+    h.store.pause("1");
+    // LoopResume tool only manipulates the trigger system; bindings-store writes
+    // happen exclusively in /loop-resume <id>. The tool body does not receive a
+    // bindings store reference, so there is nothing to assert against beyond
+    // confirming the trigger was re-added.
+    await h.text("LoopResume", { id: "1" });
+    expect(h.triggerSystem.add).toHaveBeenCalled();
+  });
+});
+
 describe("loop-tools coverage extras", () => {
   let store: LoopStore;
   let scheduler: any;
@@ -855,6 +926,8 @@ describe("loop-tools coverage extras", () => {
     expect(tools).toContain("LoopCreate");
     expect(tools).toContain("LoopList");
     expect(tools).toContain("LoopUpdate");
+    expect(tools).toContain("LoopPause");
+    expect(tools).toContain("LoopResume");
     expect(tools).toContain("LoopDelete");
   });
 
