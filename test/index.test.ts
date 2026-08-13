@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import extension from "../src/index.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
-const LOOP_TOOLS = ["LoopCreate", "LoopUpdate", "LoopList", "LoopDelete"];
+const LOOP_TOOLS = ["LoopCreate", "LoopUpdate", "LoopList", "LoopPause", "LoopResume", "LoopDelete"];
 const LOOP_COMMANDS = ["loop", "loop-resume", "loop-settings"];
 const DISABLED_TOOLS = [
   "MonitorCreate",
