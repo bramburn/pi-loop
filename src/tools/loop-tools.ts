@@ -20,6 +20,7 @@ interface LoopStoreLike {
     dynamic?: Partial<NonNullable<LoopEntry["dynamic"]>>;
   }): LoopEntry;
   pause(id: string): LoopEntry | undefined;
+  resume(id: string): LoopEntry | undefined;
   continueDynamic(
     id: string,
     fields: { prompt?: string; dynamic: Partial<NonNullable<LoopEntry["dynamic"]>> },
@@ -502,42 +503,109 @@ Use this exactly once after each dynamic loop wake. Mark status as "continue" wi
   });
 
   pi.registerTool({
+    name: "LoopPause",
+    label: "LoopPause",
+    renderCall: renderToolCall("Loop", (args) => `pause · #${String(toolArg(args, "id") ?? "?")}`),
+    renderResult: renderToolResult,
+    description: `Pause a loop by its ID.
+
+Use this to temporarily stop a loop without removing it. Pausing preserves the loop's history, trigger, and ID; use LoopResume to make it active again, or LoopDelete to permanently remove it.
+
+Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Pause only when the user explicitly asks to halt or the loop's stated stop condition is satisfied.`,
+    promptGuidelines: [
+      "Pausing is reversible. Use LoopResume to make a paused loop active again.",
+      "Pausing does not write to the session bindings file; that remains /loop-resume's job.",
+      "Pausing tears down the trigger subscription so the loop will not fire until resumed.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "Loop ID to pause" }),
+    }),
+    execute(_toolCallId, params) {
+      const { id } = params;
+      const entry = getStore().pause(id);
+      if (!entry) {
+        const tombstone = getStore().getDeletionTombstone(id);
+        if (tombstone) {
+          const msg = formatDeletionTombstone(id, tombstone);
+          return Promise.resolve(textResult(msg, {
+            kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [msg],
+          }));
+        }
+        return Promise.resolve(textResult(`Loop #${id} not found`, {
+          kind: "loop", action: "pause", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+        }));
+      }
+      getTriggerSystem().remove(id);
+      updateWidget();
+      return Promise.resolve(textResult(`Loop #${id} paused`, {
+        kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} paused`, expanded: ["Use LoopList to inspect paused loops."],
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "LoopResume",
+    label: "LoopResume",
+    renderCall: renderToolCall("Loop", (args) => `resume · #${String(toolArg(args, "id") ?? "?")}`),
+    renderResult: renderToolResult,
+    description: `Resume a paused loop by its ID.
+
+Use this to make a previously paused loop active again. Resuming flips status back to "active" and re-adds the loop to the trigger system so it can fire on schedule.
+
+This tool does not write to the session bindings file; for cross-session re-arming after a restart, use /loop-resume <id>.`,
+    promptGuidelines: [
+      "Resuming is the inverse of pausing; use LoopPause to halt an active loop.",
+      "Resuming does not write to the session bindings file; for that, use /loop-resume <id>.",
+      "Resuming re-adds the loop to the trigger system so subscriptions (event sources, cron timers) are re-armed.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "Loop ID to resume" }),
+    }),
+    execute(_toolCallId, params) {
+      const { id } = params;
+      const before = getStore().get(id);
+      if (!before) {
+        const tombstone = getStore().getDeletionTombstone(id);
+        if (tombstone) {
+          const msg = formatDeletionTombstone(id, tombstone);
+          return Promise.resolve(textResult(msg, {
+            kind: "loop", action: "resume", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [msg],
+          }));
+        }
+        return Promise.resolve(textResult(`Loop #${id} not found`, {
+          kind: "loop", action: "resume", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+        }));
+      }
+      const resumed = getStore().resume(id) ?? before;
+      getTriggerSystem().add(resumed);
+      if (resumed.trigger.type === "dynamic") onDynamicLoopActivated?.(resumed);
+      updateWidget();
+      const tone = resumed.status === "active" ? "success" : "warning";
+      const summary = resumed.status === "active"
+        ? `Loop #${id} resumed`
+        : `Loop #${id} already active`;
+      return Promise.resolve(textResult(`Loop #${id} resumed`, {
+        kind: "loop", action: "resume", tone, summary, expanded: [`Status: ${resumed.status}`],
+      }));
+    },
+  });
+
+  pi.registerTool({
     name: "LoopDelete",
     label: "LoopDelete",
-    renderCall: renderToolCall("Loop", (args) => `${String(toolArg(args, "action") ?? "delete")} · #${String(toolArg(args, "id") ?? "?")}`),
+    renderCall: renderToolCall("Loop", (args) => `delete · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Delete or pause a loop by its ID.
+    description: `Delete a loop by its ID.
 
-Use "pause" to temporarily stop a loop without removing it. Use "delete" to permanently remove it.
+This permanently removes the loop and tears down its trigger subscription. To temporarily stop a loop without removing it, use LoopPause; to make a paused loop active again, use LoopResume.
 
 Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Delete only when the user explicitly asks to cancel the loop or its stated stop condition is satisfied.`,
     parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to delete or pause" }),
-      action: Type.Optional(Type.String({ description: "delete or pause (default: delete)", enum: ["delete", "pause"], default: "delete" })),
+      id: Type.String({ description: "Loop ID to delete" }),
       claimId: Type.Optional(Type.String({ description: "Claim token for an active workflow task" })),
     }),
     async execute(_toolCallId, params) {
-      const { id, action } = params;
-
-      if (action === "pause") {
-        const entry = getStore().pause(id);
-        if (!entry) {
-          const tombstone = getStore().getDeletionTombstone(id);
-          if (tombstone) {
-            return Promise.resolve(textResult(formatDeletionTombstone(id, tombstone), {
-              kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [formatDeletionTombstone(id, tombstone)],
-            }));
-          }
-          return Promise.resolve(textResult(`Loop #${id} not found`, {
-            kind: "loop", action: "pause", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
-          }));
-        }
-        getTriggerSystem().remove(id);
-        updateWidget();
-        return Promise.resolve(textResult(`Loop #${id} paused`, {
-          kind: "loop", action: "pause", tone: "warning", summary: `Loop #${id} paused`, expanded: ["Use LoopList to inspect paused loops."],
-        }));
-      }
+      const { id } = params;
 
       const current = getStore().get(id);
       const activeTaskId = current?.workflow?.activeTaskId;

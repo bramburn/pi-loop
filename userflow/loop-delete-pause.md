@@ -1,10 +1,10 @@
-# Loop Delete / Pause
+# Loop Delete / Pause / Resume
 
 ## When to Use
 
-- User wants to permanently stop a loop (`delete`)
-- User wants to temporarily stop a loop without removing it (`pause`)
-- User wants to resume a paused loop
+- User wants to permanently stop a loop — `LoopDelete`
+- User wants to temporarily stop a loop without removing it — `LoopPause`
+- User wants to resume a paused loop — `LoopResume` (tool) or `/loop-resume <id>` (command, also re-arms session bindings)
 
 ## Delete Workflow
 
@@ -25,7 +25,7 @@ sequenceDiagram
     S-->>A: Loop #ID deleted
 ```
 
-## Pause/Resume Workflow
+## Pause / Resume Workflow
 
 ```mermaid
 sequenceDiagram
@@ -36,7 +36,7 @@ sequenceDiagram
     participant E as EventBus
     participant W as Widget
 
-    Note over A:W: Pause Flow
+    Note over A,W: Pause Flow
     A->>S: pause(id)
     S->>S: status → "paused"
     S-->>T: id
@@ -44,7 +44,7 @@ sequenceDiagram
     T->>E: unsubscribe(id)
     T-->>W: update()
 
-    Note over A:W: Resume Flow
+    Note over A,W: Resume Flow
     A->>S: resume(id)
     S->>S: status → "active"
     S-->>T: entry
@@ -59,10 +59,10 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> active: LoopCreate
     active --> active: LoopCreate
-    active --> paused: LoopDelete(id, "pause")
+    active --> paused: LoopPause(id)
     active --> deleted: LoopDelete(id)
     active --> expired: expiresAt reached
-    paused --> active: resume()
+    paused --> active: LoopResume(id) / /loop-resume <id>
     paused --> deleted: LoopDelete(id)
     paused --> expired: expiresAt reached
     expired --> deleted: System cleanup
@@ -73,14 +73,15 @@ stateDiagram-v2
 
 ### Delete via Tool: `LoopDelete`
 
-1. Agent calls `LoopDelete({ id: "123" })`
+1. Agent calls `LoopDelete({ id: "123" })` (optional `claimId` for workflow loops with active tasks).
 
 2. System:
+   - Closes any active workflow task (requires valid `claimId`)
    - Removes trigger from TriggerSystem (no more fires)
    - Deletes entry from LoopStore
    - Updates widget
 
-3. Returns confirmation or "not found" if ID invalid
+3. Returns confirmation or "not found" if ID invalid.
 
 ### Delete via Command: `/loop` → "View loops"
 
@@ -94,16 +95,31 @@ stateDiagram-v2
 
 5. System removes trigger + deletes entry
 
-### Pause via Tool: `LoopDelete` with action
+### Pause via Tool: `LoopPause`
 
-1. Agent calls `LoopDelete({ id: "123", action: "pause" })`
+1. Agent calls `LoopPause({ id: "123" })`
 
 2. System:
-   - Updates loop status to `paused`
+   - Updates loop status to `paused` via the `LOOP_PAUSED` reducer event
    - Removes trigger from TriggerSystem (stops firing)
    - Keeps entry in LoopStore (can be resumed)
 
-3. Returns confirmation
+3. Returns confirmation or "not found" if ID invalid.
+
+`LoopPause` is idempotent on an already-paused loop — it returns success without side effects.
+
+### Resume via Tool: `LoopResume`
+
+1. Agent calls `LoopResume({ id: "123" })`
+
+2. System:
+   - Updates status to `active` via the `LOOP_RESUMED` reducer event
+   - Re-adds trigger to TriggerSystem (re-subscribes cron / event source)
+   - For dynamic loops awaiting an update, also clears `awaitingUpdate`
+
+3. Returns confirmation.
+
+**Bindings note:** `LoopResume` does NOT update the session bindings file. For bindings-aware resume (so the loop survives a session restart), use `/loop-resume <id>` instead.
 
 ### Resume via Command: `/loop` → "View loops"
 
@@ -114,11 +130,11 @@ stateDiagram-v2
 3. System:
    - Updates status to `active`
    - Re-adds trigger to TriggerSystem
-   - Loop starts firing again
+   - Adds id to the session bindings file
 
-4. **Note:** This path does NOT update the bindings file. The loop resumes in-process but will not be re-armed automatically on session restart. Use `/loop-resume <id>` for bindings-aware resume.
+4. The loop fires again. To survive a session restart, the bindings file now contains the id.
 
-### Resume via `/loop-resume <id>` — Recommended
+### Resume via Command: `/loop-resume <id>` — Recommended
 
 `/loop-resume <id>` is the **recommended way** to resume a loop. It does three things atomically:
 
@@ -128,15 +144,7 @@ stateDiagram-v2
 
 On session restart, `showPersistedLoops()` reads the bindings file and re-arms exactly those loops automatically. See [Loop Resume](./loop-resume.md).
 
-### Resume via Tool: `LoopDelete({ action: "resume" })`
-
-Agent calls `LoopDelete({ id: "123", action: "resume" })`:
-
-1. `store.resume(id)` — sets status to `active` (idempotent)
-2. `triggerSystem.add(entry)` — re-subscribes the trigger
-3. Loop starts firing again
-
-**Bindings note:** This tool does NOT update the bindings file. For bindings-aware resume, use `/loop-resume <id>`.
+`/loop-resume` with no args opens a picker to toggle which stored loops this terminal arms; see [Loop Resume](./loop-resume.md).
 
 ## Data Structure
 
@@ -166,6 +174,8 @@ type LoopStatus = "active" | "paused";
 | Resume already active | No-op, returns success |
 | Pause while firing | Completes current fire, then pauses |
 | Delete while firing | Current fire completes, then deleted |
+| Pause an auto-deleted loop | Returns the deletion tombstone text |
+| Resume an auto-deleted loop | Returns the deletion tombstone text |
 
 ## Auto-Deletion Triggers
 
@@ -182,13 +192,14 @@ Loops are automatically removed when:
 
 | File | Purpose |
 |------|---------|
-| `src/store.ts` | LoopStore.pause(), resume(), delete() |
-| `src/trigger-system.ts` | TriggerSystem.remove() |
+| `src/store.ts` | `LoopStore.pause()`, `resume()`, `delete()` |
+| `src/trigger-system.ts` | `TriggerSystem.remove()` / `.add()` |
 | `src/scheduler.ts` | CronScheduler cleanup |
-| `src/tools/loop-tools.ts` | LoopDelete tool |
-| `src/commands/loop-command.ts` | /loop interactive menu |
+| `src/tools/loop-tools.ts` | `LoopPause`, `LoopResume`, `LoopDelete` tools |
+| `src/commands/loop-command.ts` | `/loop` interactive menu + `/loop-resume` command |
 
 ## Related Flows
 
 - [Loop Create — Cron Trigger](./loop-create-cron.md)
 - [Loop List](./loop-list.md)
+- [Loop Resume](./loop-resume.md)

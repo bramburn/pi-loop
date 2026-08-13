@@ -47,8 +47,9 @@ We will test state tracking at three layers:
 | L-01 | create cron loop | none | `LoopCreate(trigger=cron)` | `active` and armed | partial | `test/index.test.ts` / `test/store.test.ts` |
 | L-02 | create event loop | none | `LoopCreate(trigger=event)` | `active` and subscribed | partial | `test/index.test.ts` / `test/trigger-system.test.ts` |
 | L-03 | create hybrid loop | none | `LoopCreate(trigger=hybrid)` | `active`, armed, subscribed | partial | `test/index.test.ts` / `test/trigger-system.test.ts` |
-| L-04 | pause active loop | `active` | `LoopDelete(action=pause)` | `paused`, unsubscribed, disarmed | covered wrapper only | `test/index.test.ts` |
-| L-05 | resume paused loop | `paused` | interactive resume / direct store+trigger path | `active`, re-armed, re-subscribed | missing | `test/index.test.ts` |
+| L-04 | pause active loop | `active` | `LoopPause` | `paused`, unsubscribed, disarmed | covered wrapper only | `test/index.test.ts` |
+| L-04b | resume paused loop (tool) | `paused` | `LoopResume` | `active`, re-armed, re-subscribed | covered | `test/loop-tools.test.ts` |
+| L-05 | resume paused loop | `paused` | interactive resume / `/loop-resume <id>` | `active`, re-armed, bindings updated | missing | `test/index.test.ts` |
 | L-06 | delete loop | `active` or `paused` | `LoopDelete(delete)` | removed from store and trigger system | covered | `test/index.test.ts` |
 | L-07 | fire recurring loop | `active` recurring | `onLoopFire` | `fireCount++`, remains active | partial | `test/scheduler.test.ts` / `test/trigger-system.test.ts` |
 | L-08 | fire one-shot loop | `active` non-recurring | `fire` | removed after delivery path | partial | `test/trigger-system.test.ts` / `test/injection.test.ts` |

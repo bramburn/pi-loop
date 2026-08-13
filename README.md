@@ -66,7 +66,9 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 | `LoopCreate` | Schedule a prompt on a cron timer, a pi event, or both with debounce |
 | `LoopUpdate` | Update progress for a dynamic goal loop (self-paced mode) |
 | `LoopList` | Show active loops with IDs, triggers, and next-fire times |
-| `LoopDelete` | Delete or pause a loop |
+| `LoopPause` | Pause a loop without removing it (preserves history, trigger, ID) |
+| `LoopResume` | Resume a paused loop (re-adds the trigger; does not touch session bindings) |
+| `LoopDelete` | Permanently delete a loop |
 | `MonitorCreate` | _(retired — see [Retired tools](#retired-tools))_ |
 | `MonitorList` | _(retired)_ |
 | `MonitorStop` | _(retired)_ |

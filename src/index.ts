@@ -4,8 +4,10 @@
  * Tools (registered):
  *   LoopCreate    — Create a scheduled or event-triggered re-wake loop
  *   LoopUpdate    — Update progress for a dynamic loop
+ *   LoopPause     — Pause a loop by ID (soft halt; preserves the loop)
+ *   LoopResume    — Resume a paused loop by ID
  *   LoopList      — List all active loops with status and next-fire times
- *   LoopDelete    — Delete or pause a loop by ID
+ *   LoopDelete    — Delete a loop by ID
  *
  * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]

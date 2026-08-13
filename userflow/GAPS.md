@@ -81,19 +81,17 @@ Loops have `/loop` for interactive management. Monitors have no equivalent inter
 
 ## G-05: `resume` Only Available via Command, Not Tool
 
-**Severity: Low**
+**Status: Closed (ADR-006, branch `refactor/split-loop-pause-resume`)**
 
-Pausing is available via `LoopDelete(id, "pause")`, but resuming requires the interactive `/loop` command interface.
+`LoopPause({id})` and `LoopResume({id})` are now first-class tools. `LoopDelete` no longer carries the `action: "pause"` shape; pause and resume each have a dedicated tool with their own visibility predicates (see `src/tools/tool-visibility.ts`).
 
 ```typescript
 // Works:
-LoopDelete({ id: "1", action: "pause" })
-
-// Does not exist:
-LoopResume({ id: "1" })  // <-- missing
+LoopPause({ id: "1" })
+LoopResume({ id: "1" })
 ```
 
-**Affected flows**: [Loop Delete/Pause](./loop-delete-pause.md) cannot resume a loop programmatically.
+**Note:** `LoopResume` is a pure state flip + trigger re-arm. It does NOT write to the session bindings file — for bindings-aware resume, use `/loop-resume <id>`. The split is intentional: tools express single intents, commands handle session wiring.
 
 ---
 
