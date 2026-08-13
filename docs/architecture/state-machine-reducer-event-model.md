@@ -542,7 +542,7 @@ Emit:
 - maybe `LOOP_BOOTSTRAP_REQUESTED`
 - `LOOP_ARMING_RECONCILE_REQUESTED`
 
-### Current: `LoopDelete(action=pause)`
+### Current: `LoopPause`
 
 Emit:
 

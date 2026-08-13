@@ -111,8 +111,8 @@ Defined in `LoopEntry`:
 | From | Event | To | Notes |
 |---|---|---|---|
 | none | `LoopCreate` / auto worker creation / monitor onDone helper | `active` | persisted in store |
-| `active` | `LoopDelete(action=pause)` / interactive pause | `paused` | subscriptions/timers removed |
-| `paused` | `LoopDelete(action=resume)` / interactive resume | `active` | subscriptions/timers re-added |
+| `active` | `LoopPause` / interactive pause / `/loop` TUI `- Pause` | `paused` | subscriptions/timers removed |
+| `paused` | `LoopResume` / interactive resume / `/loop-resume <id>` | `active` | subscriptions/timers re-added; `/loop-resume` also writes the session bindings file |
 | `active` | `LoopDelete(delete)` / interactive delete | deleted | removed from store and trigger system |
 | `active` | `onLoopFire` with recurring loop | `active` | `fireCount++`; may queue wake |
 | `active` | `onLoopFire` and `maxFires` reached | deleted | removed immediately |

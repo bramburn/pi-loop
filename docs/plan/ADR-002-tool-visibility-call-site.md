@@ -23,6 +23,8 @@ The function:
 2. Computes the new set based on:
    - Always present: `LoopCreate`, `LoopList`.
    - `LoopUpdate` only when at least one dynamic loop is active.
+   - `LoopPause` only when at least one loop is active.
+   - `LoopResume` only when at least one loop is paused.
    - `LoopDelete` only when at least one loop is paused OR when at least one `taskBacklog` loop exists.
    - `WorkflowTransition` only when at least one workflow loop is active.
 3. Writes via `pi.setActiveTools(Array.from(newSet))` — wrapped in try/catch with `console.error` for diagnostics (per pragmaxim's `34818ac`).
