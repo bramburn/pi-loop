@@ -13,7 +13,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type LoopScope = "memory" | "session" | "project";
+export type LoopScope = "memory" | "session" | "project" | "shared";
 
 export type SortOrder = "id" | "status" | "recent" | "oldest";
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
@@ -102,7 +102,7 @@ function resolveConfigPath(cwd: string): string {
 }
 
 function asScope(value: unknown): LoopScope | undefined {
-  return value === "memory" || value === "session" || value === "project"
+  return value === "memory" || value === "session" || value === "project" || value === "shared"
     ? value
     : undefined;
 }

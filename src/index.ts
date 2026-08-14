@@ -286,5 +286,7 @@ export default function (pi: ExtensionAPI) {
   registerSettingsCommand({
     pi,
     getCwd: () => process.cwd(),
+    getStore: () => store,
+    getTriggerSystem: () => triggerSystem,
   });
 }

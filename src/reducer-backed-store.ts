@@ -262,4 +262,25 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
     try { unlinkSync(`${this.filePath}.prev`); } catch { /* ignore */ }
     return true;
   }
+
+  /**
+   * Insert an entry with a caller-supplied id, preserving id continuity across
+   * stores (e.g. promote/adopt between the project and shared loop stores).
+   * Returns true on success, false if the id already exists.
+   *
+   * The new entry's `nextId` is bumped to `max(nextId, parseInt(entry.id) + 1)`
+   * so subsequent `create()` calls cannot reuse the imported id. The write
+   * goes through `withLock`/`save` so the on-disk file is updated atomically.
+   */
+  insertEntryWithId(entry: TEntry): boolean {
+    return this.withLock(() => {
+      if (this.entries.has(entry.id)) return false;
+      const idNum = Number.parseInt(entry.id, 10);
+      if (Number.isFinite(idNum) && idNum + 1 > this.nextId) {
+        this.nextId = idNum + 1;
+      }
+      this.entries.set(entry.id, entry);
+      return true;
+    });
+  }
 }

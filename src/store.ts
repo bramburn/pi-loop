@@ -375,6 +375,64 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     });
   }
 
+  /**
+   * Promote a loop to the shared store. DESTRUCTIVE: per Q5 (resolved
+   * 2026-08-13), the source entry is removed from the project store and the
+   * caller must tear down its trigger subscription. The shared entry preserves
+   * the source id (id continuity across the project<->shared boundary).
+   *
+   * The CALLER must call `triggerSystem.remove(id)` BEFORE invoking this
+   * method (matching the ordering pattern in the `LoopDelete` tool at
+   * `src/tools/loop-tools.ts`). This method only handles store-level
+   * mutation; trigger teardown is the caller's responsibility.
+   *
+   * Returns `{ ok: true, sharedEntry, sourceEntry }` on success, or
+   * `{ ok: false, error }` on source-not-found, id-collision-in-shared,
+   * or shared-store-write-failure.
+   */
+  promote(id: string, sharedStorePath: string): { ok: boolean; sharedEntry?: LoopEntry; sourceEntry?: LoopEntry; error?: string } {
+    const sourceEntry = this.entries.get(id);
+    if (!sourceEntry) return { ok: false, error: `Loop #${id} not found in project store` };
+
+    const sharedStore = new LoopStore(sharedStorePath);
+    if (sharedStore.get(id)) {
+      return { ok: false, error: `Loop #${id} already exists in the shared store. Use "Adopt from shared" or rename first.` };
+    }
+
+    const sharedEntry: LoopEntry = { ...sourceEntry, scope: "shared" };
+    const inserted = sharedStore.insertEntryWithId(sharedEntry);
+    if (!inserted) {
+      return { ok: false, error: `Loop #${id} could not be written to the shared store at ${sharedStorePath}` };
+    }
+
+    const deleted = this.delete(id);
+    if (!deleted) {
+      return { ok: false, error: `Loop #${id} was promoted to shared but source deletion failed` };
+    }
+
+    return { ok: true, sharedEntry, sourceEntry };
+  }
+
+  /**
+   * Adopt a shared loop into the current store. The shared entry is copied
+   * into the local store with the same id (id continuity). The CALLER must
+   * call `triggerSystem.add(newEntry)` AFTER invoking this method to arm
+   * the trigger locally (matching the create pattern).
+   *
+   * Refuses if the id already exists in the current store.
+   */
+  adopt(sharedEntry: LoopEntry): { ok: boolean; entry?: LoopEntry; error?: string } {
+    if (this.entries.has(sharedEntry.id)) {
+      return { ok: false, error: `Loop #${sharedEntry.id} already exists in this project. Resolve the duplicate first.` };
+    }
+    const localEntry: LoopEntry = { ...sharedEntry, scope: "project" };
+    const inserted = this.insertEntryWithId(localEntry);
+    if (!inserted) {
+      return { ok: false, error: `Loop #${sharedEntry.id} could not be written to the project store` };
+    }
+    return { ok: true, entry: localEntry };
+  }
+
   clearExpired(): number {
     return this.withLock(() => {
       const now = Date.now();

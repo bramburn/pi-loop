@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.4.0 (2026-08-13)
+
+
+### Features
+
+* **shared-loop scope:** pi-loop now supports a fourth `LoopScope` value, `"shared"`, enabling cross-repo loop sharing on the same machine. A new `LoopStore.promote(id, sharedStorePath)` method copies a loop to the shared store and (per Q5) tears down the source entry; `LoopStore.adopt(sharedEntry)` copies a shared entry into the local project store. The shared store resolves to `<homedir>/.pi/loops/shared.json` by default (Q1), with `PI_LOOP_SHARED_PATH` env override. `--loop-settings` gains a new `Shared loops` sub-screen that lists project + shared loops side-by-side with `Promote to shared` / `Adopt from shared` actions per row (Q2 = unified picker). `/loop` View loops per-loop actions menu gains a `+ Promote to shared` row, consistent with the existing `Edit` / `- Pause` / `* Resume` / `x Delete` shape. The widget renders a `[shared]` badge for entries sourced from the shared store.
+* **config:** `LoopScope` union extended to `memory | session | project | shared` (src/settings.ts:16, src/runtime/scope.ts:9); `asScope` validator accepts the new value (src/settings.ts:104); `resolveLoopStorePath` adds a `shared` branch (src/runtime/scope.ts).
+* **store:** `ReducerBackedStore.insertEntryWithId(entry)` is a new public helper that inserts an entry with a caller-supplied id and bumps `nextId` to prevent reuse (used by promote/adopt to preserve id continuity across the project<->shared boundary).
+* **types:** `LoopEntry.scope` (optional, default `"project"`) marks the storage origin of an entry. Back-compat: legacy stored entries without the field are treated as `"project"` by the widget renderer.
+
+### Breaking changes
+
+* **promote is destructive by default (Q5).** When a user runs `Promote to shared` from either `/loop` View loops or the `/loop-settings` Shared loops sub-screen, the source entry is removed from `.pi/loops/loops.json` and its trigger subscription is torn down. Only repos that adopt the shared entry will fire the loop. The original project's copy is gone — not paused, not archived. To re-pull it locally, run `Adopt from shared` from the sub-screen. Migration: any loop that should keep its source copy after promotion must be promoted first, then explicitly re-created in the originating repo via `/loop` Create. **Behavioral change: spec AC-2 ("source still active after promote") is OBSOLETE under this default and the corresponding test asserts the opposite outcome (Q5 destructive-promote assertion).**
+* **auto-merge (AC-11) and push-sync (AC-12) explicitly not implemented.** Q3 resolved "explicit adopt" (shared loops are NOT visible in `LoopList` until adopted). Q4 resolved "pull-only" (editing a shared loop in repo B creates a new project-scoped loop with a fresh id; the shared entry is unchanged). Both ACs remain in the spec as deferred capabilities.
+
+### Internal
+
+* `src/reducer-backed-store.ts`: new `insertEntryWithId(entry)` method on the base class. Writes through `withLock`/`save` atomically.
+* `src/store.ts`: two new `LoopStore` methods. `promote(id, sharedStorePath)` is destructive (Q5); the caller does `triggerSystem.remove(id)` before invoking it. `adopt(sharedEntry)` copies from shared to project; the caller does `triggerSystem.add(entry)` after invoking it.
+* `src/commands/settings-command.ts`: `SettingsCommandOptions` gains `getStore` and `getTriggerSystem` required parameters; new `Shared loops: ->` menu entry in the cyclic editor opens `openSharedLoopsSubScreen()`. The sub-screen calls `triggerSystem.remove()` before promote and `triggerSystem.add()` after adopt, matching the `LoopDelete` ordering at `src/tools/loop-tools.ts`.
+* `src/commands/loop-command.ts`: `LoopStoreLike` interface gains `promote(id, sharedStorePath)`; `viewLoops` per-loop actions menu gains a `+ Promote to shared` row.
+* `src/ui/widget-render.ts`: `RenderLoopEntry` interface gains `scope` field; `renderLoopRow` renders a `shared` badge when `loop.scope === "shared"`.
+* `src/index.ts`: `registerSettingsCommand` call site now passes `getStore` and `getTriggerSystem`.
+
+### Tests
+
+* `test/shared-store.test.ts`: new file with 11 test cases covering promote (copy, refuse-on-not-found, refuse-on-collision, id continuity, destructive Q5), adopt (copy, refuse-on-local-collision, id continuity), `insertEntryWithId` (insert, refuse-on-collision), and scope field defaults (back-compat, post-promote, post-adopt).
+* `test/settings-command.test.ts`: `setupCommand` now passes `getStore` and `getTriggerSystem`; the "renders all 10 settings" test count updated from 11 to 12 (10 settings + `Shared loops` entry + `< Back`).
+* `test/loop-command.test.ts`: the "does not offer resume for a workflow paused in a terminal state" test updated to expect the new `+ Promote to shared` action in the menu list.
+
+### Docs
+
+* `specs/promote-loop-to-shared.md`: 5 Product Decisions resolved 2026-08-13 (Q1 homedir+env, Q2 unified picker, Q3 explicit adopt, Q4 pull-only, Q5 auto-delete on promote). AC-2 marked OBSOLETE; AC-10/AC-13 unblocked; AC-11/AC-12 marked [NOT IMPLEMENTED]. Status header updated to "reviewed (approved 2026-08-13) — Q1-Q5 Product Decisions resolved 2026-08-13".
+* `docs/plan/promote-loop-to-shared-impl.md`: implementation plan updated to reflect resolved decisions. Step 3 extended with destructive promote semantics; Step 7 dropped (Q3 = explicit adopt); file-by-file change list updated to remove `src/runtime/session-runtime.ts`. New "Resolved decisions" table replaces the "Blocker tasks" section.
+* `docs/plan/ADR-006-split-loop-pause-resume.md`: companion ADR from the 2.3.0 cycle.
+
+### Quality gates
+
+* 1000/1000 vitest pass (was 973/973 before the new tests; 13 added in test/shared-store.test.ts).
+* `npm run typecheck` clean.
+* `npm run lint` clean (no fixes applied).
+* `npm run test:all` (includes `injection.test.ts` + `harness-state-steering.test.ts`) green.
+* `npm pack --dry-run` -> 230 files, ~1.4 MB unpacked, version 2.4.0.
+
 ## 2.3.0 (2026-08-12)
 
 

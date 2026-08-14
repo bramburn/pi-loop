@@ -1,20 +1,41 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { resolveLoopStorePath } from "../runtime/scope.js";
 import {
   DEFAULT_SETTINGS,
   loadSettings,
   type PiLoopSettings,
   saveSettings,
 } from "../settings.js";
+import { LoopStore } from "../store.js";
+
+/**
+ * Trigger system surface needed by the Shared loops sub-screen (promote
+ * removes the source subscription before deleting the source entry; adopt
+ * arms the local trigger after copying the entry). Mirrors the shape
+ * consumed by `registerLoopTools` in `src/tools/loop-tools.ts`.
+ */
+export interface TriggerSystemLike {
+  add(loop: { id: string; trigger: unknown; status: string }): void;
+  remove(id: string): void;
+}
 
 /**
  * /loop-settings — open the unified settings TUI editor.
  *
  * Replaces the v1.x tasks-only settings menu (`src/ui/settings-menu.ts`).
  * Edits every field in `.pi/pi-loop-settings.json` and saves immediately.
+ *
+ * Adds a `Shared loops` sub-screen entry that lists project + shared loops
+ * side-by-side with `Promote to shared` / `Adopt from shared` actions per
+ * row (per Q2 = unified picker, resolved 2026-08-13).
  */
 export interface SettingsCommandOptions {
   pi: ExtensionAPI;
   getCwd: () => string;
+  /** Returns the project loop store. The sub-screen reads from it for promote. */
+  getStore: () => LoopStore;
+  /** Returns the trigger system. The sub-screen calls .remove() / .add() across the boundary. */
+  getTriggerSystem: () => TriggerSystemLike;
   /** Optional override for tests. */
   load?: (cwd: string) => PiLoopSettings;
   save?: (cwd: string, settings: PiLoopSettings) => void;
@@ -141,10 +162,10 @@ function nextValue(key: SettingKey, current: PiLoopSettings[SettingKey]): PiLoop
 }
 
 export function registerSettingsCommand(options: SettingsCommandOptions): void {
-  const { pi, getCwd, load = loadSettings, save = saveSettings } = options;
+  const { pi, getCwd, getStore, getTriggerSystem, load = loadSettings, save = saveSettings } = options;
 
   pi.registerCommand("loop-settings", {
-    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold, urgentFlushThresholds).",
+    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold, urgentFlushThresholds). Also has a 'Shared loops' sub-screen for promoting/adopting cross-repo loops.",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const ui = ctx.ui;
       let settings: PiLoopSettings;
@@ -159,10 +180,15 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
           const value = settings[key];
           return `${settingLabel(key)}: ${formatValue(key, value)}`;
         });
+        choices.push("Shared loops: \u2192");
         choices.push("< Back");
 
         const selected = await ui.select("Settings", choices);
         if (!selected || selected === "< Back") return;
+        if (selected === "Shared loops: \u2192") {
+          await openSharedLoopsSubScreen(ui, getCwd, getStore, getTriggerSystem);
+          continue;
+        }
 
         const idx = choices.indexOf(selected);
         if (idx < 0 || idx >= KEY_ORDER.length) return;
@@ -175,4 +201,96 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
       }
     },
   });
+}
+
+/**
+ * Shared loops sub-screen: list project + shared loops side-by-side with
+ * `Promote to shared` / `Adopt from shared` actions per row. Per Q2 the
+ * surface is a unified picker (no separate sub-screens).
+ *
+ * Promote is destructive per Q5: the source entry is removed from the
+ * project store after the copy lands, and the source trigger is torn down
+ * before the store mutation (matching the `LoopDelete` tool's ordering at
+ * `src/tools/loop-tools.ts`).
+ *
+ * Adopt is non-destructive: the shared entry is copied into the project
+ * store, the local entry is armed via `triggerSystem.add()`, and the
+ * shared entry remains (it's the source of truth).
+ */
+async function openSharedLoopsSubScreen(
+  ui: ExtensionCommandContext["ui"],
+  getCwd: () => string,
+  getStore: () => LoopStore,
+  getTriggerSystem: () => TriggerSystemLike,
+): Promise<void> {
+  const cwd = getCwd();
+  const sharedStorePath = resolveLoopStorePath({ loopScope: "shared", cwd }) ?? "";
+  const projectStore = getStore();
+  const triggerSystem = getTriggerSystem();
+
+  const projectLoops = projectStore.list();
+  const sharedStore = new LoopStore(sharedStorePath);
+  const sharedLoops = sharedStore.list();
+
+  const projectHeader = `--- Project loops (${projectLoops.length}) ---`;
+  const sharedHeader = `--- Shared loops (${sharedLoops.length}) ---`;
+
+  const sections: string[] = [];
+  if (projectLoops.length > 0) sections.push(projectHeader);
+  for (const loop of projectLoops) {
+    sections.push(`#${loop.id} ${truncateLoopPrompt(loop.prompt)} [${loop.status}]`);
+  }
+  if (sharedLoops.length > 0) sections.push(sharedHeader);
+  for (const loop of sharedLoops) {
+    sections.push(`#${loop.id} ${truncateLoopPrompt(loop.prompt)} [${loop.status}]`);
+  }
+  if (sections.length === 0) {
+    sections.push("(no loops yet)");
+  }
+  sections.push("< Back");
+
+  const selected = await ui.select("Shared loops", sections);
+  if (!selected || selected === "< Back") return;
+
+  const idMatch = selected.match(/^#(\d+)/);
+  if (!idMatch) return;
+  const id = idMatch[1]!;
+  const isInProject = projectLoops.some((l) => l.id === id);
+  const isInShared = sharedLoops.some((l) => l.id === id);
+
+  if (isInProject && !isInShared) {
+    const action = await ui.select(`Loop #${id} (project)`, ["Promote to shared", "< Cancel"]);
+    if (action === "Promote to shared") {
+      triggerSystem.remove(id);
+      const result = projectStore.promote(id, sharedStorePath);
+      if (result.ok) {
+        ui.notify(`Loop #${id} promoted to shared store`, "info");
+      } else {
+        ui.notify(result.error ?? "Promote failed", "error");
+      }
+    }
+  } else if (isInShared && !isInProject) {
+    const action = await ui.select(`Loop #${id} (shared)`, ["Adopt from shared", "< Cancel"]);
+    if (action === "Adopt from shared") {
+      const sharedEntry = sharedStore.get(id);
+      if (!sharedEntry) {
+        ui.notify(`Loop #${id} not found in shared store`, "error");
+        return;
+      }
+      const result = projectStore.adopt(sharedEntry);
+      if (result.ok && result.entry) {
+        const freshEntry = projectStore.get(id) ?? result.entry;
+        triggerSystem.add(freshEntry);
+        ui.notify(`Loop #${id} adopted from shared store`, "info");
+      } else {
+        ui.notify(result.error ?? "Adopt failed", "error");
+      }
+    }
+  } else if (isInProject && isInShared) {
+    ui.notify(`Loop #${id} exists in both project and shared stores; resolve the conflict manually`, "warning");
+  }
+}
+
+function truncateLoopPrompt(s: string): string {
+  return s.length <= 50 ? s : `${s.slice(0, 49)}\u2026`;
 }

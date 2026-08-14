@@ -14,6 +14,7 @@ export interface RenderLoopEntry {
   prompt: string;
   recurring: boolean;
   trigger: Parameters<typeof formatTrigger>[0];
+  scope?: "project" | "session" | "shared";
   autoTask?: boolean;
   taskBacklog?: boolean;
   dynamic?: { goal: string; iteration: number } | null;
@@ -99,6 +100,7 @@ function renderLoopRow(
   const statusColor = loop.status === "active" ? "accent" : "muted";
   const triggerDesc = formatTrigger(loop.trigger, "list");
   const badges: string[] = [];
+  if (loop.scope === "shared") badges.push("shared");
   if (loop.autoTask) badges.push("auto-task");
   if (loop.taskBacklog) badges.push("backlog");
   if (loop.dynamic) badges.push(`iter:${loop.dynamic.iteration}`);
