@@ -50,7 +50,7 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 
 `/loop-resume <id>` — re-arm a stored loop by ID and re-add it to the trigger system. Use this after a session/process restart when a stored event/hybrid loop's trigger subscription was lost. Idempotent: re-arming an already-active loop just refreshes the trigger.
 
-`/loop-settings` — open the unified settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold).
+`/loop-settings` — open the unified settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold). Includes a `Shared loops` sub-screen for promoting loops to the cross-repo shared store and adopting shared loops into the current project.
 
 ```text
 /loop-resume 5        # re-arm loop #5 by id
