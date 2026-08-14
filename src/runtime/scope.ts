@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path";
 
-export type LoopScope = "memory" | "session" | "project";
+export type LoopScope = "memory" | "session" | "project" | "shared";
 
 export interface ScopeOptions {
   piLoopEnv?: string;
