@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSettingsCommand } from "../src/commands/settings-command.js";
+import { LoopStore } from "../src/store.js";
 
 interface UiMock {
   select: ReturnType<typeof vi.fn>;
@@ -75,9 +76,13 @@ describe("/loop-settings command", () => {
   function setupCommand(): { pi: PiMock; ui: UiMock } {
     const ui = makeUi();
     const pi = makePi();
+    const store = new LoopStore();
+    const triggerSystem = { add: vi.fn(), remove: vi.fn() };
     registerSettingsCommand({
       pi: pi as never,
       getCwd: () => cwd,
+      getStore: () => store,
+      getTriggerSystem: () => triggerSystem,
       load: loadFn as never,
       save: saveFn as never,
     });
@@ -277,7 +282,7 @@ describe("/loop-settings command", () => {
     });
     await pi.handler!("", { ui });
     expect(observedOptions).toBeDefined();
-    expect(observedOptions!.length).toBe(11); // 10 settings + < Back
+    expect(observedOptions!.length).toBe(12); // 10 settings + Shared loops sub-screen entry + < Back
     expect(observedOptions!).toContain("Loop storage: project");
     expect(observedOptions!).toContain("Task storage: session");
     expect(observedOptions!).toContain("Debug logging: false");
