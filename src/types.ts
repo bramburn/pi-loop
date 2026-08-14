@@ -105,6 +105,14 @@ export interface LoopEntry {
   priority?: LoopPriority;
   dynamic?: DynamicLoopState;
   workflow?: WorkflowRunState;
+  /**
+   * Storage scope, mainly used for cross-repo shared loops. Defaults to
+   * "project" when missing (back-compat for stored entries written before
+   * share was introduced). Set explicitly by `LoopStore.promote` (writes
+   * "shared") and `LoopStore.adopt` (writes "project"). The widget renders
+   * a `[shared]` marker when this is "shared".
+   */
+  scope?: "project" | "session" | "shared";
 }
 
 export interface LoopStoreData {
