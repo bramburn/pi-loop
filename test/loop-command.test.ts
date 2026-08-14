@@ -391,7 +391,7 @@ describe("registerLoopCommand", () => {
 
     await h.command.handler!("", { ui } as any);
 
-    expect(actionChoices).toEqual([["Edit", "x Delete", "< Back"]]);
+    expect(actionChoices).toEqual([["Edit", "+ Promote to shared", "x Delete", "< Back"]]);
     expect(h.store.get("1")?.status).toBe("paused");
     expect(h.triggerSystem.add).not.toHaveBeenCalled();
     expect(h.onDynamicLoopActivated).not.toHaveBeenCalled();

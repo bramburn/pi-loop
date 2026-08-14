@@ -6,6 +6,7 @@ import type {
 import { formatTrigger } from "../loop-format.js";
 import { isValidCronExpression, parseInterval } from "../loop-parse.js";
 import type { BindingsStore } from "../runtime/bindings-store.js";
+import { resolveLoopStorePath } from "../runtime/scope.js";
 import type { DynamicLoopState, LoopEntry, LoopPriority, Trigger } from "../types.js";
 import { isTerminalWorkflowRun } from "../workflow-reducer.js";
 import { type LoopStoreLike as EditLoopStoreLike, type TriggerSystemLike as EditTriggerSystemLike, editLoopInteractive } from "./loop-edit-command.js";
@@ -25,6 +26,7 @@ interface LoopStoreLike extends EditLoopStoreLike {
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
   delete(id: string): boolean;
+  promote(id: string, sharedStorePath: string): { ok: boolean; sharedEntry?: LoopEntry; error?: string };
 }
 
 interface TriggerSystemLike {
@@ -172,9 +174,9 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     if (match?.[1]) {
       const entry = getStore().get(match[1]);
       if (entry) {
-        const actions = ["Edit", "x Delete"];
-        if (entry.status === "active") actions.splice(1, 0, "- Pause");
-        else if (entry.status === "paused" && !isTerminalWorkflowRun(entry.workflow)) actions.splice(1, 0, "* Resume");
+        const actions = ["Edit", "+ Promote to shared", "x Delete"];
+        if (entry.status === "active") actions.splice(2, 0, "- Pause");
+        else if (entry.status === "paused" && !isTerminalWorkflowRun(entry.workflow)) actions.splice(2, 0, "* Resume");
         actions.push("< Back");
 
         const action = await ui.select(
@@ -190,6 +192,18 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
             entry,
             updateWidget,
           );
+        } else if (action === "+ Promote to shared") {
+          const cwd = process.cwd();
+          const sharedStorePath = resolveLoopStorePath({ loopScope: "shared", cwd }) ?? "";
+          getTriggerSystem().remove(entry.id);
+          const result = getStore().promote(entry.id, sharedStorePath);
+          if (result.ok) {
+            getBindingsStore().remove(entry.id);
+            updateWidget();
+            ui.notify(`Loop #${entry.id} promoted to shared store`, "info");
+          } else {
+            ui.notify(result.error ?? "Promote failed", "error");
+          }
         } else if (action === "x Delete") {
           if (entry.workflow?.activeTaskId) {
             ui.notify(`Workflow #${entry.id} has active task #${entry.workflow.activeTaskId}; use LoopDelete with its claimId to cancel safely`, "warning");
