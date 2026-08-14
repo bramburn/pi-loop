@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 export type LoopScope = "memory" | "session" | "project" | "shared";
@@ -22,6 +23,11 @@ export function resolveLoopStorePath(options: ScopeOptions, sessionId?: string):
     return join(cwd, ".pi", "loops", `loops-${sessionId}.json`);
   }
   if (loopScope === "session") return undefined;
+  if (loopScope === "shared") {
+    const envOverride = process.env.PI_LOOP_SHARED_PATH;
+    if (envOverride) return envOverride;
+    return join(homedir(), ".pi", "loops", "shared.json");
+  }
   return join(cwd, ".pi", "loops", "loops.json");
 }
 
