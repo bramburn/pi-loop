@@ -1,7 +1,7 @@
 # Spec: Promote a Loop to Shared (cross-repo accessible)
 
 - **Slug:** promote-loop-to-shared
-- **Status:** reviewed (approved by human 2026-08-13)
+- **Status:** reviewed (approved 2026-08-13) — Q1-Q5 Product Decisions resolved 2026-08-13
 - **Generated:** 2026-08-13
 - **Source:** greenfield specification; not yet implemented
 - **Owning layer(s):** commands layer (`src/commands/settings-command.ts`, `src/commands/loop-command.ts`); settings + scope layer (`src/settings.ts`, `src/runtime/scope.ts`); runtime boot path (`src/runtime/session-runtime.ts`)
@@ -115,11 +115,11 @@ So that I don't have to remember which surface owns which action.
 | Per-session bindings treat shared-adopted loops like any other project loop (must be explicitly re-armed with `/loop-resume <id>`) | CONFIRMED | binding semantics at `src/runtime/session-runtime.ts:187-211` |
 | File lock + atomic write of the shared store uses the existing reducer-backed-store pattern | CONFIRMED | atomic-write contract at `src/reducer-backed-store.ts:39-72` |
 | Trigger re-arm after adoption follows the same `remove` + `add` ordering used by `editLoopInteractive` | CONFIRMED | re-arm path at `src/commands/loop-edit-command.ts:265-272` |
-| Where the shared store physically lives (`homedir()`-based default vs. env-overridable path vs. workspace-declared path) | GAP | only the human can decide the cross-machine semantics — see Product decisions Q1 |
-| Promote vs. Adopt UI in the same picker menu OR separate pickers per action | GAP | UX call — see Product decisions Q2 |
-| Whether shared loops should auto-appear in `LoopList` for repos that haven't explicitly adopted | GAP | this is the core "shared" semantics — see Product decisions Q3 |
-| Whether a shared-loop change in repo A "pushes" to repo B's adopted copy (sync model) or is pull-only | GAP | sync semantics — see Product decisions Q4 |
-| Whether the trigger subscription in repo A is automatically torn down after promotion, or whether the original loop keeps firing locally | GAP | multi-repo firing model — see Product decisions Q5 |
+| Shared store lives at `<homedir>/.pi/loops/shared.json` (matches `src/store.ts:8` baseDir pattern); `PI_LOOP_SHARED_PATH` env var overrides when set (default-off; for AC-10) | RESOLVED | Q1 answered 2026-08-13: option (a) with env override implemented-but-not-default |
+| Promote and Adopt are surfaced in a unified `/loop-settings` sub-screen with per-row action labels (no new top-level commands) | RESOLVED | Q2 answered 2026-08-13: option (a) |
+| Shared loops are NOT visible in `LoopList` until the user runs `Adopt from shared` (explicit adopt) | RESOLVED | Q3 answered 2026-08-13: option (a) — auto-merge explicitly declined |
+| Editing a shared loop in repo B creates a new project-scoped loop; the shared entry is unchanged (pull-only) | RESOLVED | Q4 answered 2026-08-13: option (a) — push-sync explicitly declined |
+| After promote, the source repo's loop is removed from `.pi/loops/loops.json` and its trigger subscription is torn down; only repos that Adopt fire | RESOLVED | Q5 answered 2026-08-13: option (b) — destructive promote; NOT the proposed default |
 
 ## Data and integrations
 
@@ -148,33 +148,17 @@ So that I don't have to remember which surface owns which action.
 
 ## Open questions for human review
 
-### Product decisions (block approval — only a human can answer)
+### Product decisions (RESOLVED 2026-08-13)
 
-1. **Shared store location.**
-   - Default `homedir()/.pi/loops/shared.json` (CONFIRMED pattern at `src/store.ts:8`) — same user, same machine, all repos.
-   - Configurable via `PI_LOOP_SHARED_PATH` env var — each repo can declare a different shared location (workspace-style).
-   - Workspace-declared in `.pi/pi-loop-settings.json` (a new `sharedPath` field) — version-controlled with the repo.
-   - **Default if no answer:** `homedir()/.pi/loops/shared.json` because it matches the existing `homedir()`-based pattern in `src/store.ts:8`.
+1. **Shared store location.** **RESOLVED:** `<homedir>/.pi/loops/shared.json` (matches `src/store.ts:8` pattern), with `PI_LOOP_SHARED_PATH` env var implemented as a non-default override (so AC-10 is achievable without changing defaults).
 
-2. **UI surface — same picker or separate sub-screens?**
-   - One unified picker with both Promote and Adopt actions per row (action label changes based on whether the loop is in the project section or the shared section).
-   - Two distinct sub-screens reached from separate menu entries.
-   - **Default if no answer:** unified picker — fewer menu layers, consistent with the existing per-loop actions menu shape at `src/commands/loop-command.ts:171-216`.
+2. **UI surface.** **RESOLVED:** Unified picker. One `/loop-settings` sub-screen with per-row action labels (`Promote to shared` for project rows, `Adopt from shared` for shared rows). No new slash commands.
 
-3. **Adoption model — explicit vs. auto-merge.**
-   - Explicit adopt: shared loops are NOT visible in `LoopList` until the user adopts them.
-   - Auto-merge: shared loops auto-appear in every repo's `LoopList` but are NOT armed until adopted (or auto-armed, see Q4).
-   - **Default if no answer:** explicit adopt. Matches the current "opt-in per session via `/loop-resume`" mental model (CONFIRMED at `src/runtime/session-runtime.ts:187-211`).
+3. **Adoption model.** **RESOLVED:** Explicit adopt. Shared loops are NOT visible in `LoopList` until the user runs `Adopt from shared`. **AC-11 (auto-merge) explicitly not implemented in v1.**
 
-4. **Sync model — push vs. pull on shared-store edits.**
-   - Pull-only: shared loops are snapshots; editing a shared loop in repo B creates a new project-scoped loop, doesn't update the shared entry.
-   - Push: editing a shared loop in any repo writes back to the shared store (cross-repo edit).
-   - **Default if no answer:** pull-only. Push semantics require a multi-writer conflict resolution story that is out of scope for v1.
+4. **Sync model.** **RESOLVED:** Pull-only. Editing a shared loop in repo B creates a new project-scoped loop with a fresh id; the shared entry is unchanged. The shared store is read-only on the adopter side. **AC-12 (push-sync) explicitly not implemented in v1.**
 
-5. **Multi-repo triggering on promote.**
-   - Project-store copy keeps firing after promotion (source repo's loop continues).
-   - Project-store copy is automatically paused/deleted after promotion (only repos that adopt fire).
-   - **Default if no answer:** project-store copy keeps firing. Reduces surprise; lets the user opt out of cross-repo triggering by deleting the source loop after promotion.
+5. **Multi-repo triggering on promote.** **RESOLVED:** Auto-delete on promote. After `LoopStore.promote(id)` copies the entry to the shared store, the source entry is removed from the project store and its trigger subscription is torn down. **AC-13 unblocked; AC-2 (which expected source entry to remain) is OBSOLETE under this decision.**
 
 ### Verification tasks (do not block approval — become build-queue items)
 
@@ -189,7 +173,7 @@ So that I don't have to remember which surface owns which action.
 
 - **AC-1:** After promotion, the loop entry exists at `<homedir>/.pi/loops/shared.json` with the same `id`, `prompt`, `trigger`, `status`, `priority`, `recurring`, `maxFires`, `autoTask`, `taskBacklog`, `readOnly`, `expiresAt`, `dynamic`, and `workflow` fields as the source entry. Verified by reading the shared file after the action.
   [TARGET]
-- **AC-2:** After promotion, the source project's `.pi/loops/loops.json` still contains the loop with `status="active"` (no destructive removal under the default copy-promote semantics from Product Decision #1 / Q5).
+- **AC-2:** [OBSOLETE] Originally stated the source project's `.pi/loops/loops.json` would still contain the loop after promotion. Q5 (resolved 2026-08-13) reversed this expectation in favour of destructive promote. The implementation now removes the source entry; the corresponding test asserts the OPPOSITE of the original AC-2 wording.
   [TARGET]
 - **AC-3:** A second `LoopStore` instance pointing at the shared path (or a second repo on the same machine after `/loop-settings` → `Shared loops`) reads back the promoted loop with the same id and shape — no manual sync step required.
   [TARGET]
@@ -205,14 +189,12 @@ So that I don't have to remember which surface owns which action.
   [TARGET]
 - **AC-9:** Adopt refuses to overwrite an existing project entry with the same id — error message is `Loop #N already exists in this project.`
   [TARGET]
-- **AC-10:** [BLOCKED: question 1] If `PI_LOOP_SHARED_PATH` (or the `sharedPath` setting) is configured, the shared store resolves to that path instead of the default.
-  [GAP: question 1]
-- **AC-11:** [BLOCKED: question 3] If auto-merge is approved, shared loops auto-appear in every repo's `LoopList` without explicit adopt.
-  [GAP: question 3]
-- **AC-12:** [BLOCKED: question 4] If push-sync is approved, editing a shared loop in any repo writes back to the shared store and is visible to subsequent adopters.
-  [GAP: question 4]
-- **AC-13:** [BLOCKED: question 5] If "auto-delete on promote" is approved, the source project's loop entry is removed after promotion and its trigger subscription is torn down via `triggerSystem.remove`.
-  [GAP: question 5]
+- **AC-10:** If `PI_LOOP_SHARED_PATH` (or the `sharedPath` setting) is configured, the shared store resolves to that path instead of the default.
+  [TARGET — Q1 RESOLVED 2026-08-13: env-override path implemented; homedir default stays unless env is set]
+- **AC-11:** [NOT IMPLEMENTED] Auto-merge adoption was declined via Q3 (explicit adopt chosen). This AC remains in the spec as a deferred capability but is **not built in v1**.
+- **AC-12:** [NOT IMPLEMENTED] Push-sync was declined via Q4 (pull-only chosen). This AC remains in the spec as a deferred capability but is **not built in v1**.
+- **AC-13:** After promotion, the source project's loop entry is removed from `.pi/loops/loops.json` and its trigger subscription is torn down via `triggerSystem.remove`.
+  [TARGET — Q5 RESOLVED 2026-08-13: destructive promote is the chosen behaviour; AC-2's "source still active" expectation is reversed and is marked OBSOLETE in the implementation plan]
 - **AC-14:** The settings file schema validation (`parseSettings`) rejects the new `"shared"` value as long as the schema whitelist is not extended — verifying strict-schema behaviour before the schema upgrade is shipped.
   [TARGET]
 
