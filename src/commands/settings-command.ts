@@ -63,6 +63,7 @@ const KEY_ORDER: SettingKey[] = [
   "showAll",
   "taskThreshold",
   "urgentFlushThresholds",
+  "subAgent",
 ];
 
 function formatValue(key: SettingKey, value: PiLoopSettings[SettingKey]): string {
@@ -92,6 +93,13 @@ function formatValue(key: SettingKey, value: PiLoopSettings[SettingKey]): string
         : `${ms / 1000}s`;
       return `defer:${fmt(t.defer)} normal:${fmt(t.normal)} urgent:${fmt(t.urgent)} critical:${fmt(t.critical)}`;
     }
+    case "subAgent": {
+      const v = value as PiLoopSettings["subAgent"];
+      const cap = v?.activeIterationsMax ?? 4;
+      const timeoutMin = Math.round((v?.defaultIterationTimeoutMs ?? 600_000) / 60_000);
+      const iso = v?.defaultIsolation ?? "in-process";
+      return `(edit JSON) iso=${iso} cap=${cap} timeout=${timeoutMin}m`;
+    }
     default:
       return String(value);
   }
@@ -109,6 +117,7 @@ function settingLabel(key: SettingKey): string {
     showAll: "Show all tasks",
     taskThreshold: "Backlog worker threshold",
     urgentFlushThresholds: "Priority aging thresholds",
+    subAgent: "Sub-agent defaults",
   };
   return labels[key];
 }
@@ -155,6 +164,13 @@ function nextValue(key: SettingKey, current: PiLoopSettings[SettingKey]): PiLoop
       const deferSteps = [3_600_000, 86_400_000, 604_800_000];
       const idx = deferSteps.indexOf(t.defer);
       return { ...t, defer: deferSteps[(idx + 1) % deferSteps.length]! };
+    }
+    case "subAgent": {
+      // The subAgent block is configured via direct JSON editing. The
+      // /loop-settings TUI shows a summary and the nextValue cycle is a
+      // no-op (the user has to edit .pi/pi-loop-settings.json to change
+      // individual subAgent fields).
+      return current;
     }
     default:
       return current;

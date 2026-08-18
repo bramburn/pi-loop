@@ -202,7 +202,7 @@ export abstract class ReducerBackedStore<TEntry extends { id: string }, TState, 
     }
   }
 
-  private save(): void {
+  protected save(): void {
     if (!this.filePath) return;
     const previousPath = `${this.filePath}.prev`;
     if (existsSync(this.filePath)) {

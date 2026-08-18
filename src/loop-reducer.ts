@@ -1,4 +1,12 @@
-import type { DynamicLoopState, LoopEntry, LoopPriority, Trigger, WorkflowDefinition } from "./types.js";
+import type {
+  DynamicLoopState,
+  LoopEntry,
+  LoopIsolation,
+  LoopPriority,
+  LoopSubAgentConfig,
+  Trigger,
+  WorkflowDefinition,
+} from "./types.js";
 import { createWorkflowRun, transitionWorkflowRun } from "./workflow-reducer.js";
 
 export const MAX_LOOP_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -38,6 +46,12 @@ export type LoopReducerEvent =
       priority?: LoopPriority;
       dynamic?: Partial<DynamicLoopState>;
       workflow?: WorkflowDefinition;
+      isolation?: LoopIsolation;
+      goal?: string;
+      successCriteria?: string;
+      failureCriteria?: string;
+      stateFile?: string;
+      subAgent?: LoopSubAgentConfig;
     };
   }
   | {
@@ -157,6 +171,12 @@ export function reduceLoopState(state: LoopReducerState, event: LoopReducerEvent
           }
         : undefined,
       workflow: event.payload.workflow ? createWorkflowRun(event.payload.workflow, event.at) : undefined,
+      isolation: event.payload.isolation,
+      goal: event.payload.goal,
+      successCriteria: event.payload.successCriteria,
+      failureCriteria: event.payload.failureCriteria,
+      stateFile: event.payload.stateFile,
+      subAgent: event.payload.subAgent,
     };
     next.loopsById[id] = loop;
     return {

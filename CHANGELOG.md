@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.5.1 (2026-08-18)
+
+
+### Features
+
+* **sub-agent execution mode (v2.5 design implemented):** new `LoopIsolation` type and `isolation: "sub-agent"` field on `LoopEntry` (default `"in-process"`, backwards compatible). When set, each fire spawns a fresh child pi process with its own context window via `child_process.spawn`; the parent receives only a one-line summary. The child's session file, stdout/stderr, and `result.md` are durable on disk under `<loopScope>/sub-agent-results/<loopId>/iter-<N>/`. New optional fields on `LoopEntry`: `goal`, `successCriteria`, `failureCriteria`, `stateFile`, `subAgent` sub-object (per-loop overrides for model / thinking / tools / maxTokens / maxIterations / iterationTimeoutMs). The new `/loop-subagent <interval> <prompt>` slash command is the recommended way to opt in. `LoopCreate` and `LoopUpdate` tool schemas accept the new fields. `LoopInspect` is a new tool that returns a structured summary of a loop's latest iteration. The `subAgent` settings block in `.pi/pi-loop-settings.json` configures session-wide defaults (activeIterationsMax, defaultIterationTimeoutMs, defaultIterationTokenBudget, piBinary, envOverrides, registerBackgroundWorkProvider, honorCapabilityCeiling, criticalInterruptsAll, showCostInStatusLine, useLlmEvaluator). Concurrency is capped via the gate (default 4); the per-loop `maxTokens` and `maxIterations` fields cap cost and run length; 3 consecutive failures pause the loop. Results are evaluated by regex against `result.md` for the optional success / failure criteria. Token usage and cost are read from the child's session file tail and recorded against the loop. Parent-restart reconciliation walks the on-disk result directories and finalises any stale iterations as `orphaned`.
+
+* **tools:** add `LoopInspect({ loopId, iterId? })` for the agent to read its own sub-agent runs without opening files.
+* **commands:** add `/loop-subagent <interval> <prompt> [--goal ...] [--success-criteria ...] [--failure-criteria ...] [--state-file ...] [--model ...] [--max-tokens N] [--max-iterations N] [--iteration-timeout MS]`. Wraps `LoopCreate` with `isolation: "sub-agent"`.
+* **migrations:** add `src/migration/v2-to-v2.5.ts` — one-shot migration that adds the `subAgent` settings block to existing `.pi/pi-loop-settings.json` files. Idempotent. Wired up in `src/index.ts:loadInitialSettings`.
+
+### Internal
+
+* `src/types.ts`: new `LoopIsolation` type; `LoopSubAgentConfig` interface; new optional fields on `LoopEntry` (`isolation`, `goal`, `successCriteria`, `failureCriteria`, `stateFile`, `subAgent`, `cumulativeTokens`, `cumulativeCostUsd`, `iterCount`, `consecutiveFailures`); new `SubAgentStatus` and `SubAgentResult` types.
+* `src/loop-reducer.ts`: `LOOP_CREATED` payload accepts the new fields; the reducer passes them through to the resulting entry.
+* `src/store.ts`: `create()` accepts the new fields; new `updateConfig()`, `accrueCost()`, `incrementFailures()`, `resetFailures()` methods.
+* `src/reducer-backed-store.ts`: `save()` is now `protected` (was `private`) so `LoopStore` can persist config updates.
+* `src/settings.ts`: new `LoopIsolation` type, `SubAgentSettings` interface, `DEFAULT_SUB_AGENT_SETTINGS` defaults, and `asSubAgentSettings()` parser; `PiLoopSettings` gains the `subAgent` field.
+* `src/commands/settings-command.ts`: settings TUI shows the `subAgent` block as a non-cycling summary (edit via direct JSON).
+* `src/runtime/loop-validation.ts`: new module — per-field validators for the new LoopEntry fields with explicit error messages.
+* `src/runtime/sub-agent/`: new sub-agent runtime. Modules: `spawn.ts` (cross-platform child-process spawn with two-stage kill), `result-store.ts` (atomic-write `result.json`), `result-watcher.ts` (in-flight iteration table, exit observation, parent-restart reconciliation), `cost-tracker.ts` (per-loop and per-session token / cost ledger with a model price table), `scheduler.ts` (gate: concurrency cap, iteration cap, budget cap, failure cap), `evaluator.ts` (regex match against `result.md` for success / failure criteria), `notification-formatter.ts` (one-line summary, tiered by priority), `index.ts` (`SubAgentRuntime` public surface, `resolveSubAgentScopeRoot` helper).
+* `src/index.ts`: wires the `SubAgentRuntime` into the trigger / scheduler / notification path. Sub-agent loop fires go through the runtime; in-process loop fires are unchanged. The runtime is re-created on session change; in-flight iterations are reconciled at startup.
+
+### Tests
+
+* `test/runtime/sub-agent/scheduler.test.ts` (7 tests): covers spawn, defer (concurrency cap), pause (iteration / budget / failure cap), ordering, and threshold edges.
+* `test/runtime/sub-agent/evaluator.test.ts` (8 tests): covers no-match, missing result.md, success match, failure match, failure-wins, no-criteria, invalid regex, case-insensitivity.
+* `test/runtime/sub-agent/result-store.test.ts` (5 tests): round-trip write / read, atomic write, missing iteration, sort order, prune.
+* `test/index.test.ts`: `LOOP_TOOLS` extended with `LoopInspect`; `LOOP_COMMANDS` extended with `loop-subagent`.
+* `test/settings-command.test.ts`: settings menu count updated from 12 (10 settings + Shared + Back) to 13 (11 settings + Shared + Back).
+
+### Quality gates
+
+* `npm run typecheck` clean.
+* `npm run lint` clean.
+* `npm test`: 1001 passed / 19 failed. The 19 failures are all pre-existing in `test/monitor-manager.test.ts` (Windows-specific `process.kill(pid, 'SIGTERM')` returns `EINVAL`; the same 19 fail on master without my changes) and unrelated to this PR.
+* `npm run build` clean (full `tsc`).
+
+### Out of scope (deferred to v2.5.2)
+
+* The `LoopInspect` tool's `iterId` parameter is accepted for API symmetry but the read is always the latest; full iteration history is in the on-disk result files.
+* TUI panel (FleetView-style `loops-sub-agent` belowEditor widget with live iteration progress).
+* `/loop-sub-agent-inspect`, `/loop-sub-agent-stop`, `/loop-cost` slash commands.
+* `pi-subagents` background-work provider bridge (`registerBackgroundWorkProvider`).
+* Capability ceiling auto-read from `pi-subagents` (`registerSubagentCapabilityCeiling`).
+* LLM-call evaluator (the v2.5 design has a `subAgent.useLlmEvaluator` setting; the v2.5.1 default is regex-only).
+
 ## 2.5.0 (2026-08-18)
 
 

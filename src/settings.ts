@@ -19,6 +19,52 @@ export type SortOrder = "id" | "status" | "recent" | "oldest";
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
 export type HiddenAt = "top" | "bottom";
 
+/**
+ * Per-execution-mode settings for sub-agent loops. All fields optional
+ * with safe defaults. See `docs/PRD/sub-agent.md` §11.
+ */
+export interface SubAgentSettings {
+  /** Default isolation for new loops created by /loop. /loop-subagent is always "sub-agent". */
+  defaultIsolation?: LoopIsolation;
+  /** Hard cap on concurrent in-flight sub-agent iterations in this session. Default 4, max 25. */
+  activeIterationsMax?: number;
+  /** Default wall-clock timeout for one iteration. Default 600,000 ms (10 min). */
+  defaultIterationTimeoutMs?: number;
+  /** Default per-iteration soft token budget. Default { in: 30,000, out: 6,000 }. */
+  defaultIterationTokenBudget?: { in: number; out: number };
+  /** Path to the pi binary used to spawn children. Default "pi". */
+  piBinary?: string;
+  /** Extra env vars to pass to the child. Default {}. */
+  envOverrides?: Record<string, string>;
+  /** Whether to register as a background-work provider if pi-subagents is present. Default true. */
+  registerBackgroundWorkProvider?: boolean;
+  /** Whether to honour pi-subagents' capability ceiling. Default true. */
+  honorCapabilityCeiling?: boolean;
+  /** Whether critical-priority sub-agent results always interrupt the parent. Default false. */
+  criticalInterruptsAll?: boolean;
+  /** Whether to show the cumulative sub-agent cost in the editor status line. Default true. */
+  showCostInStatusLine?: boolean;
+  /** Whether to use the optional LLM-call evaluator (stretch). Default false. */
+  useLlmEvaluator?: boolean;
+}
+
+/** Defaults for the subAgent settings block. Single source of truth. */
+export const DEFAULT_SUB_AGENT_SETTINGS: Required<Omit<SubAgentSettings, "envOverrides">> = {
+  defaultIsolation: "in-process",
+  activeIterationsMax: 4,
+  defaultIterationTimeoutMs: 600_000, // 10 min
+  defaultIterationTokenBudget: { in: 30_000, out: 6_000 },
+  piBinary: "pi",
+  registerBackgroundWorkProvider: true,
+  honorCapabilityCeiling: true,
+  criticalInterruptsAll: false,
+  showCostInStatusLine: true,
+  useLlmEvaluator: false,
+};
+
+/** Loop execution mode. "in-process" is the v2.x default; "sub-agent" spawns a child pi session. */
+export type LoopIsolation = "in-process" | "sub-agent";
+
 /** Age in ms before a notification of each priority is force-flushed. */
 export interface UrgentFlushThresholds {
   /** Defer-priority age (ms) before force-flush. Default: 24h — defer waits for all higher priority. */
@@ -61,6 +107,8 @@ export interface PiLoopSettings {
   taskThreshold: number;
   /** Priority-based aging thresholds for force-flushing queued notifications. */
   urgentFlushThresholds: UrgentFlushThresholds;
+  /** Sub-agent execution-mode settings (v2.5+). */
+  subAgent?: SubAgentSettings;
 }
 
 export const DEFAULT_SETTINGS: PiLoopSettings = {
@@ -79,6 +127,7 @@ export const DEFAULT_SETTINGS: PiLoopSettings = {
     urgent: 30_000,      // 30 seconds
     critical: 0,          // immediate
   },
+  subAgent: { ...DEFAULT_SUB_AGENT_SETTINGS, envOverrides: {} },
 };
 
 const CONFIG_DIR = ".pi";
@@ -95,6 +144,7 @@ const ALLOWED_KEYS = new Set<keyof PiLoopSettings | string>([
   "showAll",
   "taskThreshold",
   "urgentFlushThresholds",
+  "subAgent",
 ]);
 
 function resolveConfigPath(cwd: string): string {
@@ -162,6 +212,72 @@ function asUrgentFlushThresholds(value: unknown): UrgentFlushThresholds | undefi
   return { defer, normal, urgent, critical };
 }
 
+function asLoopIsolation(value: unknown): LoopIsolation | undefined {
+  return value === "in-process" || value === "sub-agent" ? value : undefined;
+}
+
+function asSubAgentSettings(value: unknown): SubAgentSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const obj = value as Record<string, unknown>;
+  const knownKeys = [
+    "defaultIsolation", "activeIterationsMax", "defaultIterationTimeoutMs",
+    "defaultIterationTokenBudget", "piBinary", "envOverrides",
+    "registerBackgroundWorkProvider", "honorCapabilityCeiling",
+    "criticalInterruptsAll", "showCostInStatusLine", "useLlmEvaluator",
+  ];
+  const unknownKeys = Object.keys(obj).filter((k) => !knownKeys.includes(k));
+  if (unknownKeys.length > 0) {
+    throw new Error(`Unknown pi-loop-settings.json subAgent key(s): ${unknownKeys.join(", ")}`);
+  }
+  const out: SubAgentSettings = {};
+  const iso = asLoopIsolation(obj.defaultIsolation);
+  if (iso !== undefined) out.defaultIsolation = iso;
+  const cap = asPositiveInt(obj.activeIterationsMax);
+  if (cap !== undefined) out.activeIterationsMax = cap;
+  const timeout = asPositiveInt(obj.defaultIterationTimeoutMs);
+  if (timeout !== undefined) out.defaultIterationTimeoutMs = timeout;
+  const budget = obj.defaultIterationTokenBudget;
+  if (budget && typeof budget === "object" && !Array.isArray(budget)) {
+    const b = budget as Record<string, unknown>;
+    const inn = asPositiveInt(b.in);
+    const outn = asPositiveInt(b.out);
+    if (inn !== undefined && outn !== undefined) {
+      out.defaultIterationTokenBudget = { in: inn, out: outn };
+    }
+  }
+  if (typeof obj.piBinary === "string" && obj.piBinary.trim().length > 0) {
+    out.piBinary = obj.piBinary;
+  }
+  if (obj.envOverrides && typeof obj.envOverrides === "object" && !Array.isArray(obj.envOverrides)) {
+    const eo: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj.envOverrides as Record<string, unknown>)) {
+      if (typeof v === "string") eo[k] = v;
+    }
+    out.envOverrides = eo;
+  }
+  if (obj.registerBackgroundWorkProvider !== undefined) {
+    const b = asBool(obj.registerBackgroundWorkProvider);
+    if (b !== undefined) out.registerBackgroundWorkProvider = b;
+  }
+  if (obj.honorCapabilityCeiling !== undefined) {
+    const b = asBool(obj.honorCapabilityCeiling);
+    if (b !== undefined) out.honorCapabilityCeiling = b;
+  }
+  if (obj.criticalInterruptsAll !== undefined) {
+    const b = asBool(obj.criticalInterruptsAll);
+    if (b !== undefined) out.criticalInterruptsAll = b;
+  }
+  if (obj.showCostInStatusLine !== undefined) {
+    const b = asBool(obj.showCostInStatusLine);
+    if (b !== undefined) out.showCostInStatusLine = b;
+  }
+  if (obj.useLlmEvaluator !== undefined) {
+    const b = asBool(obj.useLlmEvaluator);
+    if (b !== undefined) out.useLlmEvaluator = b;
+  }
+  return out;
+}
+
 /**
  * Parse raw JSON into a PiLoopSettings object. Rejects unknown keys
  * (strict schema). Returns defaults for missing or invalid fields.
@@ -196,6 +312,10 @@ export function parseSettings(raw: unknown): PiLoopSettings {
   if (taskThreshold !== undefined) next.taskThreshold = taskThreshold;
   const urgentFlushThresholds = asUrgentFlushThresholds(record.urgentFlushThresholds);
   if (urgentFlushThresholds !== undefined) next.urgentFlushThresholds = urgentFlushThresholds;
+  if (record.subAgent !== undefined) {
+    const sa = asSubAgentSettings(record.subAgent);
+    if (sa !== undefined) next.subAgent = { ...DEFAULT_SUB_AGENT_SETTINGS, ...next.subAgent, ...sa };
+  }
   return next;
 }
 
