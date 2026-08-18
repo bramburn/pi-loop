@@ -38,6 +38,23 @@ export class MonitorManager {
     this.onChange = cb;
   }
 
+  // Cross-platform child-process kill. On Windows, `subprocess.kill("SIGTERM")`
+  // and `subprocess.kill("SIGKILL")` both throw EINVAL — the only valid form
+  // is the no-arg call (which routes to TerminateProcess). On POSIX the named
+  // signals are honored. Wrapped in try/catch so a process that has already
+  // exited (or never spawned on a path-less dev box) doesn't propagate.
+  private killProc(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+    try {
+      if (process.platform === "win32") {
+        proc.kill();
+      } else {
+        proc.kill(signal);
+      }
+    } catch {
+      // already dead or signal unsupported on this platform — ignore
+    }
+  }
+
   private toReducerState(): MonitorReducerState {
     return {
       nextId: this.nextId,
@@ -259,11 +276,11 @@ export class MonitorManager {
       outputLines: bp.entry.outputLines,
     });
     this.schedulePrune(id);
-    bp.proc.kill("SIGTERM");
+    this.killProc(bp.proc, "SIGTERM");
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        try { bp.proc.kill("SIGKILL"); } catch { /* already dead */ }
+        this.killProc(bp.proc, "SIGKILL");
         resolve();
       }, 5000);
 
