@@ -3,18 +3,18 @@
  *
  * Tools (registered):
  *   LoopCreate    — Create a scheduled or event-triggered re-wake loop
- *   LoopUpdate    — Update progress for a dynamic loop
+ *   LoopUpdate    — Update progress for a dynamic loop or config (v2.5+)
  *   LoopPause     — Pause a loop by ID (soft halt; preserves the loop)
  *   LoopResume    — Resume a paused loop by ID
  *   LoopList      — List all active loops with status and next-fire times
  *   LoopDelete    — Delete a loop by ID
+ *   LoopInspect   — Inspect a sub-agent loop's latest iteration (v2.5+)
  *
  * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]
+ *   /loop-subagent — Create a sub-agent loop: /loop-subagent [interval] [prompt] [flags]
  *   /loop-resume  — Re-arm a stored loop by ID (or open the picker with no args)
  *   /loop-fire    — Fire a stored loop's prompt as a new user message into chat
- *                   (use when you want to manually trigger the prompt out-of-band
- *                    without advancing fireCount or emitting a loop:fire event)
  *
  * DISABLED (per upstream constraint): MonitorXxx, TaskXxx, /monitors, /tasks,
  * and workflow-tools remain unregistered. The MonitorManager class is still
@@ -25,9 +25,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
 import { registerLoopFireCommand } from "./commands/loop-fire-command.js";
+import { registerLoopSubAgentCommand } from "./commands/loop-subagent-command.js";
 import { registerSettingsCommand } from "./commands/settings-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { migrateV1ToV2 } from "./migration/v1-to-v2.js";
+import { migrateV2ToV25 } from "./migration/v2-to-v2.5.js";
 import { MonitorManager } from "./monitor-manager.js";
 import { BindingsStore } from "./runtime/bindings-store.js";
 import {
@@ -36,6 +38,7 @@ import {
 } from "./runtime/notification-runtime.js";
 import { type LoopScope, resolveBindingsPath, resolveLoopStorePath } from "./runtime/scope.js";
 import { registerSessionRuntimeHooks } from "./runtime/session-runtime.js";
+import { resolveSubAgentScopeRoot, SubAgentRuntime } from "./runtime/sub-agent/index.js";
 import { CronScheduler } from "./scheduler.js";
 import { loadSettings, type PiLoopSettings } from "./settings.js";
 import { LoopStore } from "./store.js";
@@ -57,6 +60,11 @@ function loadInitialSettings(): PiLoopSettings {
   const result = migrateV1ToV2(cwd, process.env);
   if (result.migrated && result.banner) {
     console.error(`[pi-loop] ${result.banner}`);
+  }
+  // v2.5: one-shot migration to add the subAgent settings block. Idempotent.
+  const v25 = migrateV2ToV25(cwd);
+  if (v25.changed) {
+    debug(`[pi-loop] v2.5 migration: ${v25.reason} (${v25.path})`);
   }
   return loadSettings(cwd);
 }
@@ -131,8 +139,54 @@ export default function (pi: ExtensionAPI) {
   let bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), _sessionId), loopScope, _sessionId);
   const widget = new LoopWidget(store, monitorManager);
 
-  scheduler = new CronScheduler(store, onLoopFire);
-  triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
+  scheduler = new CronScheduler(store, (entry) => { void onLoopFireAware(entry); });
+  triggerSystem = new TriggerSystem(pi, scheduler, store, (entry) => { void onLoopFireAware(entry); });
+
+  // ── Sub-agent runtime (v2.5+) ──
+  // Constructed once per session. Recreated on session change via
+  // recreateSessionStore below. The runtime owns the cost-tracker,
+  // result-store, and result-watcher; the trigger system / onLoopFire
+  // delegate to it for sub-agent loops.
+  let subAgentRuntime: SubAgentRuntime | undefined;
+
+  function enqueueSubAgentWake(loop: LoopEntry, message: string): void {
+    void notificationRuntime.queueOrDeliverNotification({
+      loopId: loop.id,
+      prompt: message,
+      trigger: loop.trigger,
+      timestamp: Date.now(),
+      readOnly: loop.readOnly,
+      recurring: loop.recurring,
+      priority: loop.priority ?? "normal",
+    } satisfies LoopFireEvent);
+  }
+
+  function initSubAgentRuntime(sessionId: string): SubAgentRuntime {
+    const scopeRoot = resolveSubAgentScopeRoot(process.cwd(), loopScope, sessionId);
+    return new SubAgentRuntime({
+      store,
+      settings: () => loadSettings(process.cwd()),
+      sessionId,
+      scopeRoot,
+      enqueueNotification: (n) => {
+        const loop = store.get(n.loopId);
+        if (!loop) return;
+        enqueueSubAgentWake(loop, n.preview);
+      },
+    });
+  }
+
+  subAgentRuntime = initSubAgentRuntime(_sessionId ?? "default");
+  // On startup, reconcile any in-flight iterations left over from a
+  // previous parent process. Marked as orphaned if stale.
+  try {
+    const r = subAgentRuntime.reconcile();
+    if (r.orphan > 0 || r.recovered > 0) {
+      debug(`[pi-loop] sub-agent reconcile: ${r.orphan} orphan, ${r.recovered} recovered`);
+    }
+  } catch (err) {
+    debug(`[pi-loop] sub-agent reconcile failed: ${(err as Error).message}`);
+  }
 
   // ── Task hooks (stubs) ──
   // pi-tasks / native task fallback is disabled in this build, but
@@ -198,6 +252,40 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  // The sub-agent-aware onLoopFire: for sub-agent loops, delegate to the
+  // runtime (which spawns a child, captures the result, and enqueues a
+  // notification). For in-process loops, fall through to the original
+  // behavior above.
+  async function onLoopFireAware(entry: LoopEntry): Promise<void> {
+    if (entry.isolation === "sub-agent" && subAgentRuntime) {
+      try {
+        const outcome = await subAgentRuntime.handleFire(entry);
+        if (outcome === "fired") {
+          // The runtime owns the result-write and notification-enqueue.
+          // We still need to mark the loop as "fired" in the store for
+          // fireCount tracking, refresh the widget, and emit a UI event.
+          // store.fire was already called in onLoopFire; nothing to do
+          // here for the store.
+          widget.setFiringStatus(entry.id, entry.prompt);
+          pi.events.emit("loop:sub-agent-fire", {
+            loopId: entry.id,
+            iterId: (entry.iterCount ?? 0) + 1,
+            timestamp: Date.now(),
+          });
+        } else {
+          // Deferred or paused — the runtime has already enqueued a
+          // notification. Nothing else to do.
+          debug(`loop #${entry.id} sub-agent ${outcome}`);
+        }
+      } catch (err) {
+        debug(`loop #${entry.id} sub-agent spawn failed: ${(err as Error).message}`);
+        enqueueSubAgentWake(entry, `Sub-agent loop #${entry.id} spawn failed: ${(err as Error).message}`);
+      }
+      return;
+    }
+    onLoopFire(entry);
+  }
+
   // ── Session lifecycle ──
 
   registerSessionRuntimeHooks({
@@ -208,9 +296,14 @@ export default function (pi: ExtensionAPI) {
       const path = resolveLoopStorePath(getScopeOptions(), sessionId);
       store = new LoopStore(path);
       widget.setStore(store);
-      scheduler = new CronScheduler(store, onLoopFire);
-      triggerSystem = new TriggerSystem(pi, scheduler, store, onLoopFire);
+      scheduler = new CronScheduler(store, (entry) => { void onLoopFireAware(entry); });
+      triggerSystem = new TriggerSystem(pi, scheduler, store, (entry) => { void onLoopFireAware(entry); });
       bindingsStore = new BindingsStore(resolveBindingsPath(getScopeOptions(), sessionId), loopScope, sessionId);
+      // Recreate the sub-agent runtime against the new session's scope root.
+      try {
+        subAgentRuntime?.onShutdown();
+      } catch { /* ignore */ }
+      subAgentRuntime = initSubAgentRuntime(sessionId);
     },
     clearAllLoops: () => {
       store.clearAll();
@@ -285,6 +378,12 @@ export default function (pi: ExtensionAPI) {
       refreshToolVisibility();
     },
     maybeBootstrapTaskLoop,
+  });
+
+  registerLoopSubAgentCommand({
+    pi,
+    getStore: () => store,
+    getTriggerSystem: () => triggerSystem,
   });
 
   registerLoopFireCommand({

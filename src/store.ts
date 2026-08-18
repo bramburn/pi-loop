@@ -2,7 +2,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { type LoopReducerEvent, type LoopReducerState, reduceLoopState } from "./loop-reducer.js";
 import { ReducerBackedStore } from "./reducer-backed-store.js";
-import type { DynamicLoopState, LoopDeletionTombstone, LoopDeletionTombstoneInput, LoopEntry, LoopPriority, LoopStoreData, Trigger, WorkflowDefinition, WorkflowTerminalStatus } from "./types.js";
+import type {
+  DynamicLoopState,
+  LoopDeletionTombstone,
+  LoopDeletionTombstoneInput,
+  LoopEntry,
+  LoopIsolation,
+  LoopPriority,
+  LoopStoreData,
+  LoopSubAgentConfig,
+  Trigger,
+  WorkflowDefinition,
+  WorkflowTerminalStatus,
+} from "./types.js";
 import { isTerminalWorkflowRun, transitionWorkflowRun, validateWorkflowDefinition, type WorkflowTransitionFailure, type WorkflowTransitionInput } from "./workflow-reducer.js";
 
 const LOOPS_DIR = join(homedir(), ".pi", "loops");
@@ -37,7 +49,7 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
     );
   }
 
-  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; priority?: LoopPriority; dynamic?: Partial<DynamicLoopState>; workflow?: WorkflowDefinition }): LoopEntry {
+  create(trigger: Trigger, prompt: string, opts: { recurring: boolean; autoTask?: boolean; taskBacklog?: boolean; readOnly?: boolean; maxFires?: number; priority?: LoopPriority; dynamic?: Partial<DynamicLoopState>; workflow?: WorkflowDefinition; isolation?: LoopIsolation; goal?: string; successCriteria?: string; failureCriteria?: string; stateFile?: string; subAgent?: LoopSubAgentConfig }): LoopEntry {
     return this.withLock(() => {
       if (this.entries.size >= MAX_LOOPS) {
         throw new Error(`Maximum of ${MAX_LOOPS} loops reached. Delete some before creating new ones.`);
@@ -64,9 +76,108 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
           priority: opts.priority,
           dynamic: opts.dynamic,
           workflow: opts.workflow,
+          isolation: opts.isolation,
+          goal: opts.goal,
+          successCriteria: opts.successCriteria,
+          failureCriteria: opts.failureCriteria,
+          stateFile: opts.stateFile,
+          subAgent: opts.subAgent,
         },
       });
       return this.entries.get(String(this.nextId - 1))!;
+    });
+  }
+
+  /**
+   * Update a loop's config fields (isolation, goal, success/failureCriteria,
+   * stateFile, subAgent). Used by LoopUpdate for non-dynamic loops and
+   * for runtime config tweaks (e.g. raising maxTokens).
+   *
+   * State fields (status, fireCount, cumulativeTokens, etc.) are NOT
+   * editable here — those go through the reducer events.
+   */
+  updateConfig(
+    id: string,
+    partial: {
+      isolation?: LoopIsolation;
+      goal?: string;
+      successCriteria?: string;
+      failureCriteria?: string;
+      stateFile?: string;
+      subAgent?: LoopSubAgentConfig;
+      maxFires?: number;
+      priority?: LoopPriority;
+    },
+  ): LoopEntry | undefined {
+    return this.withLock(() => {
+      const existing = this.entries.get(id);
+      if (!existing) return undefined;
+      const next: LoopEntry = {
+        ...existing,
+        updatedAt: Date.now(),
+      };
+      if (partial.isolation !== undefined) next.isolation = partial.isolation;
+      if (partial.goal !== undefined) next.goal = partial.goal;
+      if (partial.successCriteria !== undefined) next.successCriteria = partial.successCriteria;
+      if (partial.failureCriteria !== undefined) next.failureCriteria = partial.failureCriteria;
+      if (partial.stateFile !== undefined) next.stateFile = partial.stateFile;
+      if (partial.subAgent !== undefined) next.subAgent = partial.subAgent;
+      if (partial.maxFires !== undefined) next.maxFires = partial.maxFires;
+      if (partial.priority !== undefined) next.priority = partial.priority;
+      this.entries.set(id, next);
+      this.save();
+      return next;
+    });
+  }
+
+  /**
+   * Add to the loop's running token / cost ledger. Called by the sub-agent
+   * result-watcher on every finalized iteration. Returns the updated entry
+   * or undefined if the loop no longer exists.
+   */
+  accrueCost(id: string, tokens: number, costUsd: number): LoopEntry | undefined {
+    return this.withLock(() => {
+      const existing = this.entries.get(id);
+      if (!existing) return undefined;
+      const iterCount = (existing.iterCount ?? 0) + 1;
+      const cumulativeTokens = (existing.cumulativeTokens ?? 0) + tokens;
+      const cumulativeCostUsd = (existing.cumulativeCostUsd ?? 0) + costUsd;
+      const next: LoopEntry = { ...existing, iterCount, cumulativeTokens, cumulativeCostUsd, updatedAt: Date.now() };
+      this.entries.set(id, next);
+      this.save();
+      return next;
+    });
+  }
+
+  /**
+   * Increment the consecutive-failures counter. Returns the updated entry
+   * or undefined if the loop no longer exists.
+   */
+  incrementFailures(id: string): LoopEntry | undefined {
+    return this.withLock(() => {
+      const existing = this.entries.get(id);
+      if (!existing) return undefined;
+      const consecutiveFailures = (existing.consecutiveFailures ?? 0) + 1;
+      const next: LoopEntry = { ...existing, consecutiveFailures, updatedAt: Date.now() };
+      this.entries.set(id, next);
+      this.save();
+      return next;
+    });
+  }
+
+  /**
+   * Reset the consecutive-failures counter. Returns the updated entry or
+   * undefined if the loop no longer exists.
+   */
+  resetFailures(id: string): LoopEntry | undefined {
+    return this.withLock(() => {
+      const existing = this.entries.get(id);
+      if (!existing) return undefined;
+      if (existing.consecutiveFailures === 0) return existing;
+      const next: LoopEntry = { ...existing, consecutiveFailures: 0, updatedAt: Date.now() };
+      this.entries.set(id, next);
+      this.save();
+      return next;
     });
   }
 

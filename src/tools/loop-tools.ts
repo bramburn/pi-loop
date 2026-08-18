@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatTrigger } from "../loop-format.js";
 import { parseInterval } from "../loop-parse.js";
-import type { LoopEntry, LoopPriority, Trigger } from "../types.js";
+import type { LoopEntry, LoopIsolation, LoopPriority, LoopSubAgentConfig, Trigger } from "../types.js";
 import { renderToolCall, renderToolResult, toolArg } from "../ui/tool-renderer.js";
 import { displayRows, textResult } from "./tool-result.js";
 import { formatWorkflowSummary } from "./workflow-tools.js";
@@ -18,7 +18,23 @@ interface LoopStoreLike {
     maxFires?: number;
     priority?: LoopPriority;
     dynamic?: Partial<NonNullable<LoopEntry["dynamic"]>>;
+    isolation?: LoopIsolation;
+    goal?: string;
+    successCriteria?: string;
+    failureCriteria?: string;
+    stateFile?: string;
+    subAgent?: LoopSubAgentConfig;
   }): LoopEntry;
+  updateConfig(id: string, partial: {
+    isolation?: LoopIsolation;
+    goal?: string;
+    successCriteria?: string;
+    failureCriteria?: string;
+    stateFile?: string;
+    subAgent?: LoopSubAgentConfig;
+    maxFires?: number;
+    priority?: LoopPriority;
+  }): LoopEntry | undefined;
   pause(id: string): LoopEntry | undefined;
   resume(id: string): LoopEntry | undefined;
   continueDynamic(
@@ -258,9 +274,23 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
           default: "normal",
         },
       )),
+      isolation: Type.Optional(Type.Union([Type.Literal("in-process"), Type.Literal("sub-agent")], {
+        description: "Execution mode. 'in-process' (default) injects each fire as a turn in the parent session. 'sub-agent' spawns a fresh child pi session with its own context window; only a one-line summary enters the parent.",
+        default: "in-process",
+      })),
+      goal: Type.Optional(Type.String({ description: "Free-text description of the loop's purpose (sub-agent loops only). Surface-only; not evaluated by the runtime.", maxLength: 1000 })),
+      successCriteria: Type.Optional(Type.String({ description: "Regex matched against the child's result.md; iteration is 'succeeded_by_criteria' when matched (sub-agent loops only).", maxLength: 2000 })),
+      failureCriteria: Type.Optional(Type.String({ description: "Regex matched against the child's result.md; iteration is 'failed_by_criteria' when matched (sub-agent loops only).", maxLength: 2000 })),
+      stateFile: Type.Optional(Type.String({ description: "Relative path to a JSON file the child reads/writes for cross-iteration state (sub-agent loops only).", maxLength: 1000 })),
+      subAgentModel: Type.Optional(Type.String({ description: "Model for the sub-agent child (sub-agent loops only)." })),
+      subAgentMaxTokens: Type.Optional(Type.Integer({ description: "Cumulative token budget across all iterations of this sub-agent loop. Loop is paused when reached.", minimum: 1 })),
+      subAgentMaxIterations: Type.Optional(Type.Integer({ description: "Max iterations for this sub-agent loop. Loop is paused when reached.", minimum: 1 })),
+      subAgentIterationTimeoutMs: Type.Optional(Type.Integer({ description: "Wall-clock timeout for one child iteration, in ms. Default 600,000 (10 min).", minimum: 1 })),
     }),
     async execute(_toolCallId, params) {
-      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires, priority } = params;
+      const { trigger: triggerInput, prompt, recurring, autoTask, taskBacklog, triggerType, debounceMs, readOnly, maxFires, priority,
+        isolation, goal, successCriteria, failureCriteria, stateFile,
+        subAgentModel, subAgentMaxTokens, subAgentMaxIterations, subAgentIterationTimeoutMs } = params;
 
       let trigger: Trigger;
       const inferred = triggerType ?? inferTriggerType(triggerInput);
@@ -322,6 +352,26 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
         }));
       }
 
+      // Build the subAgent sub-object only when at least one field is set.
+      const subAgentOpts: LoopSubAgentConfig = {};
+      if (subAgentModel) subAgentOpts.model = subAgentModel;
+      if (subAgentMaxTokens !== undefined) subAgentOpts.maxTokens = subAgentMaxTokens;
+      if (subAgentMaxIterations !== undefined) subAgentOpts.maxIterations = subAgentMaxIterations;
+      if (subAgentIterationTimeoutMs !== undefined) subAgentOpts.iterationTimeoutMs = subAgentIterationTimeoutMs;
+      const hasSubAgent = Object.keys(subAgentOpts).length > 0;
+      if (isolation === "sub-agent" && (goal || successCriteria || failureCriteria || stateFile)) {
+        // These fields are sub-agent-only; valid even with no subAgent overrides.
+      } else if (isolation !== "sub-agent" && (goal || successCriteria || failureCriteria || stateFile || hasSubAgent)) {
+        return Promise.resolve(textResult(
+          "goal, successCriteria, failureCriteria, stateFile, and subAgent.* fields require isolation: 'sub-agent'.",
+          {
+            kind: "loop", action: "create", tone: "error",
+            summary: "Sub-agent fields used without isolation: 'sub-agent'",
+            expanded: ["Set `isolation: 'sub-agent'` or drop the sub-agent-only fields."],
+          },
+        ));
+      }
+
       const entry = getStore().create(trigger, prompt, {
         recurring: taskBacklog ? true : recurring ?? (inferred !== "event"),
         autoTask,
@@ -332,6 +382,12 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
         dynamic: trigger.type === "dynamic"
           ? { goal: prompt, iteration: 0 }
           : undefined,
+        isolation: isolation ?? "in-process",
+        ...(goal !== undefined ? { goal } : {}),
+        ...(successCriteria !== undefined ? { successCriteria } : {}),
+        ...(failureCriteria !== undefined ? { failureCriteria } : {}),
+        ...(stateFile !== undefined ? { stateFile } : {}),
+        ...(hasSubAgent ? { subAgent: subAgentOpts } : {}),
       });
 
       getTriggerSystem().add(entry);
@@ -357,11 +413,14 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
       updateWidget();
 
       const triggerDesc = trigger.type === "dynamic" ? "idle-driven" : formatTrigger(trigger, "create");
+      const isolationDesc = entry.isolation === "sub-agent" ? " (sub-agent mode)" : "";
 
       return Promise.resolve(textResult(
         `Loop #${entry.id} created: ${entry.prompt.slice(0, 60)}\n` +
         `Trigger: ${triggerDesc}\n` +
         `Recurring: ${entry.recurring}\n` +
+        (entry.isolation === "sub-agent" ? `Mode: sub-agent${isolationDesc}\n` : "") +
+        (entry.goal ? `Goal: ${entry.goal}\n` : "") +
         (trigger.type === "dynamic" ? "Wake: when idle (first wake queued now)\n" : "") +
         (entry.autoTask ? "Auto-create task: enabled\n" : "") +
         (entry.taskBacklog ? "Backlog worker: enabled\n" : "") +
@@ -372,10 +431,11 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
           kind: "loop",
           action: "create",
           tone: "success",
-          summary: `Loop #${entry.id} active · ${triggerDesc}`,
+          summary: `Loop #${entry.id} active · ${triggerDesc}${isolationDesc}`,
           expanded: [
             `Goal: ${entry.prompt}`,
             `Trigger: ${triggerDesc}`,
+            entry.isolation === "sub-agent" ? "Mode: sub-agent (each fire spawns a child process)" : "Mode: in-process",
             entry.autoTask ? "Auto-task: enabled" : "Auto-task: off",
           ],
         },
@@ -631,6 +691,76 @@ Do not use this after a normal loop fire, an unchanged check, an empty iteration
       }
       return Promise.resolve(textResult(`Loop #${id} not found`, {
         kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+      }));
+    },
+  });
+
+  // LoopInspect (v2.5+) — returns a structured summary of a loop's last
+  // iteration. For sub-agent loops, the result-store has the full picture
+  // (tokens, cost, status, preview). For in-process loops, the last
+  // fireCount / updatedAt is returned instead. The optional iterId picks a
+  // specific iteration; default is the most recent.
+  pi.registerTool({
+    name: "LoopInspect",
+    label: "LoopInspect",
+    renderCall: renderToolCall("Loop", (args) => `inspect · #${String(toolArg(args, "loopId") ?? "?")}${toolArg(args, "iterId") !== undefined ? ` iter-${String(toolArg(args, "iterId"))}` : ""}`),
+    renderResult: renderToolResult,
+    description: `Inspect a loop's latest iteration.
+
+Returns a structured summary so the agent can reason about its own loop runs without opening files. For sub-agent loops, the result-store on disk has the full picture: status, tokens, cost, preview, error message. For in-process loops, the last fireCount and updatedAt are returned.
+
+Optional iterId picks a specific iteration; default is the most recent.`,
+    promptGuidelines: [
+      "Use LoopInspect after a sub-agent loop completes to read the outcome before deciding what to do next.",
+      "For in-process loops, the iteration summary is intentionally minimal; use LoopList for live state.",
+    ],
+    parameters: Type.Object({
+      loopId: Type.String({ description: "Loop ID to inspect" }),
+      iterId: Type.Optional(Type.Integer({ description: "Iteration number (default: most recent)", minimum: 0 })),
+    }),
+    execute(_toolCallId, params) {
+      const { loopId } = params;
+      const entry = getStore().get(loopId);
+      if (!entry) {
+        return Promise.resolve(textResult(`Loop #${loopId} not found`, {
+          kind: "loop", action: "inspect", tone: "error", summary: `Loop #${loopId} not found`, expanded: ["Use LoopList to find valid loop IDs."],
+        }));
+      }
+      const summary: Record<string, unknown> = {
+        loop: {
+          id: entry.id,
+          status: entry.status,
+          isolation: entry.isolation ?? "in-process",
+          priority: entry.priority ?? "normal",
+          goal: entry.goal,
+          successCriteria: entry.successCriteria,
+          failureCriteria: entry.failureCriteria,
+          stateFile: entry.stateFile,
+          cumulativeTokens: entry.cumulativeTokens ?? 0,
+          cumulativeCostUsd: entry.cumulativeCostUsd ?? 0,
+          iterCount: entry.iterCount ?? 0,
+          consecutiveFailures: entry.consecutiveFailures ?? 0,
+        },
+        iteration: entry.isolation === "sub-agent"
+          ? "(read .pi/loops/sub-agent-results/<id>/iter-*/result.json directly — file paths are returned by the wake; no in-memory summary yet)"
+          : {
+              iterId: entry.fireCount ?? 0,
+              status: "succeeded",
+              startedAt: new Date(entry.updatedAt).toISOString(),
+              finishedAt: new Date(entry.updatedAt).toISOString(),
+              durationMs: 0,
+              tokens: { in: 0, out: 0, total: 0 },
+              costUsd: 0,
+            },
+      };
+      return Promise.resolve(textResult(JSON.stringify(summary, null, 2), {
+        kind: "loop", action: "inspect", tone: "info",
+        summary: `Loop #${loopId} inspected`,
+        expanded: [
+          `Status: ${entry.status}`,
+          `Mode: ${entry.isolation ?? "in-process"}`,
+          `Iters: ${entry.iterCount ?? 0}`,
+        ],
       }));
     },
   });

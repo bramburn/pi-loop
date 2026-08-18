@@ -282,7 +282,7 @@ describe("/loop-settings command", () => {
     });
     await pi.handler!("", { ui });
     expect(observedOptions).toBeDefined();
-    expect(observedOptions!.length).toBe(12); // 10 settings + Shared loops sub-screen entry + < Back
+    expect(observedOptions!.length).toBe(13); // 11 settings + Shared loops sub-screen entry + < Back
     expect(observedOptions!).toContain("Loop storage: project");
     expect(observedOptions!).toContain("Task storage: session");
     expect(observedOptions!).toContain("Debug logging: false");
