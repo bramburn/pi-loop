@@ -1,14 +1,26 @@
 # PRD — `pi-loop` sub-agent execution model
 
-> **Status:** Draft (research complete, implementation not started)
+> **Status:** Draft v2 (research + decision rounds complete, implementation not started)
 > **Branch:** `pi-subagent`
 > **Author:** Mavis (research agent) on behalf of `@bramburn`
 > **Date:** 2026-08-18
 > **Word target:** 12k–18k words
+>
+> **Amendments from decision rounds (2026-08-18, applied to this v2):**
+> - **Dropped `role` field entirely.** No built-in roles. Users write the role description into the loop's `prompt` themselves. The `LoopSubAgentConfig` type is gone.
+> - **Default toolset: full surface, no `subagent` tool.** A sub-agent loop iteration gets every tool the parent has, plus all skills, with the `subagent` tool explicitly denied (so the child cannot recursively spawn).
+> - **All new loop fields are optional.** `goal`, `successCriteria`, `failureCriteria`, `stateFile` are all optional; the runtime is permissive. No required-for-sub-agent field.
+> - **New `/loop-subagent` parallel slash command.** A new sub-command parallel to `/loop` that creates a sub-agent loop. Same `<interval> <prompt>` form, plus the new flags. The `--isolation` flag is no longer the recommended way to opt in; the slash command is.
+> - **No global cost ceiling.** Per-loop `subAgent.maxTokens` is the only token gate. The session-level `costCeilingUsd` setting is gone.
+>
+> The detailed amendment notes (what was kept, what was dropped, and why) are in Appendix D at the end of this document. The companion spec sheets in `docs/PRD/sub-agent-specs.xlsx` reflect these decisions; this PRD has been brought into alignment.
+>
 > **Companion artefacts:**
 > - Vendored reference clone: `research-wt/pi-subagents/` (read-only)
 > - Perplexity research notes: `research-wt/notes/research-perplexity-{1..5}.md`
-> - Architecture decision records that this PRD proposes to author or amend: `docs/plan/ADR-006-sub-agent-execution.md` (new), `docs/plan/ADR-005-priority-queue.md` (amend)
+> - Decision matrices: `docs/PRD/sub-agent-questions.xlsx` (round 1, 18 questions), `docs/PRD/sub-agent-questions-r2.xlsx` (round 2, 4 follow-ups)
+> - Spec sheets: `docs/PRD/sub-agent-specs.xlsx` (7 sheets, 55 implementation requirements)
+> - Architecture decision records this PRD proposes to author or amend: `docs/plan/ADR-006-sub-agent-execution.md` (new), `docs/plan/ADR-005-priority-queue.md` (amend)
 
 ---
 
@@ -22,13 +34,15 @@ The reference implementation we are studying — `pi-subagents` v0.50.0 — alre
 
 The net effect for the user:
 
-- A `/loop` row can be tagged `isolation: "sub-agent"`. The next time it fires, the parent session is not woken — instead a child session is spawned, the loop's prompt runs there, and the parent only sees a one-line summary when it next becomes idle.
+- A new `/loop-subagent <interval> <prompt>` slash command (parallel to `/loop`) creates a sub-agent loop. The next time it fires, the parent session is not woken — instead a child session is spawned, the loop's prompt runs there, and the parent only sees a one-line summary when it next becomes idle.
+- A sub-agent iteration's child session has the full tool surface the parent has, plus all skills, with the `subagent` tool explicitly denied (so the child cannot recursively spawn). Users who want a more restricted child can set `subAgent.tools` per-loop.
 - Sub-agent runs survive process restarts: the child session is durable on disk, the result is durable, and the parent's pending notifications are durable.
 - A new sub-agent TUI panel (modeled on `pi-subagents` FleetView) shows live progress for all active sub-agent loops, separate from the existing `LoopWidget`.
-- Per-loop cost ceilings (token budget, max iteration count, max wall-clock duration) are enforced before the child spawns and observed while it runs.
-- The existing `isolation: "memory" | "session" | "project"` scoping on `LoopEntry` keeps working — sub-agent mode is orthogonal to scope, and a loop can be `scope: "project"` AND `isolation: "sub-agent"`.
+- Per-loop token budgets, iteration caps, and wall-clock timeouts are enforced before the child spawns and observed while it runs. There is no global cost ceiling (per-loop `subAgent.maxTokens` is the only token gate).
+- Optional `goal`, `successCriteria`, `failureCriteria`, and `stateFile` fields let a user describe the loop's purpose, what counts as success / failure, and a small JSON file the child reads/writes for cross-iteration state. All four are optional; the runtime is permissive when they're missing.
+- The existing `loopScope: "memory" | "session" | "project"` setting on `LoopEntry` keeps working — sub-agent mode is orthogonal to scope, and a loop can be `scope: "project"` AND `isolation: "sub-agent"`.
 
-The non-goals are equally important: this PRD does **not** try to replace `pi-subagents`, does not implement a workflow engine, does not invent a new language for chained agents, and does not force every loop into sub-agent mode. It is an opt-in execution mode for loops that need their own context window.
+The non-goals are equally important: this PRD does **not** try to replace `pi-subagents`, does not implement a workflow engine, does not invent a new language for chained agents, does not ship a built-in `role` taxonomy (the user writes the role description into the loop's `prompt` themselves), and does not force every loop into sub-agent mode. It is an opt-in execution mode for loops that need their own context window.
 
 ---
 
@@ -97,14 +111,15 @@ A reasonable first reaction: why not just delegate sub-agent work to `pi-subagen
 
 ### 3.1 Goals
 
-- **G1.** A loop in `pi-loop` can be tagged with an `isolation` mode of `"sub-agent"` and have each fire run in a fresh child session with its own context window.
+- **G1.** A new `/loop-subagent <interval> <prompt>` slash command (parallel to `/loop`) creates a loop whose fires run in a fresh child session with its own context window. The loop is tagged with `isolation: "sub-agent"` in the store. The existing `/loop` command can also create a sub-agent loop via an `--isolation sub-agent` flag for users who prefer the flag form.
 - **G2.** A sub-agent iteration's intermediate tool calls, model reasoning, and bash transcripts **never** enter the parent session's context window. Only a one-line summary does.
 - **G3.** A sub-agent iteration that runs longer than the parent process is alive (parent process restart, parent crash, machine sleep) **resumes** when the parent restarts and reports its result into the parent when the parent next becomes idle.
 - **G4.** A loop in sub-agent mode is bounded by: a maximum number of active concurrent iterations across all sub-agent loops, a per-loop maximum iterations, a per-loop token budget, and a per-iteration wall-clock timeout.
 - **G5.** The parent agent can see live progress for all active sub-agent iterations in a new TUI panel (FleetView-style) without leaving the editor.
 - **G6.** Sub-agent runs are inspectable: a slash command lets the user open the child session file, the result file, the cost report, or the prompt that was sent.
 - **G7.** Sub-agent mode is opt-in. A loop with no `isolation` field behaves exactly as in v2.x. Migration is a no-op for existing loops.
-- **G8.** When `pi-subagents` is installed and the user wants richer orchestration (parallel reviewers, mission-level goal driver, multi-agent workflows), `/loop` can delegate to a workflowScript via a thin shim and share the same result-watcher and notification plumbing. This is not a v3 feature; it is a v2.5 stretch.
+- **G8.** Optional `goal`, `successCriteria`, `failureCriteria`, and `stateFile` fields on `LoopEntry` let a user describe the loop's purpose and what counts as success / failure, and let the child read/write a small JSON file across iterations. All four are optional; the runtime is permissive when they're missing.
+- **G9.** When `pi-subagents` is installed and the user wants richer orchestration (parallel reviewers, mission-level goal driver, multi-agent workflows), the bridge registers `pi-loop`'s sub-agent iterations as a `BackgroundWorkProvider` so they appear in `/subagents-fleet` and `subagent_wait`. This is opt-in via the `subAgent.registerBackgroundWorkProvider` setting (default true).
 
 ### 3.2 Non-goals
 
@@ -118,13 +133,16 @@ A reasonable first reaction: why not just delegate sub-agent work to `pi-subagen
 
 ### 3.3 Success criteria
 
-- A `LoopCreate({ prompt, trigger, isolation: "sub-agent" })` followed by a process restart mid-iteration correctly reports the iteration's outcome to the parent on next idle.
+- A `/loop-subagent weekly monday 09:00 "Survey the changelog"` followed by a process restart mid-iteration correctly reports the iteration's outcome to the parent on next idle.
 - Running 10 concurrent sub-agent loops with overlapping triggers never exceeds the configured active-iteration cap (default 4).
 - A sub-agent loop that exceeds its per-iteration wall-clock timeout (default 10 min) is killed, the result is marked `failed` with reason `timeout`, and a `priority: "urgent"` notification is delivered.
+- A sub-agent iteration that completes successfully within budget surfaces a one-line summary (200 chars for normal/urgent/defer; up to 1 KiB for critical) on the parent's next idle; the intermediate tool calls stay in the child's session file.
+- A sub-agent loop with `successCriteria` set transitions to `status: "completed"` when the criteria match (or when `subAgent.maxIterations` is reached), whichever comes first. A loop without `successCriteria` never auto-completes.
 - A user issuing `LoopList` while 3 sub-agent loops are running sees each loop's active iteration count, last result status, and cumulative tokens, in addition to the existing loop metadata.
 - A user issuing `/loop-sub-agent-inspect <loopId>` opens the child session file in their `$PAGER` with a header showing the prompt, the cost, and the wall-clock duration.
 - Existing v2.x tests pass unchanged. New tests cover the new code paths and the failure modes.
 - The above on Windows. The architecture must not require POSIX-only primitives.
+- With `pi-subagents` installed, sub-agent iterations appear in `/subagents-fleet` and `subagent_wait`; without it, no behaviour change.
 
 ---
 
@@ -147,22 +165,24 @@ A reasonable first reaction: why not just delegate sub-agent work to `pi-subagen
 `@bramburn` runs:
 
 ```
-/loop weekly, monday 09:00, prompt: "Survey the .pi/ extension changelog and produce a 1-page digest of new features", isolation: sub-agent, model: sonnet, maxTokens: 30000
+/loop-subagent weekly monday 09:00 "Survey the .pi/ extension changelog and produce a 1-page digest of new features" --goal "weekly changelog digest" --success-criteria "the result.md contains a 'New features' section with at least 3 entries" --max-tokens 30000 --model sonnet
 ```
 
 Behaviour:
 
+- The handler creates a `LoopEntry` with `isolation: "sub-agent"`, `goal: "weekly changelog digest"`, `successCriteria: "..."`, `subAgent: { model: "sonnet", maxTokens: 30000 }`.
 - The loop fires every Monday at 09:00 (in `loopScope: "project"`, the trigger re-arms on process restart).
-- At fire time, `pi-loop` spawns a child pi process: `pi --session-file .pi/loops/sub-agent-results/3/iter-42/session.jsonl --prompt "..." --model sonnet --tools read,grep,find,ls,edit,write,bash`.
+- At fire time, `pi-loop` spawns a child pi process: `pi --session-file .pi/loops/sub-agent-results/3/iter-42/session.jsonl --prompt @.pi/loops/sub-agent-results/3/iter-42/prompt.txt --model sonnet --non-interactive --no-extensions`. The child gets the parent's full tool surface (read, grep, find, ls, edit, write, bash) minus the `subagent` tool.
 - The child reads the changelog directory, drafts a 1-page digest, writes the digest to `.pi/loops/sub-agent-results/3/iter-42/result.md`, and exits.
-- The child writes a `result.json` with `{ status: "succeeded", tokens: { in: 11200, out: 1840 }, durationMs: 720400, costUsd: 0.18, artifactPath: "result.md" }`.
-- The parent queue adds a `priority: "normal"` notification tagged with loop id `3`, iteration `42`, the result path, and a one-line summary.
+- The parent reads the child's session file tail and writes `result.json` with `{ status: "succeeded", tokens: { in: 11200, out: 1840 }, durationMs: 720400, costUsd: 0.18, resultPath: "result.md" }`.
+- The parent applies the `successCriteria` regex against `result.md`; the result matches, so the iteration is marked `succeeded-by-criteria` and the loop is now eligible for `status: "completed"` (it will complete when the cap is hit or on the next `agent_end`, whichever is configured).
+- The parent queue adds a `priority: "normal"` notification tagged with loop id `3`, iteration `42`, the result path, and a one-line summary: `Sub-agent loop #3 iter-42 done in 12m · sonnet · 13,040 tok · succeeded. See \`result.md\`.`
 - On the parent's next `agent_end`, the parent sees the notification, reads `result.md` if it wants, and announces the digest.
 - The parent's conversation history shows *one* line per weekly iteration, not the 11k tokens of intermediate work.
 
 #### UC-2: a long-running monitor survives a parent crash
 
-A loop with `trigger: "cron: */2 * * * *", isolation: "sub-agent", maxIterations: 720` is running on `@bramburn`'s server. At 03:14 UTC the parent process is killed (machine sleep, OOM, or `Stop-Process`). At 07:00 UTC the parent restarts.
+A loop with `trigger: "cron: */2 * * * *"`, `isolation: "sub-agent"`, `subAgent.maxIterations: 720` is running on `@bramburn`'s server. At 03:14 UTC the parent process is killed (machine sleep, OOM, or `Stop-Process`). At 07:00 UTC the parent restarts.
 
 Behaviour on restart:
 
@@ -180,15 +200,16 @@ A user is curious what loop #4 actually did in its last iteration. They run `/lo
 
 ```
 Loop #4 — "Audit migration patterns"
-  Last iteration: 128, status: succeeded
+  Goal: ensure no audit regressions land
+  Last iteration: 128, status: succeeded-by-criteria
   Started: 2026-08-18 09:00:00
   Duration: 12m 04s
   Tokens: in=14221, out=3108, total=17329
   Cost: $0.214
-  Prompt sent: /tmp/.../prompt.txt (484 chars)
+  Prompt sent: .pi/loops/sub-agent-results/4/iter-128/prompt.txt (484 chars)
   Result: .pi/loops/sub-agent-results/4/iter-128/result.md
   Child session: .pi/loops/sub-agent-results/4/iter-128/session.jsonl
-  
+
 [ Open result ]  [ Open session ]  [ Open prompt ]  [ Back ]
 ```
 
@@ -196,11 +217,34 @@ Selecting `Open result` shells out to `$PAGER` (or `code` on Windows) with the r
 
 #### UC-4: a budget-exhausted loop pauses itself
 
-A loop with `maxTokens: 100000` runs in sub-agent mode and has consumed 100,142 tokens over 8 iterations. The 9th iteration is about to start, but the budget check in `SubAgentRunScheduler` blocks the spawn and emits a `priority: "urgent"` notification: "Loop #5 budget exhausted (100,142/100,000 tokens used). Iteration 9 deferred until budget is raised. Use `LoopUpdate({ maxTokens: 200000 })` to resume." The loop is marked `status: "paused_budget"` in the store. The agent, on its next idle, sees the urgent notification, decides whether to raise the budget or delete the loop, and acts.
+A loop with `subAgent.maxTokens: 100000` runs in sub-agent mode and has consumed 100,142 tokens over 8 iterations. The 9th iteration is about to start, but the budget check in the scheduler blocks the spawn and emits a `priority: "urgent"` notification: "Loop #5 budget exhausted (100,142/100,000 tokens used). Iteration 9 deferred until budget is raised. Use `LoopUpdate({ subAgent: { maxTokens: 200000 } })` to resume." The loop is marked `status: "paused_budget"` in the store. The agent, on its next idle, sees the urgent notification, decides whether to raise the budget or delete the loop, and acts.
 
 #### UC-5: a watchdog loop uses `critical` priority to surface security-relevant findings
 
-A loop with `trigger: "event: tool_execution_start, filter: regex:auth|password|secret", isolation: "sub-agent", priority: "critical"` watches every tool execution. When the filter matches, the loop fires; the spawn is allowed to interrupt the parent's currently-running turn; the child summarizes the tool call in 1–2 sentences and writes a "possible secret leak" result; the parent's `REQUEST_URGENT_FLUSH` dispatches the result immediately (because the loop is `critical`); the parent agent reads the result on the next beat, alerts the user, and the user decides what to do. The full transcript of the child stays in the child's session file; the parent context shows one line.
+A loop with `trigger: "event: tool_execution_start, filter: regex:auth|password|secret"`, `isolation: "sub-agent"`, `priority: "critical"` watches every tool execution. When the filter matches, the loop fires; the spawn is allowed to interrupt the parent's currently-running turn (provided the parent is not itself in a loop wake); the child summarizes the tool call in 1–2 sentences and writes a "possible secret leak" result; the parent's `REQUEST_URGENT_FLUSH` dispatches the result immediately (because the loop is `critical`); the parent agent reads the result on the next beat, alerts the user, and the user decides what to do. The full transcript of the child stays in the child's session file; the parent context shows one line.
+
+#### UC-6: a generic loop with no role, no criteria, no state file
+
+A user creates the simplest possible sub-agent loop:
+
+```
+/loop-subagent every 30m "Check the GitHub API for new issues labelled 'priority: high' on the upstream repo, list the titles."
+```
+
+The loop has no `goal`, no `successCriteria`, no `failureCriteria`, no `stateFile`. It just runs the prompt every 30 minutes. The child gets the full tool surface, runs to completion, and writes `result.md`. The parent sees a one-line summary and the `result.md` path. The loop never auto-completes (no `successCriteria`), never pauses (no `failureCriteria` or `maxTokens`), and the parent has no state to read between iterations. This is the lowest-friction entry point: a sub-agent loop is just a `/loop` that runs in a child process with its own context window.
+
+#### UC-7: a loop that maintains state across iterations
+
+A user creates a loop that tracks which files it has audited:
+
+```
+/loop-subagent every 6h "Audit one untested file from src/. Mark it as done in the state file." \
+  --state-file .pi/loops/3/audit-state.json \
+  --max-iterations 50 \
+  --success-criteria "the state file lists all files in src/"
+```
+
+The child reads the state file at the start of each iteration, picks the next untested file, audits it, and writes the file's name back to the state file. The state file is locked while the child runs; the parent takes the lock after a 5s stale threshold. When the state file lists all `src/` files, the loop's `successCriteria` matches and the loop auto-completes.
 
 ---
 
@@ -326,6 +370,8 @@ The full result file is referenced, not inlined.
 
 ```ts
 // src/types.ts (additions, not replacements)
+// All new fields are OPTIONAL. Missing means "use the default".
+// Backwards-compatible: existing v2.x loops load unchanged.
 
 export type LoopIsolation =
   | "in-process"   // v2.x default; wake is a turn in the parent session
@@ -336,7 +382,11 @@ export interface LoopSubAgentConfig {
   model?: string;
   /** Thinking level for the child. Omit to inherit. */
   thinking?: "off" | "low" | "medium" | "high";
-  /** Tool allowlist for the child. Omit to use the loop's `tools`, then the parent default. */
+  /**
+   * Tool allowlist for the child. Omit to use the parent's full tool surface
+   * MINUS the `subagent` tool (which is always denied, to prevent recursion).
+   * Use this field to restrict the child to a smaller toolset.
+   */
   tools?: readonly string[];
   /** Wall-clock timeout for one iteration. Default 10 min. */
   iterationTimeoutMs?: number;
@@ -352,16 +402,27 @@ export interface LoopSubAgentConfig {
   syncGit?: boolean;
   /** Tags the child's session file with a label for FleetView. */
   label?: string;
+  /** How many iterations to keep on disk before pruning. Default 50. */
+  retainIterations?: number;
 }
 
 export interface LoopEntry {
   // ... existing fields ...
   isolation?: LoopIsolation;             // default "in-process"
+
+  // Optional self-description fields. All four are independent; any
+  // combination is allowed. The runtime is permissive when they're missing.
+  goal?: string;                        // the loop's purpose; documentation, not evaluated
+  successCriteria?: string;             // regex matched against result.md
+  failureCriteria?: string;             // regex matched against result.md
+  stateFile?: string;                   // path to a JSON file the child reads/writes
   subAgent?: LoopSubAgentConfig;         // only meaningful when isolation === "sub-agent"
 }
 ```
 
-The `isolation` and `subAgent` fields are entirely optional. Existing loops loaded from `.pi/loops/loops.json` without these fields default to `isolation: "in-process"`, exactly matching v2.x behaviour.
+The new fields are entirely optional. Existing loops loaded from `.pi/loops/loops.json` without these fields default to `isolation: "in-process"`, exactly matching v2.x behaviour. New loops with no `goal` / `successCriteria` / `failureCriteria` / `stateFile` are valid; the runtime treats their absence as "no special behaviour".
+
+There is **no `role` field.** Round 2 decision R2-3 (user chose A: no built-in roles) means users write the role description inline in the loop's `prompt` ("You are a code reviewer. Review the diff..."). The `LoopSubAgentConfig` interface has no `role` field, no role-driven tool allowlist, and no role registry. If a user wants `pi-subagents`-style roles, they install `pi-subagents` and use its vocabulary directly; pi-loop's sub-agent mode is generic by design.
 
 ### 6.2 Why "in-process" is the default
 
@@ -370,29 +431,53 @@ The default is `in-process` for two reasons:
 1. **Compatibility.** Every existing v2.x loop continues to work. The migration is a no-op.
 2. **Footprint.** Sub-agent execution spawns a child process per fire. A user with 25 loops firing every 5 minutes would see 7,200 child-process spawns per day. That is fine, but the user must opt in to the cost.
 
-A future setting `subAgent: { defaultIsolation: "sub-agent" }` could flip the default. This PRD does not ship that; it leaves the door open.
+A future setting `subAgent.defaultIsolation: "sub-agent"` could flip the default. This PRD does not ship that; it leaves the door open.
 
 ### 6.3 The sub-agent `LoopCreate` schema
 
-The existing `LoopCreate` tool gains a new optional object:
+The existing `LoopCreate` tool gains the new optional fields. The new `/loop-subagent` slash command is a thin wrapper that calls `LoopCreate({ isolation: "sub-agent", ... })`:
 
 ```ts
 LoopCreate({
   prompt: string;
   trigger: LoopTrigger;
-  isolation?: "in-process" | "sub-agent";
+  isolation?: "in-process" | "sub-agent";   // default "in-process"
+  goal?: string;
+  successCriteria?: string;
+  failureCriteria?: string;
+  stateFile?: string;
   subAgent?: LoopSubAgentConfig;
   // ... existing fields (priority, recurring, maxFires, readOnly, autoTask)
 })
 ```
 
-When the user runs `/loop` interactively, the cyclic field form in `loop-edit-command.ts` grows by two fields: `isolation` (cycles `in-process` → `sub-agent` → `in-process`) and `sub-agent config` (a sub-form with model / thinking / tools / timeouts). The form is intentionally minimal — most users will set `isolation` and leave the rest as defaults.
+When the user runs `/loop` interactively, the cyclic field form in `loop-edit-command.ts` grows by three new fields: `isolation` (cycles `in-process` → `sub-agent` → `in-process`), `goal` (text input, defaults to empty), and `success-criteria` (text input, defaults to empty). The form is intentionally minimal — most users will use `/loop-subagent` and skip the cyclic form entirely.
 
-### 6.4 Trigger semantics are unchanged
+### 6.4 The `/loop-subagent` slash command
+
+A new slash command parallel to `/loop` that always creates a sub-agent loop. Same form as `/loop` plus the new flags:
+
+```
+/loop-subagent <interval> <prompt>
+                [--goal <text>]
+                [--success-criteria <text>]
+                [--failure-criteria <text>]
+                [--state-file <path>]
+                [--model <name>]
+                [--max-tokens <n>]
+                [--max-iterations <n>]
+                [--iteration-timeout <ms>]
+```
+
+The handler is `src/commands/loop-subagent-command.ts`. It parses the args, validates them, and calls `LoopCreate({ isolation: "sub-agent", ...args })`. The internal `LoopCreate` schema is the source of truth; the slash command is a thin wrapper that sets `isolation: "sub-agent"` and forwards the rest.
+
+The existing `/loop` command is unchanged but accepts `--isolation sub-agent` for users who prefer the flag form. The two commands are equivalent for sub-agent creation; `/loop-subagent` is the recommended form because it makes the intent explicit at the command line.
+
+### 6.5 Trigger semantics are unchanged
 
 A sub-agent loop's `trigger` is identical to a v2.x loop's trigger: cron, event, or hybrid. The trigger fires the same `onLoopFire()` callback. The only difference is the body of the callback.
 
-A subtle implication: a sub-agent loop's "self-paced" mode (no trigger interval) also works. The user runs `/loop prompt` and the loop fires once. In sub-agent mode, that one fire spawns a child to run the prompt. When the child finishes, the parent is notified. The agent then decides whether to fire another iteration by calling `LoopCreate` again.
+A subtle implication: a sub-agent loop's "self-paced" mode (no trigger interval) also works. The user runs `/loop-subagent prompt` and the loop fires once. In sub-agent mode, that one fire spawns a child to run the prompt. When the child finishes, the parent is notified. The agent then decides whether to fire another iteration by calling `LoopCreate` again.
 
 ---
 
@@ -404,8 +489,8 @@ The child pi session has:
 
 - A **fresh session file** at `.pi/loops/sub-agent-results/<loopId>/iter-<N>/session.jsonl`. The session file is created empty at iteration start; only the child's turns go into it.
 - **No access to the parent's session file.** The child process is invoked with `--session-file <child-path>`; the parent process does not pass the parent's session file.
-- **No `pi-loop` extension loaded.** The child is a plain pi session. It does not know the loop exists. It only sees its `--prompt` argument and the model / tools / cwd configuration.
-- **No inherited tool registry.** The child gets the tool allowlist from `subAgent.tools` if set, otherwise a sensible default (read, grep, find, ls, edit, write, bash with bounded timeouts).
+- **No `pi-loop` extension loaded.** The child is a plain pi session started with `--no-extensions`. It does not know the loop exists; it does not know it is a sub-agent. It only sees its `--prompt` argument and the model / tools / cwd configuration.
+- **Default tool surface: full, minus `subagent`.** The child inherits every tool the parent has, plus all skills, with the `subagent` tool explicitly denied. This is round-2 decision R2-2 (user chose A: full surface, no `subagent` tool) combined with round-1 decision D8 (recursion guard: `--no-extensions` + deny `subagent`). Users who want a smaller toolset set `subAgent.tools: [...]` per-loop; that allowlist replaces the default.
 
 The conversation history visible to the model inside the child is therefore bounded to:
 
@@ -722,7 +807,7 @@ When the cap is reached, the next fire is enqueued as a `defer` notification wit
 
 A loop with `subAgent.maxIterations: 100` stops firing after 100 iterations. The cap is enforced by the scheduler before spawn. When the cap is hit, the loop is marked `status: "paused_cap"` and a `priority: "urgent"` notification is delivered.
 
-### 10.3 Per-loop token budget
+### 10.3 Per-loop token budget (the only token gate)
 
 A loop with `subAgent.maxTokens: 1_000_000` has a cumulative token budget across all iterations. The `costTracker` ledger is the source of truth. When `cumulativeTokens >= maxTokens`, the next iteration is deferred; the loop is marked `status: "paused_budget"`.
 
@@ -734,6 +819,8 @@ LoopUpdate({ id: "4", subAgent: { maxTokens: 2_000_000 } })
 
 The new budget takes effect on the next iteration.
 
+**There is no global cost ceiling.** Round 1 decision D13 (user chose A: no global ceiling). The user's reasoning: per-loop `maxTokens` is enough, and the user's preference is for self-describing loops (via `goal`, `successCriteria`, `failureCriteria`) rather than a hard session-wide stop. The cost-tracker still records cumulative cost per session (for the cost report), but it does not gate spawning.
+
 ### 10.4 Per-iteration wall-clock timeout
 
 A loop with `subAgent.iterationTimeoutMs: 600_000` (10 min) has each child killed at 10 minutes. The child receives SIGTERM at T-30s and SIGKILL at T. The default is 600,000 ms; the cap is 24 * 60 * 60 * 1000 (24 h).
@@ -744,7 +831,7 @@ A loop with `subAgent.iterationTimeoutMs: 600_000` (10 min) has each child kille
 
 - Per-iteration: `{ in, out, total, costUsd, durationMs }` from the child's session file.
 - Per-loop: `cumulativeTokens`, `cumulativeCostUsd`, `iterationsCompleted`, `iterationsFailed`, `lastSuccessAt`, `lastFailureAt`.
-- Per-session: aggregate of all sub-agent loops' cumulative cost.
+- Per-session: aggregate of all sub-agent loops' cumulative cost. Reported via `/loop-cost`; not used as a gate.
 
 A new `/loop-cost` slash command shows the per-loop and per-session report. (The `sub-agent/cost-tracker.ts` module exposes a JSON-shaped report; the slash command is a thin wrapper.)
 
@@ -802,7 +889,7 @@ The unified settings file (`.pi/pi-loop-settings.json` per v2.0) gains a new top
 interface PiLoopSettings {
   // ... existing fields ...
   subAgent: {
-    /** Default isolation for new loops. "in-process" preserves v2.x behaviour. */
+    /** Default isolation for new loops created by /loop (NOT /loop-subagent, which is always "sub-agent"). */
     defaultIsolation: "in-process" | "sub-agent";
     /** Hard cap on concurrent in-flight sub-agent iterations in this session. */
     activeIterationsMax: number;            // default 4, max 25
@@ -816,11 +903,21 @@ interface PiLoopSettings {
     envOverrides: Record<string, string>;
     /** Whether to register as a background-work provider if pi-subagents is present. */
     registerBackgroundWorkProvider: boolean;  // default true
+    /** Whether to honour pi-subagents' capability ceiling. */
+    honorCapabilityCeiling: boolean;        // default true
+    /** Whether critical-priority sub-agent results always interrupt the parent. */
+    criticalInterruptsAll: boolean;         // default false (interrupts only outside loop wakes)
+    /** Whether to show the cumulative sub-agent cost in the editor status line. */
+    showCostInStatusLine: boolean;          // default true
+    /** Whether to use the optional LLM-call evaluator (round-1 §4, stretch). */
+    useLlmEvaluator: boolean;               // default false
   };
 }
 ```
 
-The defaults are chosen to be safe on first opt-in: a user who runs `/loop prompt, isolation: sub-agent` without setting anything gets a child that runs for up to 10 minutes, uses up to 30k input + 6k output tokens, and the session's cap of 4 concurrent iterations applies.
+The defaults are chosen to be safe on first opt-in: a user who runs `/loop-subagent <interval> <prompt>` without setting anything gets a child that uses the parent's full tool surface (minus `subagent`), runs for up to 10 minutes, uses up to 30k input + 6k output tokens, and the session's cap of 4 concurrent iterations applies.
+
+Note the absence of `costCeilingUsd` — round-1 decision D13 (user chose A: no global ceiling). The session-level cost is tracked for reporting but does not gate spawning. Per-loop `subAgent.maxTokens` is the only token gate.
 
 ### 11.2 `/loop-settings` TUI
 
@@ -837,6 +934,8 @@ The other `subAgent` fields are advanced tuning and are not in the cyclic editor
 
 A loop's `subAgent` field overrides the defaults. The override is deep-merged with the defaults, not replaced. So a loop that sets `subAgent: { model: "haiku" }` gets a child that uses haiku but inherits the default timeout, token budget, and concurrency cap.
 
+The four optional self-description fields (`goal`, `successCriteria`, `failureCriteria`, `stateFile`) live at the top level of `LoopEntry`, not inside `subAgent`. This is intentional: they describe the loop's purpose, not its execution runtime. A v2.x in-process loop can also set `goal` and `successCriteria` if the user wants the same self-description semantics in the parent.
+
 ### 11.4 Env vars
 
 No new environment variables. The v2.0 design uses the settings file exclusively; env var overrides are intentionally absent. This PRD keeps that invariant.
@@ -850,6 +949,47 @@ No new environment variables. The v2.0 design uses the settings file exclusively
 ---
 
 ## 12. Tool and slash-command surface
+
+### 12.0 New slash command: `/loop-subagent <interval> <prompt> [flags]`
+
+The new entry point for sub-agent loops. Parallel to `/loop`, always creates a sub-agent loop. Accepts the same positional args as `/loop` plus the new flags:
+
+```
+/loop-subagent <interval> <prompt>
+                [--goal <text>]
+                [--success-criteria <text>]
+                [--failure-criteria <text>]
+                [--state-file <path>]
+                [--model <name>]
+                [--max-tokens <n>]
+                [--max-iterations <n>]
+                [--iteration-timeout <ms>]
+                [--label <text>]
+                [--cwd <path>]
+```
+
+Implemented in `src/commands/loop-subagent-command.ts`. The handler parses the args, validates them, and calls `LoopCreate({ isolation: "sub-agent", ...args })`. The internal `LoopCreate` schema (§6.3) is the source of truth; the slash command is a thin wrapper.
+
+The existing `/loop` command is unchanged but accepts `--isolation sub-agent` for users who prefer the flag form. The two commands are equivalent for sub-agent creation; `/loop-subagent` is the recommended form because it makes the intent explicit at the command line and saves the user from typing the `--isolation` flag.
+
+Examples:
+
+```
+# Simplest form: a polling loop with no role, no criteria, no state file.
+/loop-subagent every 30m "Check the GitHub API for new priority issues."
+
+# A weekly digester with goal, success criteria, and a model override.
+/loop-subagent weekly monday 09:00 "Survey the .pi/ extension changelog and produce a 1-page digest." \
+  --goal "weekly changelog digest" \
+  --success-criteria "the result.md contains a 'New features' section with at least 3 entries" \
+  --max-tokens 30000 --model sonnet
+
+# A stateful audit loop that tracks which files it has audited.
+/loop-subagent every 6h "Audit one untested file from src/. Mark it as done in the state file." \
+  --state-file .pi/loops/3/audit-state.json \
+  --max-iterations 50 \
+  --success-criteria "the state file lists all files in src/"
+```
 
 ### 12.1 New tool: `LoopInspect`
 
@@ -882,9 +1022,11 @@ Returns a structured summary of the iteration:
 }
 ```
 
-### 12.2 Extended tool: `LoopUpdate`
+### 12.2 Extended tool: `LoopUpdate` and `LoopCreate`
 
-`LoopUpdate` gains the new fields `isolation` and `subAgent`. Updating a loop's `isolation` from `in-process` to `sub-agent` does **not** retroactively move prior iterations; only subsequent fires use the new mode. The opposite direction (sub-agent → in-process) is the same: prior sub-agent results stay on disk; new fires are in-process.
+`LoopCreate` and `LoopUpdate` both accept the new fields: `isolation`, `goal`, `successCriteria`, `failureCriteria`, `stateFile`, and the `subAgent` sub-object. Updating a loop's `isolation` from `in-process` to `sub-agent` does **not** retroactively move prior iterations; only subsequent fires use the new mode. The opposite direction (sub-agent → in-process) is the same: prior sub-agent results stay on disk; new fires are in-process.
+
+The `goal` / `successCriteria` / `failureCriteria` / `stateFile` fields are independent of `isolation`. A v2.x in-process loop can set these too; the runtime is permissive and ignores them for in-process execution (they are wired up only in the sub-agent path).
 
 ### 12.3 New slash command: `/loop-sub-agent-inspect <loopId> [iterId]`
 
@@ -909,12 +1051,15 @@ Sends SIGTERM to one in-flight child (or all in-flight children of a loop). The 
 
 ### 12.6 `/loop` cyclic field form
 
-The existing cyclic field form in `loop-edit-command.ts` grows by two new fields:
+The existing cyclic field form in `loop-edit-command.ts` grows by three new fields:
 
 - `isolation` (cycles `in-process` → `sub-agent` → `in-process`)
-- `sub-agent config` (a sub-form: model → thinking → tools → iterationTimeoutMs → maxTokens → maxIterations)
+- `goal` (text input, defaults to empty)
+- `success-criteria` (text input, defaults to empty)
 
-The "Save & Exit" path persists the new fields via `LoopStore.updateMetadata`, extended to accept the new keys (the existing `triggerEquals` logic applies unchanged).
+The per-loop `subAgent` overrides (model, thinking, tools, timeouts) are a sub-form, accessible by typing `s` on the `sub-agent config` row. The "Save & Exit" path persists the new fields via `LoopStore.updateMetadata`, extended to accept the new keys (the existing `triggerEquals` logic applies unchanged).
+
+Most users will use `/loop-subagent` and skip the cyclic form entirely. The form exists for users who want to edit an existing loop's fields.
 
 ### 12.7 New tool description snippet
 
@@ -1025,39 +1170,35 @@ If a user downgrades from v2.5 to v2.x, the `isolation` and `subAgent` fields on
 
 ## 15. Open questions, risks, and trade-offs
 
-### 15.1 Open questions
+### 15.1 Open questions (resolved by decision rounds, kept here for context)
 
-- **Q1. Should sub-agent runs be visible in the parent's conversation history at all?** Two camps: (a) only a one-line summary on the iteration's completion (current plan); (b) a sidebar entry that updates live as the child runs (more like `pi-subagents` FleetView). The PRD commits to (a) for the in-conversation view, with the FleetView overlay as the live view. A future v3 could merge them.
+The two decision rounds (round 1: 18 questions, round 2: 4 follow-ups) closed every open question that materially affected the design. The questions that were asked, and their resolutions:
 
-- **Q2. Should the child be able to call back into the parent (e.g. "ask the user a question")?** `pi-subagents` solves this with `intercom-bridge` and `contact_supervisor`. The PRD does not address this; the child is fire-and-forget. A future v3 could add a `askParent: true` flag.
+- **Q1. Should sub-agent runs be visible in the parent's conversation history at all?** Round-1 default accepted: only a one-line summary in the conversation; live progress in the FleetView panel. A future v3 could merge them.
+- **Q2. Should the child be able to call back into the parent?** No, in v2.5. The child is fire-and-forget. A future v3 could add `askParent: true` via `pi-subagents`'s `intercom-bridge`.
+- **Q3. Child → child loops (recursion)?** No. Child is started with `--no-extensions` plus explicit `subagent` tool denial. Fail-closed.
+- **Q4. Result caching for re-use?** No. Every iteration is a fresh child. A future "result dedupe" could hash the prompt and reuse within a window.
+- **Q5. Sandbox the child?** No, in v2.5. The user is trusted. A future v3 could add a sandbox-mode setting.
+- **Q6. Cross-machine visibility (P3)?** Deferred to v3 (round-1 D18). v2.5 is single-machine.
+- **Q7. Per-iteration model override?** Not in v2.5. `subAgent.model` is a single value. A future v3 could add a function form.
+- **R2-2 follow-up. Default toolset for sub-agent loops?** Full surface, no `subagent` tool. (User choice A.)
+- **R2-3 follow-up. Built-in roles?** None. (User choice A.) The `role` concept is gone; users write the role into `prompt`.
+- **R2-4 follow-up. Required fields for sub-agent loops?** All optional. (User choice A.) The runtime is permissive when `goal` / `successCriteria` / `failureCriteria` / `stateFile` are missing.
+- **R2-1 follow-up. `/loop` command syntax?** New `/loop-subagent <interval> <prompt>` parallel sub-command. (User choice A, refined to a separate slash command rather than a flag.)
 
-- **Q3. Should we support child → child loops (a sub-agent loop whose prompt uses the `subagent` tool to delegate further)?** This is a recursion footgun. The PRD says no: the child is started with `--no-extensions`, so it cannot load `pi-subagents` and cannot recursively spawn. This is enforced at spawn time, not at runtime, and is fail-closed.
-
-- **Q4. Should sub-agent results be cached for re-use?** If two sub-agent loops fire the same prompt at the same time, should the second reuse the first's result? No, in this PRD — every iteration is a fresh child. A future "result dedupe" feature could hash the prompt and reuse within a window.
-
-- **Q5. Should the child process be sandboxed (e.g. firejail, bubblewrap, Windows Job Objects)?** The PRD says no. The child is a regular pi session with the user's full tool surface (minus the loop extension itself). A future v3 could add a sandbox-mode setting; for now, the user is trusted.
-
-- **Q6. Cross-machine visibility (P3).** A user running sub-agent loops on a server and inspecting from a desktop needs the desktop to read the server's `sub-agent-results/` directory. The PRD does not address this; it assumes local file access. A future v3 could expose a `pi-loop remote` companion that serves the FleetView over SSH / Tailscale.
-
-- **Q7. Per-iteration model override vs per-loop model.** A loop with `subAgent.model: "haiku"` and `subAgent.perIterationModel: (i) => i % 3 === 0 ? "sonnet" : "haiku"` would let the user model-tier the loop. The PRD does not include this; `subAgent.model` is a single value. A future v3 could add a function form.
+The full decision matrices live in `docs/PRD/sub-agent-questions.xlsx` (round 1) and `docs/PRD/sub-agent-questions-r2.xlsx` (round 2).
 
 ### 15.2 Risks
 
-- **R1. Disk space.** A loop that fires every 5 minutes and writes a 1 MiB result file accumulates 288 MiB/day. The PRD bounds this: `subAgent-results/<loopId>` is rotated by the existing `async-retention.ts` pattern, with a `retainTerminal: 50` default. A long-running loop that fires every minute accumulates 1,440 iterations/day; the rotation keeps the last 50 (≈ 50 MiB). This is acceptable but should be documented.
-
+- **R1. Disk space.** A loop that fires every 5 minutes and writes a 1 MiB result file accumulates 288 MiB/day. The PRD bounds this: `subAgent-results/<loopId>` is rotated by the existing `async-retention.ts` pattern, with a `subAgent.retainIterations: 50` default. A long-running loop that fires every minute accumulates 1,440 iterations/day; the rotation keeps the last 50 (≈ 50 MiB). This is acceptable but should be documented.
 - **R2. Process count.** A user with 25 sub-agent loops, all firing simultaneously, spawns 25 child pi processes. On a 4-core machine this saturates CPU. The `activeIterationsMax` cap (default 4) bounds this. A user who raises the cap to 25 accepts the CPU cost.
-
-- **R3. Token cost.** A loop with `subAgent.maxTokens: undefined` and a long prompt that uses 50k tokens per iteration will run until the user stops it. The PRD defaults `maxTokens` to *unset* (i.e. unlimited) on a per-loop basis, with a global `subAgent.costCeilingUsd` setting (proposed for v2.5.1) as a backstop.
-
+- **R3. Token cost.** A loop with `subAgent.maxTokens: undefined` and a long prompt that uses 50k tokens per iteration will run until the user stops it. There is no global cost ceiling by design (round-1 D13, user choice A). The user is expected to set `subAgent.maxTokens` on each loop, or use `successCriteria` + `subAgent.maxIterations` to auto-complete the loop before it burns through the budget.
 - **R4. Lost pids on parent crash.** If the parent crashes hard, child pids may be reused by the OS for unrelated processes. The watcher's "is this pid still alive and is it the same child" check uses both the pid and a startup nonce written to a small file by the child at start; mismatch → `orphaned`. This is robust enough for the common case.
-
 - **R5. TUI flicker from the FleetView panel.** A panel that updates every second can cause TUI flicker on slow terminals. The PRD uses `tui.requestRender()` with a 1 Hz throttle. Tested on Windows Terminal, iTerm2, and GNOME Terminal.
-
-- **R6. The child writes to the parent's cwd.** A child that runs `rm -rf .` will delete the parent's working tree. This is identical to the risk of a foreground `bash` tool call. The PRD does not add a sandbox; it relies on the user to scope their loop's tools (the `subAgent.tools` allowlist) and to set `subAgent.cwd` to a safe directory.
-
+- **R6. The child has the parent's full tool surface.** A child that runs `rm -rf .` will delete the parent's working tree. This is identical to the risk of a foreground `bash` tool call. The PRD does not add a sandbox; it relies on the user to scope their loop's tools (the `subAgent.tools` allowlist) and to set `subAgent.cwd` to a safe directory. The default allowlist (full surface) is round-2 user choice A; users who want a smaller surface override it per-loop.
 - **R7. Loop-fan-out footgun.** A user who sets `subAgent.maxIterations: 1_000_000` and `subAgent.iterationTimeoutMs: 86_400_000` (24h) on a loop with a 5-minute trigger will burn 24h × 1M = a lot. The PRD requires an explicit confirmation in the TUI for `maxIterations > 1000` and `iterationTimeoutMs > 3_600_000` (1h). This is a UX guard, not a hard cap.
-
 - **R8. `pi-subagents` API drift.** The integration in §10.7 depends on `pi-subagents`'s public API. If `pi-subagents` v0.51 changes `registerBackgroundWorkProvider`'s signature, `pi-loop`'s integration breaks. The PRD wraps the integration in a `try/catch` and a feature-detect (`Symbol.for("pi-subagents.background-work.v1")` exists?), so a drift results in a silent no-op, not a crash. The `subAgent.registerBackgroundWorkProvider: false` setting provides a hard kill switch.
+- **R9. The four optional fields can be ignored.** Round-2 R2-4 made `goal` / `successCriteria` / `failureCriteria` / `stateFile` all optional. A user who creates a sub-agent loop without setting them gets a generic loop with no self-description, no success/failure detection, and no state. This is by design (lowest-friction entry point; see UC-6) but means the auto-completion feature only works when the user opts in. Document this clearly.
 
 ### 15.3 Trade-offs
 
@@ -1167,7 +1308,7 @@ If a user downgrades from v2.5 to v2.x, the `isolation` and `subAgent` fields on
 
 ### 16.8 Total scope
 
-Roughly **3,900 LOC of new TypeScript** + **1,800 LOC of new tests** + **500 lines of new documentation** over two minor releases (v2.5.0 and v2.5.1). The bulk of the new code is in the spawn / result / cost / scheduler modules in `src/runtime/sub-agent/`.
+Roughly **4,300 LOC of new TypeScript** + **1,900 LOC of new tests** + **500 lines of new documentation** over two minor releases (v2.5.0 and v2.5.1). The bulk of the new code is in the spawn / result / cost / scheduler modules in `src/runtime/sub-agent/`. The increment over the original v1 estimate of 3,900 LOC is from the new optional self-description fields (`goal`, `successCriteria`, `failureCriteria`, `stateFile`), the evaluator module, and the `/loop-subagent` slash command. Removing the `role` concept (round-2 R2-3 = A) netted a ~200 LOC reduction that almost offset the new fields. The detailed per-spec LOC estimates are in `docs/PRD/sub-agent-specs.xlsx` (sum of column H across all 7 sheets).
 
 ---
 
@@ -1274,4 +1415,75 @@ The user explicitly asked for the `browser` CLI to be used; all five notes were 
 
 ---
 
-*End of PRD. Total word count: ~14,800 words. Ready for review and Phase 1 implementation.*
+*End of PRD.*
+
+---
+
+## Appendix D — Amendment log (decision rounds 1 + 2)
+
+This PRD was originally drafted as a 14,800-word v1 on 2026-08-18. After two decision rounds with the user, it was amended to v2 on the same day. The amendments are:
+
+### D.1 Round 1 — `docs/PRD/sub-agent-questions.xlsx` (18 questions)
+
+Accepted as-is (15 of 18):
+
+- D1: Default `isolation` is `in-process`.
+- D2: All three platforms (macOS, Linux, Windows) on day 1.
+- D4: Default `activeIterationsMax` is 4.
+- D5: Tiered preview length (200 / 1,000 chars by priority).
+- D6: Critical-priority interrupt only outside loop wakes.
+- D8: Recursion guard via `--no-extensions` + `subagent` tool denial.
+- D9: Last 50 iterations retained per loop.
+- D10: Project root for sub-agent results.
+- D11: Auto-register background-work provider (when pi-subagents is installed).
+- D12: Read capability ceiling with first-time warning.
+- D14: FleetView panel only when active.
+- D15: `LoopInspect` as both tool and slash command.
+- D16: Field name is `isolation`.
+- D17: v2.5.0 = backend; v2.5.1 = frontend.
+- D18: Cross-machine visibility deferred to v3.
+
+Changed (3 of 18):
+
+- **D3 (default timeout) — accepted B (10 min) but with a follow-up on `/loop` syntax for sub-agent mode.** The follow-up was R2-1 (round 2).
+- **D7 (tool allowlist default) — accepted B (read-only) but reframed by the user's note: "we should have one dedicated to loops that has access to all tools/skills just as the main shell... maybe we discuss further on different types of subagents."** This was revisited in R2-2 (round 2) and resolved as A (full surface, no `subagent` tool).
+- **D13 (global cost ceiling) — accepted A (no global ceiling) but with a new requirement: "loops that are created must have a defined goal, role, success criteria, failure criteria. optionally a state management file."** This drove the round-2 follow-up R2-4 (which the user resolved as A: all optional).
+
+### D.2 Round 2 — `docs/PRD/sub-agent-questions-r2.xlsx` (4 follow-ups)
+
+All four decisions in round 2 simplified the design:
+
+- **R2-1 — `/loop` command syntax → user choice A (refined to a new parallel sub-command).** A separate `/loop-subagent <interval> <prompt>` slash command, not a flag on the existing `/loop`. The existing `/loop` still accepts `--isolation sub-agent` for users who prefer the flag form. See §6.4 and §12.0.
+- **R2-2 — Default tools for sub-agent loops → user choice A (full surface, no `subagent` tool).** No more "read-only by default". A sub-agent loop's child gets the parent's full tool surface, plus all skills, with `subagent` denied. Per-loop `subAgent.tools` can still restrict. See §7.1.
+- **R2-3 — Built-in roles → user choice A (none).** The `role` field is gone. No `scout` / `worker` / `digest-writer` set. Users write the role description into the loop's `prompt` themselves. This is a meaningful simplification — the entire role system (~200 LOC of code) is removed. See §6.1.
+- **R2-4 — Goal / success / failure / state file requirement level → user choice A (all optional).** The runtime is permissive when any of these are missing. The auto-completion feature (success criteria → `status: completed`) only kicks in when the user opts in. See §6.1, §6.3, §10.3, and UC-6.
+
+### D.3 Net effect on the design
+
+The v2 design is **leaner** than the v1 draft despite adding the new optional fields. The simplifications are:
+
+- **No role taxonomy** — users describe the role in `prompt`. The `LoopSubAgentConfig` interface drops its `role` field; the role-driven tool allowlist disappears; the role registry is gone.
+- **No global cost ceiling** — per-loop `subAgent.maxTokens` is the only token gate. The session-level `costCeilingUsd` setting is gone. Cost is still tracked for reporting.
+- **No required fields** — `goal` / `successCriteria` / `failureCriteria` / `stateFile` are all optional. A sub-agent loop can be as simple as `/loop-subagent every 30m "Check the API"`.
+- **Full tool surface by default** — the child gets the parent's tools, minus `subagent`. This is the user's stated preference (D7's literal answer) and the recursion guard (D8) ensures no recursive spawn.
+
+The added complexity is small:
+
+- **Four new optional LoopEntry fields** with validation rules and a `loop-validation.ts` module. ~250 LOC.
+- **A new `/loop-subagent` slash command** as a thin wrapper around `LoopCreate`. ~150 LOC.
+- **A result evaluator** that applies `successCriteria` / `failureCriteria` as regex against `result.md`. ~150 LOC (or ~330 if the optional LLM-call evaluator is included).
+- **`stateFile` read/write semantics** with locking. ~180 LOC.
+
+Net: ~4,300 LOC of new code, ~1,900 LOC of new tests, ~500 LOC of new docs. The detailed per-spec LOC estimates are in `docs/PRD/sub-agent-specs.xlsx`.
+
+### D.4 Companion deliverables on the `pi-subagent` branch
+
+- **PRD (this document):** `docs/PRD/sub-agent.md` — 14,800 → 16,000 words after amendment.
+- **Decision matrix v1:** `docs/PRD/sub-agent-questions.xlsx` — 18 questions across 7 groups.
+- **Decision matrix v2:** `docs/PRD/sub-agent-questions-r2.xlsx` — 4 follow-up questions.
+- **Spec sheets:** `docs/PRD/sub-agent-specs.xlsx` — 7 sheets, 55 implementation requirements, dict-based build script with explicit `assert k in d` at write time.
+- **Research clone:** `research-wt/pi-subagents/` (vendored, gitignored; not committed).
+- **Research notes:** `research-wt/notes/research-perplexity-{1..5}.md` (5 Perplexity research notes).
+- **Build scripts:** `docs/PRD/build_questions.py`, `docs/PRD/build_questions_r2.py`, `docs/PRD/build_specs.py` (the build script for the spec sheets uses dicts with explicit asserts to prevent the "tuples are short" class of bug).
+
+The spec sheets are the implementation-ready artefacts. The PRD is the high-level narrative. The decision matrices are the resolved-design history. Branch `pi-subagent` carries all of them.
