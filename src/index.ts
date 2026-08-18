@@ -12,6 +12,9 @@
  * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]
  *   /loop-resume  — Re-arm a stored loop by ID (or open the picker with no args)
+ *   /loop-fire    — Fire a stored loop's prompt as a new user message into chat
+ *                   (use when you want to manually trigger the prompt out-of-band
+ *                    without advancing fireCount or emitting a loop:fire event)
  *
  * DISABLED (per upstream constraint): MonitorXxx, TaskXxx, /monitors, /tasks,
  * and workflow-tools remain unregistered. The MonitorManager class is still
@@ -21,6 +24,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerLoopCommand } from "./commands/loop-command.js";
+import { registerLoopFireCommand } from "./commands/loop-fire-command.js";
 import { registerSettingsCommand } from "./commands/settings-command.js";
 import { atMaxFires } from "./loop-reducer.js";
 import { migrateV1ToV2 } from "./migration/v1-to-v2.js";
@@ -281,6 +285,11 @@ export default function (pi: ExtensionAPI) {
       refreshToolVisibility();
     },
     maybeBootstrapTaskLoop,
+  });
+
+  registerLoopFireCommand({
+    pi,
+    getStore: () => store,
   });
 
   registerSettingsCommand({
