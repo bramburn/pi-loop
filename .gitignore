@@ -8,3 +8,5 @@ coverage/
 wt/
 .worktrees/
 research/
+# Vendored research clones — read-only, never commit the .git inside
+research-wt/

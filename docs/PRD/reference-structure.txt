@@ -1,0 +1,163 @@
+﻿SHEET: Decision Matrix
+  dim: A1:H16 rows: 16 cols: 8
+  headers (row 1):
+    col 1: 'ID'
+    col 2: 'Topic'
+    col 3: 'Decision / Question'
+    col 4: 'Options'
+    col 5: 'Recommendation'
+    col 6: 'Your choice (pre-filled with default — overwrite to change)'
+    col 7: 'Rationale'
+    col 8: 'Impact if changed'
+
+  ALL data rows:
+  row 2:
+    ID: D1
+    Topic: Entry point
+    Question: How do you start each planning session?
+    Options: A) One command: /mvp-pipeline next (reads state, routes) | B) Drive /feature-planner, /spec-write, /plan-ship yourself | C) Both — pipeline default, skills still callable individually
+    Recommendation: A — one command
+    Your choice: A. I agree we just have an MVP pipeline but how do we deal with adding new features?
+    Rationale: Removes the 'which skill do I run?' confusion entirely. The state file makes routing deterministic; skills stay callable anyway, so C happens for free.
+    Impact: B means you must remember the order; C is the same as A in practice.
+
+  row 3:
+    ID: D2
+    Topic: What's-missing output
+    Question: Where does the 'what is missing / needs changing' view live?
+    Options: A) Always-on specs/STATUS.md dashboard, rewritten every session | B) planning-state.md coverage matrix only, made more readable | C) Only printed at publish time
+    Recommendation: A — STATUS.md
+    Your choice: A. I agree proceed with option A. gh issues will be where things will live.
+    Rationale: You asked for an explicit missing/changing output you can look at WITHOUT running anything. A plain-language dashboard answers that; the state file stays the machine-readable source of truth behind it.
+    Impact: B saves one file but mixes machine state with human reading; C hides gaps until too late.
+
+  row 4:
+    ID: D3
+    Topic: Skills vs extension
+    Question: Markdown skills or a pi.dev extension for orchestration?
+    Options: A) Pure markdown skills for now | B) Skills + thin extension (scheduling/resume only) | C) Full TypeScript extension now
+    Recommendation: A — pure markdown
+    Your choice: A
+    Rationale: The workflow is still evolving every session — markdown is editable in minutes, an extension locks the design. Revisit B/C after the MVP loop has run end-to-end a few times.
+    Impact: B/C give sturdier resume mechanics but slow every future workflow change.
+
+  row 5:
+    ID: D4
+    Topic: GH issue timing
+    Question: When are GitHub issues created?
+    Options: A) Auto per feature the moment it graduates | B) Batched — accumulate 'ready', publish on your /plan-ship command
+    Recommendation: A — auto at graduation
+    Your choice: A
+    Rationale: Already the v4 behaviour: approval happened distributed during Q&A, so a publish-time gate is redundant. Issues appear as soon as they're actionable for your build loop.
+    Impact: B adds a manual step back in; only worth it if issue noise becomes a problem.
+
+  row 6:
+    ID: D5
+    Topic: UX proposal depth
+    Question: How deep do UX proposals go during MVP questioning?
+    Options: A) MCQ + named patterns + mini ASCII sketch only | B) Runnable ux-lab variants for every UX decision | C) MCQ first; ux-lab audition only if an item stays undecided or you say 'show me'
+    Recommendation: C — MCQ with audition fallback
+    Your choice: C
+    Rationale: Keeps questioning fast (your stated priority: decisions, not prompt-writing) while ux-lab stays as the tie-breaker for genuinely contested taste calls. The escalation rule already exists in spec-ux.
+    Impact: A is fastest but some taste calls are hard to make blind; B adds build time to every question.
+
+  row 7:
+    ID: D6
+    Topic: Pause / resume
+    Question: How does pause-and-resume work?
+    Options: A) specs/planning-state.md holds position; next session's /mvp-pipeline next resumes in <2 min | B) Session memory only
+    Recommendation: A — state file
+    Your choice: Already in skills
+    Rationale: Already the design: state file = single source of truth, cold resume after cancel/close. Nothing to build, just confirm.
+    Impact: B would lose all progress on CLI close — reject.
+
+  row 8:
+    ID: D7
+    Topic: New feature mid-flight
+    Question: What happens when you think of a new feature mid-session?
+    Options: A) Say it anytime — it enters the backlog and clarification starts on your command or when current feature graduates | B) New feature jumps the queue immediately
+    Recommendation: A — inject to backlog
+    Your choice: Already in skills (feature injection). User Response: You say it is already in skill but where?
+    Rationale: Already the design (scope-pivot detector + feature injection). Queue-jumping mid-question splits context; backlog injection keeps the current thread clean.
+    Impact: B interrupts the current line of questioning every time — chaotic.
+
+  row 9:
+    ID: D8
+    Topic: AGENTS.md updates
+    Question: Should the pipeline update AGENTS.md itself?
+    Options: A) Yes — mvp-pipeline Phase 0 adds/maintains a specs/ router section in AGENTS.md; skills append pointers when structure changes | B) No — you edit AGENTS.md manually
+    Recommendation: A — auto-maintained router
+    Your choice: A
+    Rationale: You listed 'AGENTS.md or state files are updated' as a requirement. A small owned section (## Spec pipeline) that only the pipeline edits keeps it consistent without touching the rest.
+    Impact: B risks the router drifting out of date silently.
+
+  row 10:
+    ID: D9
+    Topic: Question pacing
+    Question: How many questions per round?
+    Options: A) 1–4 per MCQ call, consolidation checkpoint every ~10 ticks | B) Bigger batches (5–8) | C) One at a time
+    Recommendation: A — 1–4 + checkpoints
+    Your choice: A but I want it to think through the answers and clarify, asking the question in a different angle might bring clarity and different perspective. I could sit there and answer questions for 30-1hour session as long as it helps make the LLM agent/specs better and clarifies the scope to work on.
+    Rationale: Already the design; matches pi's ask_user_question limits and keeps altitude matched to your answers.
+    Impact: B overwhelms; C makes completion take forever.
+
+  row 11:
+    ID: D10
+    Topic: Publish labels
+    Question: Which labels does plan-ship apply at creation?
+    Options: A) agent:ready + area:* + type:* (risk:high only via triage) | B) Add a manual review label
+    Recommendation: A — current label model
+    Your choice: Already in skills (v4)
+    Rationale: v4 label model already landed; no human gate labels remain (plan:ready / spec:approved retired).
+    Impact: B reintroduces the approval step you explicitly removed.
+
+  row 12:
+    ID: D11
+    Topic: No-publish invariant
+    Question: Can a feature publish without a digest?
+    Options: A) No digest → no auto-publish (open decisions must be resolved via inline MCQ first) | B) Allow publish with open questions attached
+    Recommendation: A — invariant holds
+    Your choice: Already in skills
+    Rationale: This is the guarantee that makes no-approval publishing safe: nothing ships with unanswered decisions.
+    Impact: B would let half-decided specs reach your build loop.
+
+  row 13:
+    ID: D12
+    Topic: triage-blocked timing
+    Question: When does the triage-blocked skill become relevant?
+    Options: A) Only once your build loop starts hitting blockers on issues | B) Wire it into MVP planning now
+    Recommendation: A — activates with build loop
+    Your choice: A
+    Rationale: It only fires on agent:blocked issues from implementation. Until your loop runs, there's nothing to triage.
+    Impact: B adds a skill to the MVP surface that has no inputs yet.
+
+  row 14:
+    ID: D13
+    Topic: STATUS.md ownership
+    Question: Who writes STATUS.md?
+    Options: A) mvp-pipeline rewrites it at every phase boundary + feature-planner updates the missing-lenses section at each checkpoint | B) Only at graduation
+    Recommendation: A — continuous rewrite
+    Your choice: A
+    Rationale: A dashboard that's only fresh at graduation isn't a dashboard. Rewrite is cheap (single file, one writer at a time per concurrency rules).
+    Impact: B makes D2 pointless.
+
+  row 15:
+    ID: D14
+    Topic: Resume trigger
+    Question: How is a session resumed — manual command or automatic loop?
+    Options: A) You run /mvp-pipeline next when you open the CLI | B) Cron/idle loop auto-fires planning ticks
+    Recommendation: A — manual per session
+    Your choice: A
+    Rationale: You said you pause by closing the CLI and want to resume where you left off — a single command on open does exactly that. Cron loops firing while you're away would ask questions nobody answers.
+    Impact: B suits unattended automation, which contradicts 'question me' being the core value.
+
+  row 16:
+    ID: D15
+    Topic: MVP-complete definition
+    Question: What does 'the MVP plan is complete' mean?
+    Options: A) All Tier-1 features specced + published to GH | B) All features (every tier) specced + published | C) Tier-1 published AND built+verified by your loop
+    Recommendation: A — Tier-1 specced & published
+    Your choice: A, and for additional feature, polishing we can have additional skills for later. Let's defer those and just focus on getting a tier 1 feature specced, and published to GH to work on.
+    Rationale: The pipeline's job ends at published issues; building is your loop's job. But you may want the bar to be 'MVP actually works'. This one is genuinely yours.
+    Impact: B delays the finish line for low-value features; C couples planning done-ness to build progress.
+
