@@ -59,6 +59,13 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 
 `/loop-resume` (no args) — open a simple picker listing every stored loop as `* #N [status] prompt (trigger)`. Pick a row to re-arm it, or `< Back` to exit without changing anything. Each terminal reads and writes its own `.pi/loops/bindings-<sessionId>.json` so parallel sessions do not interfere.
 
+`/loop-fire [id]` — fire a stored loop's `prompt` as a fresh user message into the chat. Use it to manually trigger a loop's prompt out-of-band without waiting for its trigger to fire. No args opens a picker over all stored loops (active and paused); with an id, that loop fires directly. Sends `entry.prompt` only (no `[pi-loop]` wrapper, no `loop:fire` event, no `fireCount` bump). When the agent is idle, the message triggers a turn immediately; when the agent is busy, the message is queued with `deliverAs: "followUp"`.
+
+```text
+/loop-fire            # picker over all stored loops
+/loop-fire 5          # fire loop #5's prompt directly
+```
+
 ## Tools
 
 | Tool | What it does |

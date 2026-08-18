@@ -5,6 +5,7 @@ Slash commands are the agent-facing menu surface, registered via `pi.registerCom
 ## Files
 
 - `loop-command.ts` — `/loop [interval] [prompt]` and the interactive top-level menu. Also registers `/loop-resume <id>` (one-shot: re-arms AND writes the bindings file in one call) and `/loop-resume` (no args: opens the governor picker with checkbox rows reflecting per-session binding state, sentinels `< OK` / `< Continue` / `< Cancel`).
+- `loop-fire-command.ts` — `/loop-fire [id]`. One-shot: injects a stored loop's `prompt` as a fresh user message via `pi.sendUserMessage`. No args opens a single-select picker over all stored loops (active and paused) with a `< Cancel>` sentinel. Id form requires a numeric id; non-numeric or unknown ids error out. Sends plain `entry.prompt` only (no `[pi-loop]` wrapper, no `loop:fire` event, no `fireCount` bump) — a manual out-of-band trigger, not a counted fire. When the agent is idle, the message is delivered immediately and triggers a turn; when busy, it is queued with `deliverAs: "followUp"` so it lands after the current run.
 - `tasks-command.ts` — `/tasks [subject]` and the native task viewer.
 - `monitors-command.ts` — `/monitors` for managing background processes.
 
