@@ -278,6 +278,21 @@ The current whitelist is:
 
 `src/` is included because `pi.extensions` points to `./src/index.ts` (TypeScript source is loaded directly by the pi runtime). `dist/` is included for any consumer that prefers the compiled output. `wt/`, `test/`, `node_modules/`, `.github/`, `coverage/` are all excluded.
 
+## Research workspace — `research-wt/`
+
+`research-wt/` is a vendor-style clone workspace for read-only upstream research. It is **ignored by `.gitignore`** (never committed; the inner `.git` is treated as a vendored dependency, not as a submodule).
+
+| Subfolder | Source | Purpose |
+|-----------|--------|---------|
+| `research-wt/pi-subagents/` | https://github.com/nicobailon/pi-subagents (cloned) | Reference implementation for child-agent delegation, async/background run lifecycle, mission records, schedules, FleetView, and the `background-work` provider contract. Used as the primary architectural reference for the in-flight sub-agent PRD (see `docs/PRD/sub-agent.md`). |
+
+Conventions for the research workspace:
+
+- **Read-only by intent.** Do not edit, format, lint, or commit anything under `research-wt/`. If the upstream is useful, port the idea into `src/` and write a fresh test.
+- **Re-clone, don't rebase.** If the vendored copy drifts, delete the folder and `git clone` again. Never `git pull` inside `research-wt/pi-subagents/`.
+- **Citation in the PRD.** When porting a pattern, cite the source file path in `research-wt/pi-subagents/...` next to the ported snippet in `docs/PRD/`.
+- **Update before reusing.** If `research-wt/` predates a meaningful upstream release, re-clone before drafting a new PRD that depends on it.
+
 ### Local sanity check before tagging
 
 `npm run lint && npm run typecheck && npm test && npm run build` mirrors the CI pipeline. The full test suite (`npm run test:all`) includes `injection.test.ts` and `harness-state-steering.test.ts` which `npm test` excludes — run the full suite before tagging to catch integration regressions. Verify `npm pack --dry-run` shows the expected file count (currently ~228) and size (~1.6 MB unpacked) before pushing the tag.
