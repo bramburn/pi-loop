@@ -1,6 +1,6 @@
 {
   "name": "@bramburn/pi-loop",
-  "version": "2.5.0",
+  "version": "2.5.2",
   "description": "A pi extension for cron/event-based agent re-wake loops and background process monitoring.",
   "author": "bramburn",
   "license": "MIT",

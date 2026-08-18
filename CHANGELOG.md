@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.2 (2026-08-18)
+
+
+### Bug Fixes
+
+* **cross-platform child kill:** `MonitorManager.stop()` previously called `proc.kill("SIGTERM")` and `proc.kill("SIGKILL")` directly. Both forms throw `EINVAL` on Windows (`errno: -4071, syscall: 'kill'`) because POSIX named signals have no meaning there. On any platform, an already-exited child could also surface `ESRCH` during the kill call. Extracted a private `killProc(proc, signal)` helper that uses `proc.kill()` (no args) on `win32` and the named signal on POSIX, with `try/catch` to swallow dead-process races. Both call sites in `stop()` now route through it.
+
+### Tests
+
+* **regression coverage for the Windows kill path:** new `test/monitor-manager-kill.test.ts` (3 cases) uses mock `ChildProcess`es so it runs on every platform (no `sh`/`bash` required). Asserts: (1) the platform-correct signal is passed to `proc.kill`, (2) a `kill("SIGTERM")`-style `EINVAL` from Windows does not propagate out of `stop()`, (3) `ESRCH` from a child that already exited does not propagate.
+* **Unix-only suite gated:** `test/monitor-manager.test.ts` now wraps the `describe` in `describe.skipIf(process.platform === "win32")` because the manager hardcodes `sh -c <command>` for spawn and the integration tests exercise real `echo` / `sleep` / `exit 1` processes. The mock-based kill tests cover the Windows surface without needing a Unix shell on PATH.
+
 ## 2.5.0 (2026-08-18)
 
 
