@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.0 (2026-08-18)
+
+
+### Docs
+
+* **sub-agent execution PRD:** new `docs/PRD/sub-agent.md` (1489 lines) plus three generated artifacts under `docs/PRD/`. This PRD is the execution plan for a future `sub-agent` capability in pi-loop — agents that spawn child agents, observe their tool calls, and forward observations back to the parent turn. It contains the problem statement, three rounds of clarifying questions + decisions, an execution spec sheet, a decision matrix, and an `Open decisions` block ready to be resolved before implementation. Reference structure lives at `docs/PRD/reference-structure.txt`; spec/question generators at `docs/PRD/build_specs.py` and `docs/PRD/build_questions.py` / `build_questions_r2.py`. **No runtime change in this release** — `src/` is unchanged from 2.4.0. The PRD ships as a published deliverable so external reviewers can audit the planned capability ahead of any implementation PR.
+
 ## 2.4.0 (2026-08-13)
 
 
