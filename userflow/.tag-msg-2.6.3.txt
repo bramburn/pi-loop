@@ -1,0 +1,29 @@
+v2.6.3: fix sub-agent spawn ENOENT on Windows and uncaughtException parent crash
+
+Three related fixes for sub-agent spawning:
+
+1. PATHEXT-aware spawn resolution. child_process.spawn("pi", args) does not
+   consult PATHEXT on Windows, so the nvm4w npm-bin PowerShell shim
+   (C:\nvm4w\nodejs\pi.ps1) fails with ENOENT even when pi is on PATH.
+   New resolveSpawnTarget(bin) helper dispatches by extension: .ps1 is
+   wrapped in powershell.exe -File, .cmd/.bat use shell: true, .exe is
+   direct; bare names are resolved via where.exe with PATHEXT-aware
+   ranking. Cached per bin so the scheduler does not re-resolve every
+   tick.
+
+2. uncaughtException guard. handle.wait() only listened to the 'exit'
+   event, so any spawn failure (ENOENT, EACCES, EAGAIN) escaped the
+   watcher, became an uncaughtException on the parent process, and killed
+   the user's pi session. SpawnHandle now exposes lastError and the
+   wait/settle promise is shared between 'error' and 'exit'; the watcher
+   finalises the iteration as 'failed' with the real error text in
+   result.json instead of crashing the parent.
+
+3. Windows kill-tree. With shell: true for .cmd/.bat or powershell.exe
+   wrapping for .ps1, the actual pi is a grandchild of child.pid.
+   child.kill() only terminated the immediate child, so the timer-fired
+   two-stage kill (SIGTERM at T-30s, SIGKILL at T) could leave the real
+   pi process running. handle.kill now uses taskkill /PID <pid> /T /F on
+   Windows to walk the process tree.
+
+Closes #89
