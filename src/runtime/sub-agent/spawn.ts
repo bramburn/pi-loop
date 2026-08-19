@@ -145,6 +145,14 @@ export interface SpawnHandle {
    * is a timeout; otherwise it is a cancel.
    */
   killedByTimer: boolean;
+  /**
+   * Set when the child emitted an `error` event (e.g. ENOENT on spawn, EACCES,
+   * or any failure to start). The watcher uses this to write a meaningful
+   * `errorMessage` into the result-store finalization. Without an attached
+   * `error` handler, a spawn error becomes an uncaughtException on the
+   * parent process — the cause of the v2.6.2 parent-crash bug.
+   */
+  lastError?: Error;
 }
 
 function ensureParent(filePath: string): void {
@@ -196,6 +204,29 @@ export async function spawnSubAgent(req: SpawnRequest): Promise<SpawnHandle> {
   });
 
   const startedAt = Date.now();
+  // Hoisted so the `settle` closure can clear it. Assigned below.
+  let outerTimer: NodeJS.Timeout | undefined;
+  // Shared resolver for both 'exit' and 'error' events. Node's child_process
+  // emits EITHER 'exit' (normal lifecycle) or 'error' (spawn failure like
+  // ENOENT/EACCES), never both. If we only listen to 'exit', an 'error' event
+  // becomes an uncaughtException on the parent process (this is the v2.6.2
+  // crash the user reported). We resolve the same promise either way so the
+  // watcher's `handle.wait()` finalizes the iteration as 'failed'.
+  let resolveWait: (v: { exitCode: number | null; signal: NodeJS.Signals | null }) => void = () => {};
+  let settled = false;
+  const settle = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+    if (settled) return;
+    settled = true;
+    if (outerTimer) clearTimeout(outerTimer);
+    resolveWait({ exitCode, signal });
+  };
+  child.once("error", (err) => {
+    handle.lastError = err;
+    // Synthesise an exit with a sentinel exitCode so determineStatus
+    // classifies this as 'failed' (non-zero exit). The real error text
+    // travels via `handle.lastError` and ends up in result.json.
+    settle(-1, null);
+  });
   // Two-stage kill: SIGTERM at T-30s, SIGKILL at T.
   const handle: SpawnHandle = {
     pid: child.pid ?? -1,
@@ -222,15 +253,13 @@ export async function spawnSubAgent(req: SpawnRequest): Promise<SpawnHandle> {
       }
       child.kill(signal ?? "SIGTERM");
     },
-    wait: () => new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      const onExit = (code: number | null, sig: NodeJS.Signals | null) => {
-        clearTimeout(outerTimer);
-        resolve({ exitCode: code, signal: sig });
-      };
-      child.once("exit", (code, sig) => onExit(code, sig as NodeJS.Signals | null));
-    }),
+    wait: () =>
+      new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((res) => {
+        resolveWait = res;
+      }),
   };
-  const outerTimer = setTimeout(() => {
+  child.once("exit", (code, sig) => settle(code, sig as NodeJS.Signals | null));
+  outerTimer = setTimeout(() => {
     if (child.exitCode !== null || child.signalCode !== null) return;
     handle.killedByTimer = true;
     child.kill("SIGTERM");
@@ -239,7 +268,7 @@ export async function spawnSubAgent(req: SpawnRequest): Promise<SpawnHandle> {
       child.kill("SIGKILL");
     }, 30_000).unref();
   }, Math.max(1, req.iterationTimeoutMs));
-  outerTimer.unref();
+  if (outerTimer) outerTimer.unref();
 
   return handle;
 }
