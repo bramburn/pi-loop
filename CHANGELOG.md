@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.6.3 (2026-08-19)
+
+### Bug Fixes
+
+* **sub-agent: spawn `pi` fails with `Error: spawn pi ENOENT` on Windows when `pi` is a PowerShell shim.** `child_process.spawn("pi", args)` (no `shell: true`) does not consult PATHEXT on Windows — `nvm4w`'s npm-bin shim is `C:\nvm4w\nodejs\pi.ps1` with no plain `.exe`, so CreateProcess returns ENOENT even when `pi` is on PATH. New helper `resolveSpawnTarget(bin)` in `src/runtime/sub-agent/spawn.ts`:
+  - Bare name on Windows: runs `where.exe <bin>` (PATHEXT-aware) and ranks candidates by extension (`.exe` > `.cmd` > `.bat` > `.ps1`).
+  - `.exe` → spawn directly.
+  - `.cmd` / `.bat` → `shell: true` (CreateProcess cannot run batch files; Node uses cmd.exe internally).
+  - `.ps1` → `spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", resolvedPs1, ...args])`.
+  - Resolution is cached per `bin` so a scheduler that spawns every tick doesn't re-run `where.exe`.
+* **sub-agent: any spawn failure crashes the parent pi process with an uncaughtException.** `handle.wait()` only listened to the child's `'exit'` event. Node emits EITHER `'exit'` OR `'error'` (e.g. ENOENT, EACCES, EAGAIN), never both — so a spawn failure escaped the watcher, became an uncaughtException on the parent (`Error: spawn pi ENOENT` at `process.processTicksAndRejections`), and killed the user's session. `SpawnHandle` now exposes `lastError?: Error` and the wait/settle promise is shared between the `'error'` and `'exit'` handlers; the watcher now finalises the iteration as `failed` with the real error text in `result.json` instead of crashing.
+* **sub-agent: Windows timer-fired kill leaves a leaked grandchild when running through cmd.exe or PowerShell.** With `shell: true` for `.cmd`/`.bat` or `powershell.exe` wrapping for `.ps1`, the actual `pi` is a grandchild of `child.pid`. `child.kill("SIGTERM")` only terminates the immediate child, so the timer-fired two-stage kill (SIGTERM at T-30s, SIGKILL at T) could leave the real pi process running. `handle.kill` now uses `taskkill /PID <pid> /T /F` on Windows to walk the process tree.
+
+### Internal
+
+* `src/runtime/sub-agent/spawn.ts`:
+  - New `ResolvedSpawn` type and `resolveSpawnTarget(bin)` export (cached, testable surface for the resolution logic).
+  - New `lastError?: Error` field on `SpawnHandle`.
+  - New shared `settle` / `resolveWait` pattern so a single Promise resolves on either `'exit'` or `'error'`.
+  - Windows kill now uses `taskkill /T /F`.
+  - `outerTimer` hoisted so the `settle` closure can `clearTimeout` it.
+
+### Tests
+
+* `test/runtime/sub-agent/spawn.test.ts` (new, 9 cases):
+  - POSIX bare-name pass-through.
+  - Absolute `.exe` / `.cmd` / `.bat` / `.ps1` path dispatch.
+  - Relative `./path/to/bin.cmd` is treated as a path (no where.exe lookup).
+  - Real-machine regression test for `where.exe pi` resolution on Windows (the bug that motivated this release).
+  - Helpful-error throw when the bare command is not on PATH.
+  - Cache hit: second `resolveSpawnTarget("pi")` returns the same object reference.
+
+### Quality gates
+
+* `npm run test:all`: 1019 passed, 33 skipped (was 1010 on v2.6.2; +9 new cases).
+* `npm run typecheck`: clean.
+* `npm run lint`: clean.
+* `npm run build`: clean (`dist/` regenerated).
+* `npm pack --dry-run`: 276 files, 555 kB unpacked. `wt/`, `node_modules/`, `test/`, `.github/` confirmed absent from the tarball.
+
 ## 2.6.2 (2026-08-19)
 
 ### Bug Fixes
