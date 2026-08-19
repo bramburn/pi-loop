@@ -6,10 +6,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * Per ADR-002, this module is called from `before_agent_start` and after
  * every store mutation. It hides loop tools from the LLM's active tool set
  * when they are not relevant to the current state — preventing the agent
- * from calling `LoopDelete` after a normal fire, calling `LoopUpdate` when
- * no dynamic loop is active, calling `LoopPause` when no loop is active,
- * calling `LoopResume` when no loop is paused, or calling
- * `WorkflowTransition` when no workflow loop is in flight.
+ * from calling `LoopUpdate` when no dynamic loop is active, calling
+ * `LoopPause` when no loop is active, calling `LoopResume` when no loop is
+ * paused, or calling `WorkflowTransition` when no workflow loop is in
+ * flight.
+ *
+ * Deletion is not in the LLM's tool surface at all. There is no LoopDelete
+ * tool — the user triggers deletion through the `/loop` command's
+ * View-loops menu, and internal cleanup paths (taskBacklog queue-drain
+ * auto-deletion, deletion tombstones) call `LoopStore.delete` directly.
  *
  * Lessons inherited from pragmaxim's `d77e3b8` (defer tool sync to
  * `before_agent_start`) and `34818ac` (defensive array check + error
@@ -24,7 +29,6 @@ export const LOOP_TOOL_LIST = "LoopList";
 export const LOOP_TOOL_UPDATE = "LoopUpdate";
 export const LOOP_TOOL_PAUSE = "LoopPause";
 export const LOOP_TOOL_RESUME = "LoopResume";
-export const LOOP_TOOL_DELETE = "LoopDelete";
 export const LOOP_TOOL_WORKFLOW_TRANSITION = "WorkflowTransition";
 
 /** Tools that are always available regardless of state. */
@@ -38,8 +42,6 @@ const CONDITIONAL_TOOLS = {
     loops.some((l) => l.status === "active"),
   [LOOP_TOOL_RESUME]: (loops: LoopSnapshot[]) =>
     loops.some((l) => l.status === "paused"),
-  [LOOP_TOOL_DELETE]: (loops: LoopSnapshot[]) =>
-    loops.some((l) => l.status === "paused") || loops.some((l) => l.isTaskBacklog),
   [LOOP_TOOL_WORKFLOW_TRANSITION]: (loops: LoopSnapshot[]) =>
     loops.some((l) => l.hasWorkflow),
 } as const;

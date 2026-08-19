@@ -15,7 +15,7 @@ pi install npm:@bramburn/pi-loop
 LoopCreate trigger="5m" prompt="Check if the build passed"
 LoopCreate trigger="tool_execution_start" prompt="Log the tool being used" triggerType="event"
 LoopList
-LoopDelete id="1"
+/loop           (then "View loops" → "x Delete" to delete a loop)
 ```
 
 ## Widget (v2.0)
@@ -66,6 +66,20 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 /loop-fire 5          # fire loop #5's prompt directly
 ```
 
+`/loop-subagent <interval> <prompt> [flags]` — create a [sub-agent loop](#sub-agent-execution-mode-v25). Each fire spawns a fresh child pi process with its own context window; the parent only sees a one-line summary.
+
+```text
+/loop-subagent 30m "check upstream pi-loop releases" \
+  --goal "find a release newer than 2.5.0 and report the diff" \
+  --success-criteria "found a newer release" \
+  --failure-criteria "404 or network error" \
+  --max-tokens 50000 --max-iterations 5
+
+# Optional flags: --goal, --success-criteria, --failure-criteria,
+#                 --state-file, --model, --max-tokens, --max-iterations,
+#                 --iteration-timeout
+```
+
 ## Tools
 
 | Tool | What it does |
@@ -75,7 +89,9 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 | `LoopList` | Show active loops with IDs, triggers, and next-fire times |
 | `LoopPause` | Pause a loop without removing it (preserves history, trigger, ID) |
 | `LoopResume` | Resume a paused loop (re-adds the trigger; does not touch session bindings) |
-| `LoopDelete` | Permanently delete a loop |
+| `LoopInspect` | Read the latest iteration summary (status, tokens, cost, preview) for a loop — used by the agent to read its own sub-agent runs without opening files |
+
+> **Note:** Loop deletion is intentionally **not** an LLM-callable tool. Use `/loop` → View loops → `x Delete` to delete a loop. The LLM can pause, resume, and update loops, but only the user can delete.
 | `MonitorCreate` | _(retired — see [Retired tools](#retired-tools))_ |
 | `MonitorList` | _(retired)_ |
 | `MonitorStop` | _(retired)_ |
@@ -104,6 +120,65 @@ If `pi-tasks` does not respond during startup detection, `pi-loop` registers a n
 
 This fallback is session-sticky: `pi-loop` decides once at startup whether `pi-tasks` or native tasks own task management for that session.
 
+## Sub-agent execution mode (v2.5)
+
+When a loop's `isolation` is set to `"sub-agent"`, each fire spawns a **fresh child pi process** with its own context window, runs the prompt in isolation, and returns only a one-line summary to the parent. This is the right shape when a recurring check is too long, too noisy, or too stateful to share the parent's context.
+
+Use it for: upstream monitoring, periodic refactors, scheduled test runs with result evaluation, any "run a task and tell me one line" loop where the parent should not see the full transcript.
+
+### Quick start
+
+```text
+/loop-subagent 30m "check upstream pi-loop releases" \
+  --goal "find a release newer than 2.5.0 and report the diff" \
+  --success-criteria "found a newer release" \
+  --failure-criteria "404 or network error" \
+  --max-tokens 50000 --max-iterations 5
+```
+
+The child writes its session file, stdout/stderr, and a `result.md` to `<loopScope>/sub-agent-results/<loopId>/iter-<N>/`. The parent loop entry accumulates `cumulativeTokens` and `cumulativeCostUsd` across iterations and is auto-paused after 3 consecutive failures.
+
+### What the parent sees
+
+Each fire returns a single tiered line such as:
+
+```text
+[pi-loop sub-agent] #3 iter-7 SUCCESS · "found 2.5.3, 2 new commits, 1 breaking" · 12,348 tok · $0.018
+```
+
+Use `LoopInspect({ loopId, iterId? })` to read the structured summary (status, tokens, cost, preview, error). For the full `result.md` and the child's session file, the inspector returns the on-disk paths so the agent can open them directly.
+
+### How it differs from a regular loop
+
+| | In-process loop (`isolation: "in-process"`) | Sub-agent loop (`isolation: "sub-agent"`) |
+|---|---|---|
+| Where it runs | Parent's turn | Fresh child `pi` process |
+| Context cost per fire | Full turn + tool calls in parent context | One summary line in parent context |
+| Per-iteration artefacts | `entry.dynamic.state` in `.pi/loops/` | `<loopScope>/sub-agent-results/<id>/iter-N/` (session file, `result.md`, stdout/stderr) |
+| Cost / token tracking | None | Per-iteration + cumulative on the loop entry |
+| Self-evaluation | `LoopUpdate({ status, state, metrics, doneCriteria })` | Regex match against `result.md` (success / failure criteria) |
+| Failure handling | `maxFires` budget | Auto-pause after 3 consecutive failures |
+
+### Fields
+
+| `LoopCreate` / `LoopUpdate` field | Effect |
+|---|---|
+| `isolation` | `"in-process"` (default) or `"sub-agent"` |
+| `goal` | Long-form description of the loop's purpose (helps the child stay on-task) |
+| `successCriteria` | Regex matched against `result.md`; fires match → `SUCCEEDED` |
+| `failureCriteria` | Regex matched against `result.md`; fires match → `FAILED` (wins over success) |
+| `stateFile` | Optional path the child reads/writes across iterations |
+| `subAgent.model` | Per-loop model override |
+| `subAgent.maxTokens` | Hard cap on tokens per iteration |
+| `subAgent.maxIterations` | Hard cap on iterations before the loop is auto-paused |
+| `subAgent.iterationTimeoutMs` | Per-iteration wall-clock cap (default from settings) |
+
+Session-wide defaults live under the `subAgent` block in `.pi/pi-loop-settings.json` (see [Configuration](#configuration)).
+
+### Restart safety
+
+Sub-agent iterations are **durable on disk**. After a parent restart, `result-watcher` walks the on-disk result directories and finalises any in-flight iterations as `orphaned` so the next scheduler tick can proceed without losing state.
+
 ## Status line
 
 `pi-loop` keeps a compact persistent status line in the TUI.
@@ -123,6 +198,26 @@ Only task counts and the single active/next task are shown there so attention st
 ## Configuration
 
 **All configuration lives in `.pi/pi-loop-settings.json`** — see `userflow/settings-v2.md` for the full schema and migration guide. The v2.0 release removes the v1.x `PI_LOOP_*` environment variables (see `CHANGELOG.md` for the clean break). To change `loopScope`, `taskScope`, debug logging, auto-clear behaviour, sort order, or backlog threshold, run `/loop-settings` (no environment variables needed).
+
+### `subAgent` block (v2.5+, sub-agent execution mode)
+
+Session-wide defaults for [sub-agent loops](#sub-agent-execution-mode-v25). Edit the JSON directly (the cyclic TUI editor shows the block as a read-only summary).
+
+| Field | Effect | Default |
+|---|---|---|
+| `defaultIsolation` | Default `isolation` for loops created without an explicit value | `"in-process"` |
+| `activeIterationsMax` | Concurrency cap (in-flight sub-agent iterations in this session) | `4` |
+| `defaultIterationTimeoutMs` | Per-iteration wall-clock cap when a loop doesn't override | `600000` (10 min) |
+| `defaultIterationTokenBudget` | Default per-iteration soft token budget (`{ in, out }` in tokens) | `{ in: 30000, out: 6000 }` |
+| `piBinary` | Path / name of the `pi` binary the child process spawns | `"pi"` |
+| `envOverrides` | Extra env vars to inject into every child | `{}` |
+| `registerBackgroundWorkProvider` | Register the runtime as a background-work provider on the host | `true` |
+| `honorCapabilityCeiling` | If true, the child inherits the parent's capability ceiling | `true` |
+| `criticalInterruptsAll` | If true, a `critical`-priority fire can preempt in-flight iterations | `false` |
+| `showCostInStatusLine` | Show accumulated sub-agent cost in the widget status line | `true` |
+| `useLlmEvaluator` | Use the LLM-evaluator (in addition to the regex evaluator) when a `result.md` is present | `false` |
+
+A one-shot migration (`src/migration/v2-to-v2.5.ts`) inserts the default `subAgent` block into existing settings files on first v2.5+ load — idempotent.
 
 | Sentry | Effect | Default |
 |---|---|---|
@@ -144,7 +239,7 @@ In `project` scope (default), loop and task files are saved to `.pi/loops/loops.
 
 ### Re-arming loops after a restart
 
-Cron loops re-arm themselves automatically **only if they are bound to this session** (see Per-Session Bindings below). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` (programmatic equivalent: `LoopDelete({id, action: "resume"})`) to re-bind them.
+Cron loops re-arm themselves automatically **only if they are bound to this session** (see Per-Session Bindings below). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` to re-bind them.
 
 ### Per-session bindings (multi-terminal parallelism)
 

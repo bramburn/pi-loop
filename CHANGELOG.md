@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.6.0 (2026-08-19)
+
+### Breaking Changes
+
+* **remove `LoopDelete` tool.** `LoopDelete` is no longer registered as an LLM-callable tool. The prior `computeActiveTools` predicate (`loops.some((l) => l.status === "paused") || loops.some((l) => l.isTaskBacklog)`) exposed `LoopDelete` to the LLM whenever any paused or taskBacklog loop existed in the store, so the LLM could call `LoopDelete({id})` on any loop — including active non-taskBacklog loops — without any user authorization. The tool's `execute` had no guard for the "user explicitly asked" condition the description claimed. This is a deliberate removal: the LLM never had the "user explicitly authorized this" signal that deletion requires. Deletion is still available to the user through the `/loop` command's View-loops menu (`x Delete`); internal cleanup paths (taskBacklog queue-drain auto-deletion, deletion tombstones) call `LoopStore.delete` directly. The public tool surface is now: `LoopCreate`, `LoopList`, `LoopUpdate`, `LoopPause`, `LoopResume`, `LoopInspect`. Per the project's policy, no future `LoopDelete`-shaped tool will be exposed to the LLM either.
+
+### Internal
+
+* `src/tools/loop-tools.ts`: `LoopDelete` `pi.registerTool` block removed. `closeWorkflowTask` removed from `LoopToolsOptions` (no longer needed). `LoopUpdate`'s "When NOT to Use" section reworded to drop the "do not use LoopDelete" copy and point at `status: "completed"` instead. `LoopUpdate`'s workflow-owned error message rewritten to point at the user-driven `/loop` menu. `LoopCreate`'s prompt guideline reworded to "ask the user to delete via /loop's View-loops menu" instead of "do not call LoopDelete".
+* `src/tools/tool-visibility.ts`: `LOOP_TOOL_DELETE` constant, the `NEVER_AVAILABLE` set, and the strip-on-both-ends logic in `computeActiveTools` all removed. JSDoc updated to "Deletion is not in the LLM's tool surface at all. There is no LoopDelete tool."
+* `src/tools/workflow-tools.ts`: error message at the "all declared outcomes are unavailable" branch now says "ask the user to abandon it via /loop's View-loops menu" instead of "abandon it with LoopDelete".
+* `src/runtime/notification-runtime.ts`: three lifecycle messages updated to tell the LLM "there is no LoopDelete tool" and to instruct the agent to ask the user via `/loop` for deletion. Backlog loop message clarifies that pi-loop auto-deletes when the queue drains.
+* `src/runtime/sub-agent/index.ts`: sub-agent pause preview message rewritten to "ask the user to delete it via /loop's View-loops menu".
+* `src/index.ts`: `closeWorkflowTask` no-op stub and its wiring in `registerLoopTools` removed.
+* `src/store.ts`, `src/commands/settings-command.ts`: comments clarified to reference the "now-removed" LoopDelete tool.
+* `src/commands/loop-command.ts`: `/loop` → View loops → `x Delete` warning message updated to say "claim the task first, then retry Delete from this menu" instead of "use LoopDelete with its claimId".
+
+### Tests
+
+* `test/loop-tools.test.ts`: full `describe("LoopDelete", ...)` block (5 tests) removed, including a duplicate of the LoopPause happy path that was misplaced. Two workflow tests that used `h.text("LoopDelete", ...)` removed. The "tells agents" test updated to drop the LoopDelete assertions and verify `## When to Use` / `## When NOT to Use` headers on the remaining tools. New regression-guard test added: `expect(h.toolMap.has("LoopDelete")).toBe(false)`. The `closeWorkflowTask` mock removed from the `registerLoopTools` call. The "exposes registered tool names" test in `loop-tools coverage extras` now also asserts `expect(tools).not.toContain("LoopDelete")`. The "guides pause or deletion" workflow test now matches the new error-message text.
+* `test/tool-visibility.test.ts`: `NEVER_AVAILABLE`-specific tests replaced with a single regression-guard test that asserts `computeActiveTools` never returns `LoopDelete` across six different input combinations. The "removes previously-enabled conditional tools" test no longer has `LoopDelete` in the initial set. The state × tool matrix updated — every case now carries `forbidden: ["LoopDelete"]`.
+* `test/index.test.ts`: `LOOP_TOOLS` array no longer contains `"LoopDelete"`.
+* `test/loop-command.test.ts`: the "use LoopDelete with its claimId" assertion updated to "claim the task first" to match the new `/loop` warning text.
+
+### Docs
+
+* `AGENTS.md`: `LoopDelete` removed from the v2.1 surface bullet list, `loop-tools.ts` directory comment, and the explanatory "LoopDelete was removed" section that replaces the previous "LoopDelete is not in the LLM's tool surface" section.
+* `src/tools/AGENTS.md`: `loop-tools.ts` description rewritten to list the new tool set. The "LoopDelete deletes only" bullet replaced with "No `LoopDelete` tool" warning future contributors not to re-expose deletion to the LLM.
+* `test/AGENTS.md`: `loop-tools.test.ts` line updated to mention the new tools and the regression-guard assertion.
+* `README.md`: Quick start snippet, tool table, and the re-arming-after-restart section all updated. The tool table now includes a callout: "Loop deletion is intentionally **not** an LLM-callable tool."
+* `docs/MANUAL_TESTING.md`: the tool-list expectation block in the paused-loop test case no longer expects `LoopDelete` to appear.
+* `docs/TASK_TOOL_FREEZE.md`: the loop-tool list in the TUI-freeze note no longer includes `LoopDelete`.
+
+### Quality gates
+
+* `npm run test:all`: 996 passed, 33 skipped.
+* `npm run typecheck`: clean.
+* `npm run lint`: clean.
+* `npm run build`: clean.
+
 ## 2.5.2 (2026-08-18)
 
 

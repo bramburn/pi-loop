@@ -324,7 +324,7 @@ describe("registerLoopCommand", () => {
 
     expect(h.store.get("1")).toBeDefined();
     expect(h.triggerSystem.remove).not.toHaveBeenCalledWith("1");
-    expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("use LoopDelete with its claimId"), "warning");
+    expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("claim the task first"), "warning");
   });
 
   it("no-args 'View loops' -> select entry -> Pause pauses without deleting", async () => {

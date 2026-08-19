@@ -7,8 +7,12 @@
  *   LoopPause     — Pause a loop by ID (soft halt; preserves the loop)
  *   LoopResume    — Resume a paused loop by ID
  *   LoopList      — List all active loops with status and next-fire times
- *   LoopDelete    — Delete a loop by ID
  *   LoopInspect   — Inspect a sub-agent loop's latest iteration (v2.5+)
+ *
+ * Deletion is intentionally NOT exposed as a tool. The user deletes loops
+ * through the `/loop` command's View-loops menu (`x Delete`); internal
+ * cleanup paths (taskBacklog queue-drain auto-deletion) call
+ * `LoopStore.delete` directly.
  *
  * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]
@@ -210,9 +214,6 @@ export default function (pi: ExtensionAPI) {
   // wake from existing pending tasks. Since tasks are disabled, return false.
   const maybeBootstrapTaskLoop = async (_entry: LoopEntry): Promise<boolean> => false;
   const isTaskSystemReady = (): boolean => false;
-  // workflow-tools is disabled, so there is never a workflow task to close.
-  // Returning true lets LoopDelete proceed past the workflow-task guard.
-  const closeWorkflowTask = async (_taskId: string, _claimId?: string): Promise<boolean> => true;
 
   const notificationRuntime = createNotificationRuntime({
     pi,
@@ -365,7 +366,6 @@ export default function (pi: ExtensionAPI) {
     },
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
-    closeWorkflowTask,
   });
 
   registerLoopCommand({

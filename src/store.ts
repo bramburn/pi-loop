@@ -493,9 +493,10 @@ export class LoopStore extends ReducerBackedStore<LoopEntry, LoopReducerState, L
    * the source id (id continuity across the project<->shared boundary).
    *
    * The CALLER must call `triggerSystem.remove(id)` BEFORE invoking this
-   * method (matching the ordering pattern in the `LoopDelete` tool at
-   * `src/tools/loop-tools.ts`). This method only handles store-level
-   * mutation; trigger teardown is the caller's responsibility.
+   * method (matching the ordering pattern used by the now-removed
+   * `LoopDelete` tool at `src/tools/loop-tools.ts`). This method only
+   * handles store-level mutation; trigger teardown is the caller's
+   * responsibility.
    *
    * Returns `{ ok: true, sharedEntry, sourceEntry }` on success, or
    * `{ ok: false, error }` on source-not-found, id-collision-in-shared,

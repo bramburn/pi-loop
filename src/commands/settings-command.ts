@@ -226,8 +226,8 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
  *
  * Promote is destructive per Q5: the source entry is removed from the
  * project store after the copy lands, and the source trigger is torn down
- * before the store mutation (matching the `LoopDelete` tool's ordering at
- * `src/tools/loop-tools.ts`).
+ * before the store mutation (matching the deletion ordering previously
+ * encoded in the now-removed `LoopDelete` tool at `src/tools/loop-tools.ts`).
  *
  * Adopt is non-destructive: the shared entry is copied into the project
  * store, the local entry is armed via `triggerSystem.add()`, and the
