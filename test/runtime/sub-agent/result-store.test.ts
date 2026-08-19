@@ -116,4 +116,31 @@ describe("sub-agent result-store", () => {
     expect(pruned).toBe(3);
     expect(store.listIterations("4").map((it) => it.iterId)).toEqual([5, 4]);
   });
+
+  it("prune bounds retain to a positive integer (L4)", () => {
+    for (const i of [1, 2, 3]) {
+      store.finalize({
+        loopId: "5",
+        iterId: i,
+        status: "succeeded",
+        startedAt: 0,
+        finishedAt: 100,
+        durationMs: 100,
+        tokens: { in: 0, out: 0, total: 0 },
+        costUsd: 0,
+        exitCode: 0,
+        processSignal: null,
+        preview: `iter ${i}`,
+        resultPath: null,
+        childSessionPath: "/tmp/s.jsonl",
+      });
+    }
+    // Negative retain: kept as the original no-op behaviour.
+    expect(store.prune("5", -5)).toBe(0);
+    // NaN retain: kept as the original no-op behaviour.
+    expect(store.prune("5", Number.NaN)).toBe(0);
+    // Fractional retain: floored to 2 (the fractional part is dropped).
+    expect(store.prune("5", 2.7)).toBe(1);
+    expect(store.listIterations("5").map((it) => it.iterId)).toEqual([3, 2]);
+  });
 });

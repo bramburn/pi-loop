@@ -22,7 +22,10 @@ export function formatSubAgentResult(result: SubAgentResult, priority: "defer" |
   const tokens = result.tokens?.total ?? 0;
   const model = result.model ?? "unknown";
   const statusLabel = statusToLabel(result.status);
-  const base = `Sub-agent loop #${result.loopId} iter-${result.iterId} · ${duration} · ${model} · ${tokens.toLocaleString("en-US")} tok · ${statusLabel}.`;
+  // Intl.NumberFormat with the system default locale (no explicit locale)
+  // so the LLM and human reader see the same separators the OS uses.
+  const tokensFmt = new Intl.NumberFormat().format(tokens);
+  const base = `Sub-agent loop #${result.loopId} iter-${result.iterId} · ${duration} · ${model} · ${tokensFmt} tok · ${statusLabel}.`;
   let body = result.preview?.trim() || "(no output)";
   // Truncate body to the remaining cap.
   const remaining = cap - base.length - 2; // -2 for " · "
@@ -38,8 +41,12 @@ function formatDuration(ms: number): string {
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
-  if (h > 0) return `${h}h${m}m`;
-  if (m > 0) return `${m}m${s.toString().padStart(2, "0")}s`;
+  const pad2 = (n: number) => n.toString().padStart(2, "0");
+  // Consistent format: "HhMMmSSs" / "MMmSSs" / "SSs" — the largest unit
+  // is bare, the rest are two-digit zero-padded. Examples:
+  //   45s, 03m07s, 01h02m03s.
+  if (h > 0) return `${h}h${pad2(m)}m${pad2(s)}s`;
+  if (m > 0) return `${pad2(m)}m${pad2(s)}s`;
   return `${s}s`;
 }
 

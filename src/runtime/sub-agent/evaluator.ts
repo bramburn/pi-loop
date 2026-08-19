@@ -19,7 +19,7 @@
  *  - both criteria match → failure wins (per spec SCH-05)
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 export type EvaluatorVerdict = "succeeded" | "succeeded_by_criteria" | "failed_by_criteria" | "no_match";
 
@@ -40,10 +40,21 @@ function safeReadResultMd(path: string | null | undefined): string {
     return "";
   }
   try {
-    // Read at most the first MAX_READ_BYTES via fs.openSync with truncation.
-    // For simplicity, read the whole file when small; truncate to 32 KiB otherwise.
-    const content = readFileSync(path, "utf-8");
-    return content.length > MAX_READ_BYTES ? content.slice(0, MAX_READ_BYTES) : content;
+    // Read at most the first MAX_READ_BYTES (32 KiB) without slurping the
+    // whole file into memory. For small files we still read fully; for
+    // anything larger we open the file and read only the cap.
+    const st = statSync(path);
+    if (st.size <= MAX_READ_BYTES) {
+      return readFileSync(path, "utf-8");
+    }
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(MAX_READ_BYTES);
+      const bytesRead = readSync(fd, buf, 0, MAX_READ_BYTES, 0);
+      return buf.subarray(0, bytesRead).toString("utf-8");
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return "";
   }

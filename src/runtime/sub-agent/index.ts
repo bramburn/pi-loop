@@ -88,12 +88,13 @@ export class SubAgentRuntime {
       activeCount: this.watcher.activeCount(),
       settings: this.opts.settings(),
     });
+    const iterId = this.nextIterId(loop);
     if (decision.kind === "defer") {
       this.notify(loop, {
         kind: "sub-agent-result",
         loopId: loop.id,
-        iterId: this.nextIterId(loop),
-        priority: loop.priority ?? "defer",
+        iterId,
+        priority: loop.priority ?? "normal",
         preview: `Sub-agent loop #${loop.id} deferred: ${decision.activeCount}/${decision.cap} active iterations. Wait for one to finish.`,
         artifactPath: null,
         sessionPath: "",
@@ -109,7 +110,7 @@ export class SubAgentRuntime {
       this.notify(loop, {
         kind: "sub-agent-result",
         loopId: loop.id,
-        iterId: this.nextIterId(loop),
+        iterId,
         priority: "urgent",
         preview: `Sub-agent loop #${loop.id} paused: ${reasonLabel}. Use LoopUpdate to change the cap, or ask the user to delete it via /loop's View-loops menu.`,
         artifactPath: null,
@@ -119,7 +120,6 @@ export class SubAgentRuntime {
     }
 
     // Gate says spawn. Do it.
-    const iterId = this.nextIterId(loop);
     const sub = { ...DEFAULT_SUB_AGENT_SETTINGS, ...(this.opts.settings().subAgent ?? {}), ...(loop.subAgent ?? {}) };
     const iterationDir = this.resultStore.iterDir(loop.id, iterId);
     mkdirSync(iterationDir, { recursive: true });
