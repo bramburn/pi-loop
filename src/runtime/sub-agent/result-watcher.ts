@@ -179,6 +179,51 @@ export class ResultWatcher {
     return cancelled;
   }
 
+  /**
+   * Cancel every in-flight iteration across all loops. Used on parent
+   * shutdown so the parent doesn't leak child processes when it exits.
+   *
+   * The single-loop `cancel(loopId, iterId)` matches on `loopId`, so the
+   * previous `cancel("__all__" as string)` no-op was a real bug — a
+   * dedicated method avoids the type-system escape and keeps the matcher
+   * logic localised.
+   *
+   * Each killed child is awaited (with a 5s SIGTERM-then-SIGKILL cap) so
+   * the parent's exit doesn't race the result-store finalisation. Returns
+   * the number of children cancelled.
+   */
+  async cancelAll(timeoutMs = 5_000): Promise<number> {
+    const records = Array.from(this.active.values());
+    if (records.length === 0) return 0;
+    for (const rec of records) {
+      rec.handle.kill("SIGTERM");
+    }
+    const waits = records.map((rec) => Promise.race([
+      rec.handle.wait(),
+      new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        setTimeout(() => resolve({ exitCode: null, signal: "SIGKILL" }), timeoutMs).unref();
+      }),
+    ]));
+    await Promise.allSettled(waits);
+    // Belt-and-braces: any still-running child gets SIGKILL and we wait
+    // a short grace period before the parent exits.
+    const stillRunning = records.filter((rec) => {
+      try {
+        process.kill(rec.handle.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (stillRunning.length > 0) {
+      for (const rec of stillRunning) {
+        rec.handle.kill("SIGKILL");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 250).unref());
+    }
+    return records.length;
+  }
+
   private key(loopId: string, iterId: number): string {
     return `${loopId}:${iterId}`;
   }
@@ -204,7 +249,7 @@ export class ResultWatcher {
       loop.successCriteria,
       loop.failureCriteria,
     );
-    const status = this.determineStatus(result, verdict, loop);
+    const status = this.determineStatus(result, verdict, loop, handle.killedByTimer);
     const preview = this.extractPreview(resultMd, status, loop, iterId);
 
     this.opts.resultStore.finalize({
@@ -222,8 +267,8 @@ export class ResultWatcher {
       childSessionPath: handle.childSessionPath,
       model: record.model,
       thinking: record.thinking,
-      ...(status === "failed" || status === "failed_by_criteria" || status === "timeout"
-        ? { errorMessage: verdict.reason ?? result.signal ?? `exit ${result.exitCode}` }
+      ...(status === "failed" || status === "failed_by_criteria" || status === "timeout" || status === "cancelled"
+        ? { errorMessage: status === "timeout" ? "iteration wall-clock timeout" : (verdict.reason ?? result.signal ?? `exit ${result.exitCode}`) }
         : {}),
     });
 
@@ -263,12 +308,17 @@ export class ResultWatcher {
     });
   }
 
-  private determineStatus(exit: { exitCode: number | null; signal: NodeJS.Signals | null }, verdict: ReturnType<typeof evaluate>, _loop: LoopEntry): "succeeded" | "succeeded_by_criteria" | "failed" | "failed_by_criteria" | "timeout" | "cancelled" {
+  private determineStatus(
+    exit: { exitCode: number | null; signal: NodeJS.Signals | null },
+    verdict: ReturnType<typeof evaluate>,
+    _loop: LoopEntry,
+    killedByTimer: boolean,
+  ): "succeeded" | "succeeded_by_criteria" | "failed" | "failed_by_criteria" | "timeout" | "cancelled" {
     if (exit.signal === "SIGTERM" || exit.signal === "SIGKILL") {
       // Distinguish timeout (the wall-clock timer killed) from cancel
-      // (the user issued a stop). The store reads the timing; we just
-      // label it cancelled if a signal was used and exitCode is null.
-      return "cancelled";
+      // (the user issued a stop). The spawn handle tracks whether the
+      // two-stage timer fired before the user stopped the loop.
+      return killedByTimer ? "timeout" : "cancelled";
     }
     if (exit.exitCode !== 0) {
       return "failed";
