@@ -81,7 +81,7 @@ Documented in `.env.example`. Never commit a real DSN.
 
 - **No production deploy of this package** — it's installed by users via `npm install`.
 - **No DSN baked into source.** Each user opts in with their own DSN (or borrows the OSS sponsorship DSN once approved).
-- **CI workflows** (`ci.yml`, `release.yml`) don't need Sentry credentials — the SDK is mocked in tests.
+- **CI workflows** (`ci.yml`, `publish.yml`) don't need Sentry credentials — the SDK is mocked in tests.
 - **No GitHub Actions secret** needs to be created for v1.
 
 ## 8. Test plan

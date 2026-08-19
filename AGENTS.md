@@ -138,7 +138,13 @@ The cyclic TUI editor only rotates the `defer` threshold (1h → 24h → 7d). Th
 
 Change scope via `/loop-settings` (no env var override). For per-session isolation across concurrent worktrees, use `session`; for disposable scratch work, use `memory`.
 
-After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` (or `LoopDelete({id, action: "resume"})`) to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
+After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
+
+## LoopDelete is not in the LLM's tool surface
+
+`LoopDelete` is registered as a tool (for internal/test use) but is **stripped from the LLM's active tool set** by `computeActiveTools` in `src/tools/tool-visibility.ts` (the `NEVER_AVAILABLE` list). Defense-in-depth: even if `LoopDelete` is present in the initial tool list from a previous version, `computeActiveTools` strips it on every sync.
+
+Deletion is a **user-driven action**; trigger it from the `/loop` command's View-loops menu (`x Delete`), or from internal code paths (e.g. taskBacklog queue-drain auto-deletion) that call `LoopStore.delete` directly. The tool's own `execute` has no internal authorization guard — the visibility layer is the only barrier.
 
 ## Tool Schema Discipline
 - Tool calls must use the exact schema field names from the tool definition. Do not invent aliases.
@@ -160,7 +166,7 @@ Copy TaskStore from pi-tasks: `O_EXCL` lockfile, stale PID detection, `LOCK_RETR
 
 Use `/loop-settings` to change scope. There is no env-var override in v2.0.
 
-After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` (or `LoopDelete({id, action: "resume"})`) to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
+After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
 
 ## Per-Session Loop Bindings
 
@@ -244,7 +250,13 @@ Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it,
 
 ## Publishing to npm
 
-The repo has a CI release workflow at `.github/workflows/release.yml` that auto-publishes to npm on every `v*.*.*` tag push. **Do not run `npm publish` locally** — it conflicts with the CI workflow (403 "cannot publish over the previously published versions").
+The repo has a CI publish workflow at `.github/workflows/publish.yml` that auto-publishes to npm on every `v*.*.*` tag push using **OIDC Trusted Publishing** — no `NPM_TOKEN` secret is required. The OIDC token issued by GitHub Actions is exchanged for a short-lived npm token by the registry at publish time. The trusted-publisher config (set on https://www.npmjs.com) binds the workflow file name and the `environment` to the repo:
+
+- Workflow file: `publish.yml`
+- Environment: `npm-publish`
+- Permissions: `id-token: write` + `environment: npm-publish` on the job
+
+**Do not run `npm publish` locally** — it conflicts with the CI workflow (403 "cannot publish over the previously published versions").
 
 ### Release flow
 
@@ -254,7 +266,7 @@ The repo has a CI release workflow at `.github/workflows/release.yml` that auto-
 4. **Push the branch** and **open a PR** against `master`.
 5. **Merge the PR** with `gh pr merge <N> --merge --delete-branch` (the `--delete-branch` flag cleans up the remote branch).
 6. **Tag the merged commit** on master: `git tag -a v<version> -m "v<version>: <summary>"` and `git push origin v<version>`.
-7. **CI takes over**: the workflow runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, then `npm publish --provenance --access public`. It does NOT require an OTP because the CI runner has `NPM_TOKEN` configured as a secret.
+7. **CI takes over**: the `publish.yml` workflow runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, then `npm publish --provenance --access public`. The OIDC token issued by GitHub Actions is exchanged for a short-lived npm token via the `npm-publish` environment — no `NPM_TOKEN` secret is required and no OTP is needed. The publish step sets `NPM_CONFIG_PROVENANCE=true` so the tarball carries an SLSA provenance attestation signed by the OIDC identity.
 8. **Verify**: `npm view @bramburn/pi-loop` shows the new version as `latest`.
 
 ### Package contents — `package.json` `files` whitelist
@@ -299,6 +311,6 @@ Conventions for the research workspace:
 
 ### What NOT to do
 
-- **Do not run `npm publish` locally.** It will read the OTP from the agent's authenticator and conflict with CI's auto-publish.
+- **Do not run `npm publish` locally.** It will conflict with the OIDC trusted publisher (the local `npm` invocation has no OIDC token, so the publish attempt fails or — worse — pushes without provenance if a stale `NODE_AUTH_TOKEN` is present in the env).
 - **Do not push a tag without first merging the release commit to master.** CI picks up the tag and the branch tip, and a tag on a non-merged commit leads to a published version that doesn't match what's in `master`.
 - **Do not skip the `files` whitelist.** Without it, `wt/` (27 MB of worktrees) ends up in the published tarball.
