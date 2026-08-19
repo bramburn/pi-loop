@@ -1,0 +1,16 @@
+v2.6.0: remove LoopDelete tool
+
+LoopDelete was exposed to the LLM whenever any paused or taskBacklog
+loop existed in the store. The tool's execute had no guard for the
+"user explicitly asked" condition the description claimed, so the
+LLM could delete any loop — including active non-taskBacklog loops
+— without any user authorization.
+
+Removes the LoopDelete tool entirely. Deletion is now exclusively a
+user-driven action via the /loop command's View-loops menu (x Delete).
+Internal cleanup paths (taskBacklog queue-drain auto-deletion,
+deletion tombstones) call LoopStore.delete directly.
+
+Per the project's policy, no future LoopDelete-shaped tool will be
+exposed to the LLM either — the LLM lacks the "user explicitly
+authorized this" signal that deletion requires.

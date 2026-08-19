@@ -1,0 +1,26 @@
+v2.6.1: fix sub-agent timeout/cancel labelling and shutdown child-kill
+
+Closes the three Critical findings and one High finding from the
+v2.5.1 sub-agent runtime code review:
+
+C1: timeout vs cancelled is now distinguished via a new killedByTimer
+flag on SpawnHandle. The wall-clock timer flips the flag before
+sending SIGTERM, and result-watcher's determineStatus returns
+"timeout" when the flag is true, "cancelled" otherwise.
+
+C2 + C3: SubAgentRuntime.onShutdown() now actually kills in-flight
+children via the new ResultWatcher.cancelAll() method, which
+iterates this.active directly, sends SIGTERM, and awaits the
+per-child exit with a 5s SIGTERM-then-SIGKILL cap.
+
+H1: pause notification no longer references the removed LoopDelete
+tool. Replaced with "ask the user to delete it via /loop's
+View-loops menu, or use LoopUpdate to change the cap".
+
+M1 (bonus): errorMessage condition in attachExitHandler now also
+covers the "cancelled" status.
+
+Tests:
+- test/runtime/sub-agent/result-watcher.test.ts (new, 8 cases)
+  covers the two regressions.
+- npm run test:all: 1004 passed, 33 skipped (+8 over v2.6.0).

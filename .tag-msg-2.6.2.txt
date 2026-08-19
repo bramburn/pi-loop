@@ -1,0 +1,40 @@
+v2.6.2: clean up remaining sub-agent runtime review findings
+
+Closes H2/H3/M2-M4/L1-L4 from the v2.5.1 sub-agent runtime review
+on top of v2.6.1 (C1/C2/C3/H1/M1):
+
+H2: readSessionTokens uses JSON.parse per line instead of a regex
+that depended on exact field order input_tokens -> output_tokens.
+Interleaved fields used to silently produce 0 tokens.
+
+H3: safeReadResultMd no longer reads the whole file before slicing
+to 32 KiB. Now uses fs.openSync + Buffer.alloc + readSync for
+files larger than the cap.
+
+M2: defer notification priority defaults to "normal" (was "defer"
+which suppressed the notification for loops without explicit
+priority).
+
+M3: extracted nextIterId(loop) to a local iterId const at the top
+of handleFire.
+
+M4: dropped the unused _loop parameter from determineStatus and
+extractPreview.
+
+L1: token formatting uses Intl.NumberFormat() with system default
+locale.
+
+L2: formatDuration is consistent (largest unit bare, rest
+two-digit zero-padded: 45s, 03m07s, 01h02m03s).
+
+L3: reconcileAfterRestart no longer uses require("node:fs") at
+function scope.
+
+L4: prune() floors retain and treats non-finite values as a no-op
+(matches v2.5.1 behaviour for bad input).
+
+Tests:
+- npm run test:all: 1010 passed, 33 skipped (+6 over v2.6.1).
+- npm run typecheck: clean.
+- npm run lint: clean.
+- npm run build: clean.
