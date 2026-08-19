@@ -48,6 +48,14 @@ export interface SpawnHandle {
   startedAt: number;
   kill(signal?: NodeJS.Signals): void;
   wait(): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
+  /**
+   * True once the wall-clock timeout has fired and the handle's internal
+   * two-stage kill (SIGTERM at T-30s, SIGKILL at T) has been triggered.
+   * The result-watcher uses this to distinguish a "timeout" from a user-
+   * initiated "cancel": a SIGTERM/SIGKILL exit with `killedByTimer === true`
+   * is a timeout; otherwise it is a cancel.
+   */
+  killedByTimer: boolean;
 }
 
 function ensureParent(filePath: string): void {
@@ -97,21 +105,12 @@ export async function spawnSubAgent(req: SpawnRequest): Promise<SpawnHandle> {
 
   const startedAt = Date.now();
   // Two-stage kill: SIGTERM at T-30s, SIGKILL at T.
-  const outerTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill("SIGKILL");
-    }, 30_000).unref();
-  }, Math.max(1, req.iterationTimeoutMs));
-  outerTimer.unref();
-
-  return {
+  const handle: SpawnHandle = {
     pid: child.pid ?? -1,
     childSessionPath: req.childSessionPath,
     resultPath: join(dirname(req.childSessionPath), "result.json"),
     startedAt,
+    killedByTimer: false,
     kill: (signal) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
       child.kill(signal ?? "SIGTERM");
@@ -124,4 +123,16 @@ export async function spawnSubAgent(req: SpawnRequest): Promise<SpawnHandle> {
       child.once("exit", (code, sig) => onExit(code, sig as NodeJS.Signals | null));
     }),
   };
+  const outerTimer = setTimeout(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    handle.killedByTimer = true;
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill("SIGKILL");
+    }, 30_000).unref();
+  }, Math.max(1, req.iterationTimeoutMs));
+  outerTimer.unref();
+
+  return handle;
 }

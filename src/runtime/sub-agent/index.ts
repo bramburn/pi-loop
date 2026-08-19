@@ -156,8 +156,8 @@ export class SubAgentRuntime {
     });
   }
 
-  onShutdown(): number {
-    return this.watcher.cancel("__all__" as string);
+  onShutdown(): Promise<number> {
+    return this.watcher.cancelAll();
   }
 
   private nextIterId(loop: LoopEntry): number {

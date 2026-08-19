@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.6.1 (2026-08-19)
+
+### Bug Fixes
+
+* **sub-agent: distinguish timeout from cancel.** `determineStatus` in `src/runtime/sub-agent/result-watcher.ts` previously returned `"cancelled"` for **any** SIGTERM/SIGKILL exit, including the wall-clock timer's two-stage kill. The `SubAgentStatus` type lists `"timeout"` as a separate value and the formatter has a `"failed (timeout)"` label, but the runtime never produced a `"timeout"` status. Now the `SpawnHandle` carries a `killedByTimer: boolean` flag that the wall-clock timer flips to `true` before sending SIGTERM. `determineStatus` checks the flag and returns `"timeout"` when the timer fired, `"cancelled"` when the user-initiated `handle.kill()` did. Result-store `errorMessage` aligns with the new status (timeout gets `"iteration wall-clock timeout"`, cancelled gets `verdict.reason ?? result.signal`).
+* **sub-agent: `onShutdown` now actually kills in-flight children.** `SubAgentRuntime.onShutdown()` previously called `this.watcher.cancel("__all__" as string)`, but `cancel(loopId, iterId)` filters by exact loopId match, so no child was ever killed on parent shutdown — the parent exited, the children became orphans, and the next startup had to reconcile. Now `onShutdown()` calls the new `ResultWatcher.cancelAll()` method which iterates `this.active` directly. `cancelAll()` also awaits the per-child exit with a 5s SIGTERM-then-SIGKILL cap so the parent's exit doesn't race the result-store finalisation.
+* **sub-agent: pause notification no longer references removed `LoopDelete` tool.** The pause-preview string in `src/runtime/sub-agent/index.ts` mentioned `LoopDelete` for removal guidance; that tool was removed in v2.6.0 (PR #86). Replaced with "ask the user to delete it via /loop's View-loops menu, or use LoopUpdate to change the cap".
+
+### Internal
+
+* `src/runtime/sub-agent/spawn.ts`: `SpawnHandle` interface gains `killedByTimer: boolean`; the wall-clock `setTimeout` flips it before sending SIGTERM/SIGKILL.
+* `src/runtime/sub-agent/result-watcher.ts`: new `cancelAll(timeoutMs = 5_000): Promise<number>` method on `ResultWatcher`; `determineStatus` now takes a `killedByTimer` parameter and returns `"timeout"` or `"cancelled"` accordingly; `attachExitHandler` passes `handle.killedByTimer` through and sets `errorMessage` for both `timeout` and `cancelled` statuses (previously only for the three failure modes).
+
+### Tests
+
+* `test/runtime/sub-agent/result-watcher.test.ts` (new file, 8 cases): the two regressions the review identified. Asserts that:
+  - A SIGTERM exit with `killedByTimer=true` produces `status: "timeout"` (not `"cancelled"`).
+  - A SIGTERM exit with `killedByTimer=false` produces `status: "cancelled"`.
+  - A normal exit (exitCode=0) produces `status: "succeeded"`.
+  - `cancelAll()` returns the number of in-flight iterations and sends SIGTERM to every registered handle.
+  - `cancelAll()` returns 0 when the active set is empty.
+  - `cancelAll()` is global (not per-loop) — both loopA and loopB handles receive SIGTERM.
+  - The original `cancel("nonexistent-loop")` is a no-op (0), documenting the broken path the bug report identified.
+
+### Quality gates
+
+* `npm run test:all`: 1004 passed, 33 skipped (was 996 on v2.6.0; +8 new result-watcher cases).
+* `npm run typecheck`: clean.
+* `npm run lint`: clean.
+* `npm run build`: clean.
+
 ## 2.6.0 (2026-08-19)
 
 ### Breaking Changes
