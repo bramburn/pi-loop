@@ -106,11 +106,16 @@ export class ResultStore {
    * with `recursive: true` to remove the iter-N directory atomically.
    */
   prune(loopId: string, retain: number): number {
-    if (retain < 1) return 0;
+    // Defensive bounds: floor to an integer, then treat anything < 1
+    // (negative, zero, NaN) as the original "no prune" no-op. This
+    // preserves the v2.5.1 behaviour for bad input while still dropping
+    // the fractional part of a non-integer `retain` (e.g. 2.7 → 2).
+    const keep = Math.floor(retain);
+    if (!Number.isFinite(keep) || keep < 1) return 0;
     const all = this.listIterations(loopId);
-    if (all.length <= retain) return 0;
+    if (all.length <= keep) return 0;
     let pruned = 0;
-    for (const it of all.slice(retain)) {
+    for (const it of all.slice(keep)) {
       const iterDir = dirname(it.path);
       try {
         rmSync(iterDir, { recursive: true, force: true });

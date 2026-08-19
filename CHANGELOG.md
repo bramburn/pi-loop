@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.6.2 (2026-08-19)
+
+### Bug Fixes
+
+* **sub-agent: token accounting uses `JSON.parse` instead of a fragile regex.** `ResultWatcher.readSessionTokens` (in `src/runtime/sub-agent/result-watcher.ts`) used to match the JSONL `usage` block with a regex that depended on the exact field order `input_tokens` then `output_tokens`. Any interleaved field (e.g. a future `cache_creation_input_tokens`) caused the regex to miss the line, silently returning 0 tokens and a 0-cost iteration. Switched to per-line `JSON.parse`; the parser reads `usage.input_tokens` / `usage.output_tokens` directly and ignores other fields. Skips lines that aren't valid JSON. (H2 from the v2.5.1 sub-agent runtime review.)
+* **sub-agent: `safeReadResultMd` reads only the first 32 KiB, not the whole file.** `evaluator.ts` used to `readFileSync` and slice, which allocates the full file before slicing. For a 100 MB `result.md` that's 100 MB of wasted memory. Now uses `fs.openSync` + `Buffer.alloc(32 KiB)` + `readSync` for files larger than the cap. The 32 KiB boundary is the same as before; the difference is no full-file allocation. (H3 from the v2.5.1 sub-agent runtime review.)
+* **sub-agent: defer notification priority defaults to `"normal"`.** `SubAgentRuntime.handleFire` used `loop.priority ?? "defer"` for the defer notification, which meant a loop with no explicit priority got "defer" priority on a deferral — suppressing the very notification the agent needs to see. Now `loop.priority ?? "normal"`, matching the default used elsewhere. (M2 from the v2.5.1 sub-agent runtime review.)
+* **sub-agent: `prune()` floors `retain` and treats non-finite values as a no-op.** `ResultStore.prune` had no upper or lower bound check on `retain`. A negative or `NaN` retain used to fall through to `all.length <= retain` (false because length is non-negative), so it would silently prune everything. Now: `Math.floor(retain)`; if the result is non-finite or `< 1`, return 0 (no-op, matches the v2.5.1 behavior for bad input). A fractional retain (e.g. 2.7) is floored. (L4 from the v2.5.1 sub-agent runtime review.)
+
+### Internal
+
+* `src/runtime/sub-agent/index.ts`: extracted `nextIterId(loop)` to a local `iterId` const at the top of `handleFire` (was called twice in the defer/pause branches). Defer notification priority changed to `loop.priority ?? "normal"`. (M2 + M3 from the review.)
+* `src/runtime/sub-agent/result-watcher.ts`:
+  - `readSessionTokens` rewritten to use `JSON.parse` per line (was a regex match).
+  - `determineStatus` no longer takes the unused `_loop: LoopEntry` parameter; only `exit`, `verdict`, `killedByTimer`. (M4.)
+  - `extractPreview` no longer takes the unused `_loop: LoopEntry` parameter. (M4.)
+  - `reconcileAfterRestart` no longer uses `require("node:fs")`; the necessary `existsSync` / `readdirSync` / `statSync` / `readFileSync` are imported at the top of the file. (L3.)
+* `src/runtime/sub-agent/notification-formatter.ts`:
+  - Token formatting uses `Intl.NumberFormat()` with the system default locale, instead of hardcoded `"en-US"`. (L1.)
+  - `formatDuration` is consistent: largest unit bare, the rest two-digit zero-padded. Examples: `45s`, `03m07s`, `01h02m03s`. Previously `1m00s` (h-style) but `1h0m` (no seconds). (L2.)
+
+### Tests
+
+* `test/runtime/sub-agent/result-watcher.test.ts` (3 new cases, total 12 in the file):
+  - **H2 (standard JSONL usage block)** — writes a session file with three JSONL lines including one with `usage: { input_tokens: 123, output_tokens: 45 }`; asserts the finalised `tokens` field is `{ in: 123, out: 45, total: 168 }`.
+  - **H2 (interleaved field)** — same but with an extra `cache_creation_input_tokens: 25` between input and output; asserts the parser still reads 100/50 (regression guard for the regex fragility).
+  - **H2 (malformed session)** — writes `this is not json\n`; asserts the finalised `tokens` field is `{ in: 0, out: 0, total: 0 }` (graceful fallback, no throw).
+  - **M4 (signature regression guard)** — a small describe block documenting that `determineStatus` is now called with three arguments.
+* `test/runtime/sub-agent/evaluator.test.ts` (1 new case):
+  - **H3 (truncated read)** — writes a result.md > 50 KiB where a marker is at byte 100 and another at byte 50_000. Asserts the 50 KiB marker does NOT match (would require reading past the 32 KiB cap) and the 100-byte marker still matches.
+* `test/runtime/sub-agent/result-store.test.ts` (1 new case):
+  - **L4 (prune bounds)** — `prune("5", -5)` returns 0 (no-op, matches v2.5.1 behaviour for bad input); `prune("5", NaN)` returns 0; `prune("5", 2.7)` floors to 2.
+
+### Quality gates
+
+* `npm run test:all`: 1010 passed, 33 skipped (was 1004 on v2.6.1; +6 new cases).
+* `npm run typecheck`: clean.
+* `npm run lint`: clean.
+* `npm run build`: clean.
+
 ## 2.6.1 (2026-08-19)
 
 ### Bug Fixes

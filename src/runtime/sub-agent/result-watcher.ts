@@ -28,7 +28,7 @@
  * iterations exist.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { PiLoopSettings } from "../../settings.js";
 import type { LoopStore } from "../../store.js";
@@ -249,8 +249,8 @@ export class ResultWatcher {
       loop.successCriteria,
       loop.failureCriteria,
     );
-    const status = this.determineStatus(result, verdict, loop, handle.killedByTimer);
-    const preview = this.extractPreview(resultMd, status, loop, iterId);
+    const status = this.determineStatus(result, verdict, handle.killedByTimer);
+    const preview = this.extractPreview(resultMd, status, iterId);
 
     this.opts.resultStore.finalize({
       loopId, iterId,
@@ -311,7 +311,6 @@ export class ResultWatcher {
   private determineStatus(
     exit: { exitCode: number | null; signal: NodeJS.Signals | null },
     verdict: ReturnType<typeof evaluate>,
-    _loop: LoopEntry,
     killedByTimer: boolean,
   ): "succeeded" | "succeeded_by_criteria" | "failed" | "failed_by_criteria" | "timeout" | "cancelled" {
     if (exit.signal === "SIGTERM" || exit.signal === "SIGKILL") {
@@ -338,7 +337,7 @@ export class ResultWatcher {
     return existsSync(candidate) ? candidate : null;
   }
 
-  private extractPreview(resultMd: string | null, status: string, _loop: LoopEntry, iterId: number): string {
+  private extractPreview(resultMd: string | null, status: string, iterId: number): string {
     if (!resultMd) return `(${status}) no result.md`;
     try {
       const content = readFileSync(resultMd, "utf-8");
@@ -355,17 +354,32 @@ export class ResultWatcher {
       const st = statSync(sessionPath);
       if (!st.isFile() || st.size === 0) return { in: 0, out: 0, total: 0 };
       // The session file is JSONL; the last record with usage info has
-      // the token counts. We scan the tail of the file (last 64 KiB).
+      // the token counts. We scan the tail of the file (last 64 KiB) and
+      // JSON.parse each line. Using JSON.parse instead of a regex is more
+      // robust to field-order changes and to nested objects in the usage
+      // block (e.g. a future `cache_creation_input_tokens` field between
+      // input and output).
       const buf = readFileSync(sessionPath, "utf-8");
       const tail = buf.length > 65536 ? buf.slice(buf.length - 65536) : buf;
       const lines = tail.split("\n").reverse();
       for (const line of lines) {
-        const m = line.match(/"usage"\s*:\s*\{[^}]*"input_tokens"\s*:\s*(\d+)[^}]*"output_tokens"\s*:\s*(\d+)/);
-        if (m) {
-          const inn = Number.parseInt(m[1] ?? "0", 10);
-          const outn = Number.parseInt(m[2] ?? "0", 10);
-          return { in: inn, out: outn, total: inn + outn };
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let record: unknown;
+        try {
+          record = JSON.parse(trimmed);
+        } catch {
+          // Not a JSON line; skip.
+          continue;
         }
+        if (!record || typeof record !== "object") continue;
+        const usage = (record as { usage?: unknown }).usage;
+        if (!usage || typeof usage !== "object") continue;
+        const u = usage as { input_tokens?: unknown; output_tokens?: unknown };
+        const inn = typeof u.input_tokens === "number" ? u.input_tokens : 0;
+        const outn = typeof u.output_tokens === "number" ? u.output_tokens : 0;
+        if (inn === 0 && outn === 0) continue;
+        return { in: inn, out: outn, total: inn + outn };
       }
     } catch { /* ignore */ }
     return { in: 0, out: 0, total: 0 };
@@ -393,27 +407,26 @@ export function reconcileAfterRestart(opts: {
 }): { reconciled: number; orphan: number; recovered: number } {
   // Reuse listIterations on ResultStore; for each one with a started
   // but unfinished state, mark orphaned.
-  const { existsSync: exists, readdirSync: readdir, statSync: stat } = require("node:fs") as typeof import("node:fs");
   const root = join(opts.scopeRoot, "sub-agent-results");
-  if (!exists(root)) return { reconciled: 0, orphan: 0, recovered: 0 };
+  if (!existsSync(root)) return { reconciled: 0, orphan: 0, recovered: 0 };
   let entries: string[];
-  try { entries = readdir(root); } catch { return { reconciled: 0, orphan: 0, recovered: 0 }; }
+  try { entries = readdirSync(root); } catch { return { reconciled: 0, orphan: 0, recovered: 0 }; }
   let orphan = 0;
   let recovered = 0;
   for (const loopId of entries) {
     const iters = opts.resultStore.listIterations(loopId);
     for (const { iterId, path } of iters) {
       // If result.json exists and is recent, skip.
-      if (exists(path)) {
+      if (existsSync(path)) {
         try {
-          const r = JSON.parse(require("node:fs").readFileSync(path, "utf-8")) as SubAgentResult;
+          const r = JSON.parse(readFileSync(path, "utf-8")) as SubAgentResult;
           if (r.status !== "running") continue;
         } catch { /* fall through */ }
       }
       // No final result.json (or status is "running") — check staleness.
       const iterDir = dirname(path);
       try {
-        const dirStat = stat(iterDir);
+        const dirStat = statSync(iterDir);
         if (opts.nowMs - dirStat.mtimeMs < opts.staleMs) {
           // Recent; not stale yet. Skip.
           continue;

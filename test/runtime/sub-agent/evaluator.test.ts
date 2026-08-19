@@ -71,4 +71,25 @@ describe("sub-agent evaluator", () => {
     const result = evaluate(path, "all.*passed", undefined);
     expect(result.verdict).toBe("succeeded_by_criteria");
   });
+
+  it("reads only the first 32 KiB of a large result.md (H3: no full-file slurp)", () => {
+    // The cap is 32 KiB (32768 bytes). Build a result.md where the
+    // marker is at byte 50_000 — past the cap — and a tail marker at
+    // byte 100. The 50_000-byte marker must NOT match (would require
+    // reading past the cap); the 100-byte marker still must.
+    const head = "x".repeat(100);
+    const filler = "y".repeat(50_000 - head.length - 50);
+    const tail = "FAIL_MARKER_AT_HEAD";
+    const content = `${head}${tail}${filler}END_TAIL_MARKER`;
+    expect(content.length).toBeGreaterThan(32_768);
+    const path = writeResult(content);
+
+    // 50 KiB in: success criteria should NOT match — we didn't read that far.
+    const noFar = evaluate(path, "FAIL_MARKER_AT_HEAD.*END_TAIL_MARKER", undefined);
+    expect(noFar.verdict).toBe("no_match");
+
+    // 100 bytes in: failure criteria should still match.
+    const headHit = evaluate(path, undefined, "FAIL_MARKER_AT_HEAD");
+    expect(headHit.verdict).toBe("failed_by_criteria");
+  });
 });
