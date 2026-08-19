@@ -41,19 +41,23 @@ describe("computeActiveTools (pure)", () => {
     expect(out).toContain("LoopUpdate");
   });
 
-  it("does not add LoopDelete when no paused or taskBacklog loop exists", () => {
-    const out = computeActiveTools([], [ACTIVE_CRON, ACTIVE_DYNAMIC]);
-    expect(out).not.toContain("LoopDelete");
-  });
-
-  it("adds LoopDelete when a paused loop exists", () => {
-    const out = computeActiveTools([], [ACTIVE_CRON, PAUSED]);
-    expect(out).toContain("LoopDelete");
-  });
-
-  it("adds LoopDelete when a taskBacklog loop exists", () => {
-    const out = computeActiveTools([], [ACTIVE_CRON, TASK_BACKLOG]);
-    expect(out).toContain("LoopDelete");
+  it("never exposes LoopDelete in the active tool set (no LoopDelete tool at all)", () => {
+    // LoopDelete was removed entirely. The visibility helper should never
+    // include it in the computed output for any input. The contract is:
+    // - For empty inputs the result is just the always-available tools.
+    // - For a fresh build with no stale initial set, the result never
+    //   mentions LoopDelete.
+    const freshOutputs = [
+      computeActiveTools([], []),
+      computeActiveTools([], [ACTIVE_CRON]),
+      computeActiveTools([], [ACTIVE_DYNAMIC]),
+      computeActiveTools([], [PAUSED]),
+      computeActiveTools([], [TASK_BACKLOG]),
+      computeActiveTools([], [WORKFLOW]),
+    ];
+    for (const out of freshOutputs) {
+      expect(out).not.toContain("LoopDelete");
+    }
   });
 
   it("does not add WorkflowTransition unless a workflow loop exists", () => {
@@ -66,14 +70,16 @@ describe("computeActiveTools (pure)", () => {
     expect(out).toContain("WorkflowTransition");
   });
 
-  it("removes previously-enabled tools when the predicate no longer matches", () => {
-    const initial = ["LoopCreate", "LoopList", "LoopUpdate", "LoopDelete"];
-    // No loops — all conditional tools should be removed.
+  it("removes previously-enabled conditional tools when the predicate no longer matches", () => {
+    const initial = ["LoopCreate", "LoopList", "LoopUpdate", "LoopPause", "LoopResume"];
+    // No loops — all conditional tools should be removed; the always-available
+    // ones (LoopCreate, LoopList) stay.
     const out = computeActiveTools(initial, []);
     expect(out).toContain("LoopCreate");
     expect(out).toContain("LoopList");
     expect(out).not.toContain("LoopUpdate");
-    expect(out).not.toContain("LoopDelete");
+    expect(out).not.toContain("LoopPause");
+    expect(out).not.toContain("LoopResume");
   });
 
   it("preserves unrelated tools that were already in the initial set", () => {
@@ -198,41 +204,48 @@ describe("snapshotFromLoop (helper)", () => {
 
 // Full state x tool matrix test (mirror pragmaxim's goal-tool-visibility.test.ts).
 describe("state x tool matrix", () => {
-  const cases: Array<{ name: string; loops: LoopSnapshot[]; expected: string[] }> = [
+  const cases: Array<{ name: string; loops: LoopSnapshot[]; expected: string[]; forbidden?: string[] }> = [
     {
       name: "no loops",
       loops: [],
       expected: ["LoopCreate", "LoopList"],
+      forbidden: ["LoopDelete"],
     },
     {
       name: "active cron loop only",
       loops: [ACTIVE_CRON],
       expected: ["LoopCreate", "LoopList"],
+      forbidden: ["LoopDelete"],
     },
     {
       name: "active dynamic loop",
       loops: [ACTIVE_DYNAMIC],
       expected: ["LoopCreate", "LoopList", "LoopUpdate"],
+      forbidden: ["LoopDelete"],
     },
     {
-      name: "paused loop enables LoopDelete",
+      name: "paused loop enables LoopResume (LoopDelete was removed)",
       loops: [PAUSED],
-      expected: ["LoopCreate", "LoopList", "LoopDelete"],
+      expected: ["LoopCreate", "LoopList", "LoopResume"],
+      forbidden: ["LoopDelete"],
     },
     {
-      name: "taskBacklog loop enables LoopDelete",
+      name: "taskBacklog loop stays without LoopDelete (auto-deletes when drained)",
       loops: [TASK_BACKLOG],
-      expected: ["LoopCreate", "LoopList", "LoopDelete"],
+      expected: ["LoopCreate", "LoopList"],
+      forbidden: ["LoopDelete"],
     },
     {
       name: "workflow loop enables WorkflowTransition",
       loops: [WORKFLOW],
       expected: ["LoopCreate", "LoopList", "WorkflowTransition"],
+      forbidden: ["LoopDelete"],
     },
     {
-      name: "all-loop mix enables everything",
+      name: "all-loop mix enables everything except LoopDelete (removed)",
       loops: [ACTIVE_DYNAMIC, PAUSED, TASK_BACKLOG, WORKFLOW],
-      expected: ["LoopCreate", "LoopList", "LoopUpdate", "LoopDelete", "WorkflowTransition"],
+      expected: ["LoopCreate", "LoopList", "LoopUpdate", "LoopResume", "WorkflowTransition"],
+      forbidden: ["LoopDelete"],
     },
   ];
 
@@ -241,6 +254,9 @@ describe("state x tool matrix", () => {
       const out = computeActiveTools([], c.loops);
       for (const name of c.expected) {
         expect(out).toContain(name);
+      }
+      for (const name of c.forbidden ?? []) {
+        expect(out).not.toContain(name);
       }
     });
   }

@@ -4,7 +4,7 @@ Tools are the agent-facing API surface. Each file exports a single `registerXxxT
 
 ## Files
 
-- `loop-tools.ts` — `LoopCreate` (with `priority` parameter), `LoopList`, `LoopPause`, `LoopResume`, `LoopDelete`, `LoopUpdate`. The four CRUD operations plus the two soft-halt tools. `LoopCreate` accepts a `priority: "defer" | "normal" | "urgent" | "critical"` enum (default `"normal"`). `LoopList` and `LoopUpdate` do not currently surface priority in their output — the priority is recorded in the loop entry and propagated to the runtime; surfacing it in `LoopList` is parked in the inline code review (rec #4 missing scope).
+- `loop-tools.ts` — `LoopCreate` (with `priority` parameter), `LoopList`, `LoopPause`, `LoopResume`, `LoopUpdate`, `LoopInspect`. There is no `LoopDelete` tool — deletion is a user-driven action via the `/loop` command's View-loops menu, and internal cleanup paths (taskBacklog queue-drain auto-deletion) call `LoopStore.delete` directly. `LoopCreate` accepts a `priority: "defer" | "normal" | "urgent" | "critical"` enum (default `"normal"`). `LoopList` and `LoopUpdate` do not currently surface priority in their output — the priority is recorded in the loop entry and propagated to the runtime; surfacing it in `LoopList` is parked in the inline code review (rec #4 missing scope).
 - `monitor-tools.ts` — DISABLED in this build (per upstream constraint that this build runs without `pi-monitor`). Source retained for re-enabling; the file's exports are no-ops.
 - `native-task-tools.ts` — DISABLED in this build. Source retained.
 
@@ -20,7 +20,7 @@ Tools are the agent-facing API surface. Each file exports a single `registerXxxT
 
 ## Cross-cutting concerns
 
-- **LoopDelete deletes only.** The soft-halt alternatives are first-class tools: `LoopPause({id})` to pause and `LoopResume({id})` to resume. `LoopResume` does not touch the session bindings file — that's `/loop-resume <id>`'s job. Dynamic-loop lifecycle (continue / completed / paused) stays on `LoopUpdate`. See ADR-006.
+- **No `LoopDelete` tool.** Deletion is intentionally not in the LLM's tool surface. The user triggers deletion through the `/loop` command's View-loops menu, and internal cleanup paths (taskBacklog queue-drain auto-deletion, deletion tombstones) call `LoopStore.delete` directly. If a future change reintroduces a delete tool, do NOT expose it to the LLM — the LLM lacks the "user explicitly authorized this" signal that deletion requires.
 - **LoopUpdate re-arms the trigger** — when the trigger changes, `triggerSystem.remove(id)` runs first, then the new trigger is added. Don't skip the remove: stale cron/event subscriptions will leak.
 - **MonitorDelete bypasses the 30s auto-prune** — it stops the monitor if running, then immediately removes it from the store. (Currently unused in this build; monitor tools are disabled.)
 - **Native task tools fire `tasks:*` events** — the `emitNativeTaskEvent` helper in `runtime/task-events.ts` does this. Always emit on state change so pi-tasks subscribers see updates. (Currently unused; native task tools are disabled.)

@@ -206,7 +206,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
           }
         } else if (action === "x Delete") {
           if (entry.workflow?.activeTaskId) {
-            ui.notify(`Workflow #${entry.id} has active task #${entry.workflow.activeTaskId}; use LoopDelete with its claimId to cancel safely`, "warning");
+            ui.notify(`Workflow #${entry.id} has active task #${entry.workflow.activeTaskId}; claim the task first, then retry Delete from this menu.`, "warning");
             return viewLoops(ui);
           }
           getTriggerSystem().remove(entry.id);

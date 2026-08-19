@@ -25,7 +25,6 @@ function setup() {
     maybeBootstrapTaskLoop,
     isTaskSystemReady: () => true,
     onDynamicLoopActivated,
-    closeWorkflowTask,
   });
   registerWorkflowTools({
     pi,
@@ -171,17 +170,29 @@ describe("LoopCreate", () => {
   it("tells agents to preserve recurring and dynamic loop controllers", () => {
     const loopCreate = h.toolMap.get("LoopCreate")!;
     const loopUpdate = h.toolMap.get("LoopUpdate")!;
-    const loopDelete = h.toolMap.get("LoopDelete")!;
 
-    expect(loopCreate.description).toContain("A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop");
+    // Each tool description uses the Claude Code ## When to Use / ## When NOT to Use
+    // structure so the guardrails are salient to the LLM.
+    expect(loopCreate.description).toMatch(/## When to Use/);
+    expect(loopCreate.description).toMatch(/## When NOT to Use/);
+    expect(loopUpdate.description).toMatch(/## When to Use/);
+    expect(loopUpdate.description).toMatch(/## When NOT to Use/);
+
+    // The recurring-loop guardrail is in LoopCreate's "When NOT to Use" section.
+    expect(loopCreate.description).toMatch(/a completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop/);
     expect(loopCreate.promptGuidelines).toContain(
-      "Recurring loops are persistent controllers. Do not call LoopDelete after a normal fire, an unchanged check, or one completed iteration; only delete when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
+      "Recurring loops are persistent controllers. Do not delete a loop after a normal fire, an unchanged check, or one completed iteration; only ask the user to delete via /loop's View-loops menu when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
     );
     expect(loopCreate.promptGuidelines).toContain(
       "For taskBacklog loops, do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.",
     );
-    expect(loopUpdate.description).toContain("Do not use LoopDelete to finish an iteration");
-    expect(loopDelete.description).toContain("Do not use this after a normal loop fire");
+    // LoopUpdate must never suggest a deletion tool to the LLM; with
+    // LoopDelete removed, the warning is purely "use status: 'completed'".
+    expect(loopUpdate.description).toMatch(/Use `status: "completed"` only when the overall goal and done criteria are satisfied/);
+  });
+
+  it("does not register LoopDelete as a tool (deletion is user-driven only)", () => {
+    expect(h.toolMap.has("LoopDelete")).toBe(false);
   });
 });
 
@@ -435,26 +446,6 @@ describe("Workflow tools", () => {
     expect(out).toContain("Active task: #12");
     expect(h.createWorkflowTask).toHaveBeenCalledWith(expect.objectContaining({ id: "1" }));
     expect(h.store.get("1")?.workflow?.activeTaskId).toBe("12");
-  });
-
-  it("closes an active state task before deleting its workflow", async () => {
-    h.createWorkflowTask.mockResolvedValueOnce("12");
-    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
-
-    expect(await h.text("LoopDelete", { id: "1", claimId: "claim-12" })).toBe("Loop #1 deleted");
-    expect(h.closeWorkflowTask).toHaveBeenCalledWith("12", "claim-12");
-    expect(h.store.get("1")).toBeUndefined();
-  });
-
-  it("keeps a workflow when its active state task cannot be closed", async () => {
-    h.createWorkflowTask.mockResolvedValueOnce("12");
-    h.closeWorkflowTask.mockResolvedValueOnce(false);
-    await h.text("WorkflowCreate", { goal: "Fix the regression", definition });
-
-    const out = await h.text("LoopDelete", { id: "1", claimId: "stale" });
-
-    expect(out).toContain("could not close active task #12");
-    expect(h.store.get("1")).toBeDefined();
   });
 
   it("lists ordinary loops and full workflow state through LoopList", async () => {
@@ -764,7 +755,7 @@ describe("Workflow tools", () => {
     });
 
     expect(out).toContain("all declared outcomes are unavailable");
-    expect(out).toContain("LoopDelete");
+    expect(out).toContain("abandon it via /loop");
     expect(out).not.toContain("Next: WorkflowTransition");
   });
 
@@ -777,45 +768,6 @@ describe("Workflow tools", () => {
     expect(guidelines.some((g) => g.includes("evidence"))).toBe(true);
     expect(guidelines.some((g) => g.includes("rework"))).toBe(true);
     expect(guidelines.some((g) => g.includes("maxAttempts"))).toBe(true);
-  });
-});
-
-describe("LoopDelete", () => {
-  let h: ReturnType<typeof setup>;
-  beforeEach(async () => {
-    h = setup();
-    await h.text("LoopCreate", { trigger: "5m", prompt: "x", triggerType: "cron" });
-  });
-
-  it("deletes a loop and removes its trigger", async () => {
-    const out = await h.text("LoopDelete", { id: "1", action: "delete" });
-    expect(out).toBe("Loop #1 deleted");
-    expect(h.triggerSystem.remove).toHaveBeenCalledWith("1");
-    expect(h.store.get("1")).toBeUndefined();
-  });
-
-  it("pauses a loop without removing it", async () => {
-    const out = await h.text("LoopPause", { id: "1" });
-    expect(out).toBe("Loop #1 paused");
-    expect(h.store.get("1")?.status).toBe("paused");
-  });
-
-  it("reports auto-deletion tombstones for already deleted loops", async () => {
-    h.store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
-    h.store.delete("1");
-
-    expect(await h.text("LoopDelete", { id: "1", action: "delete" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
-  });
-
-  it("reports auto-deletion tombstones consistently when pausing", async () => {
-    h.store.recordDeletionTombstone("1", { reason: "task_backlog_empty", pendingCount: 0 });
-    h.store.delete("1");
-
-    expect(await h.text("LoopPause", { id: "1" })).toBe("Loop #1 already auto-deleted: task_backlog_empty (pending: 0)");
-  });
-
-  it("reports not found for an unknown id", async () => {
-    expect(await h.text("LoopDelete", { id: "99", action: "delete" })).toBe("Loop #99 not found");
   });
 });
 
@@ -928,7 +880,8 @@ describe("loop-tools coverage extras", () => {
     expect(tools).toContain("LoopUpdate");
     expect(tools).toContain("LoopPause");
     expect(tools).toContain("LoopResume");
-    expect(tools).toContain("LoopDelete");
+    expect(tools).toContain("LoopInspect");
+    expect(tools).not.toContain("LoopDelete");
   });
 
   it("renders tool calls with theme formatting", () => {
@@ -945,7 +898,6 @@ describe("loop-tools coverage extras", () => {
       updateWidget: vi.fn(),
       maybeBootstrapTaskLoop: vi.fn(async () => false),
       isTaskSystemReady: () => false,
-      closeWorkflowTask: vi.fn(async () => true),
     });
     const theme = { fg: (_: string, t: string) => t, bold: (t: string) => t } as never;
     const out = capturedRender({ prompt: "test" }, theme);

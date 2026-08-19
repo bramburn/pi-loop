@@ -106,7 +106,7 @@ export function formatWorkflowSummary(entry: LoopEntry, heading: string, failure
   if (state?.terminal) return `${message}\nTerminal: ${state.terminal}`;
   if (outcomeEntries.length === 0) return `${message}\nNeeds attention: this state has no declared outcomes, so it cannot advance.`;
   if (outcomes.length === 0) {
-    return `${message}\nBlocked: all declared outcomes are unavailable. Pause this workflow with LoopPause, or abandon it with LoopDelete.`;
+    return `${message}\nBlocked: all declared outcomes are unavailable. Pause this workflow with LoopPause, or ask the user to abandon it via /loop's View-loops menu.`;
   }
 
   return `${message}\nChoose outcome: ${outcomes.join(", ")}\nNext: WorkflowTransition({ id: "${entry.id}", outcome: "${outcomes[0]}", evidence: "..." })`;

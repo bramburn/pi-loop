@@ -156,7 +156,7 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
         lines.push(`Terminal: ${state.terminal} — this workflow state is terminal; no transition is needed.`);
       } else {
         lines.push(
-          `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not call LoopDelete after this state.`,
+          `Workflow lifecycle: Loop #${loopId} is an opt-in state controller. Do not request deletion after this state — there is no LoopDelete tool.`,
           "Before ending this turn, call WorkflowTransition exactly once with id, one allowed outcome, evidence, and the returned claimId when an active task exists. WorkflowTransition does not accept activeTaskId. Terminal outcomes complete or pause the workflow automatically.",
         );
       }
@@ -174,17 +174,17 @@ export function createNotificationRuntime(options: NotificationRuntimeOptions): 
       if (dynamic?.metrics) lines.push(`Metrics: ${dynamic.metrics}`);
       if (dynamic?.doneCriteria) lines.push(`Done criteria: ${dynamic.doneCriteria}`);
       lines.push(
-        `Loop lifecycle: Loop #${loopId} is the persistent controller for the overall goal. Do not call LoopDelete after this iteration.`,
+        `Loop lifecycle: Loop #${loopId} is the persistent controller for the overall goal. Do not request deletion after this iteration — there is no LoopDelete tool.`,
         "Before ending this turn, call LoopUpdate exactly once: use status=\"completed\" only when the overall goal and done criteria are satisfied; use status=\"continue\" when any work remains, with state/metrics and optional nextInterval; use status=\"paused\" only when genuinely blocked. Omit nextInterval for an idle-driven rewake.",
       );
       return lines.join("\n");
     }
 
     const lifecycle = data.taskBacklog
-      ? `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not call LoopDelete; when no unfinished tasks remain, report that and end this iteration.`
+      ? `Backlog lifecycle: Loop #${loopId} adopts unfinished tasks and re-wakes after this turn while work and its fire budget remain. Do not request deletion; when no unfinished tasks remain, report that and end this iteration. pi-loop auto-deletes the loop when the pending count reaches zero.`
       : (data.persistent ?? data.recurring)
-        ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not call LoopDelete or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation.`
-        : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not call LoopDelete.`;
+        ? `Loop lifecycle: Loop #${loopId} is recurring and remains active after this iteration. Do not request deletion or pause it merely because this run finished, found no changes, or has no immediate work. Stop it only when the user or the loop prompt explicitly requires cancellation. To delete, ask the user to use /loop's View-loops menu.`
+        : `Loop lifecycle: Loop #${loopId} is a one-shot wake and cleanup is automatic. Do not request deletion — there is no LoopDelete tool.`;
 
     return [
       `[pi-loop] Loop #${loopId} fired (${triggerInfo}).${constraint}`,

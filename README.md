@@ -15,7 +15,7 @@ pi install npm:@bramburn/pi-loop
 LoopCreate trigger="5m" prompt="Check if the build passed"
 LoopCreate trigger="tool_execution_start" prompt="Log the tool being used" triggerType="event"
 LoopList
-LoopDelete id="1"
+/loop           (then "View loops" → "x Delete" to delete a loop)
 ```
 
 ## Widget (v2.0)
@@ -89,8 +89,9 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 | `LoopList` | Show active loops with IDs, triggers, and next-fire times |
 | `LoopPause` | Pause a loop without removing it (preserves history, trigger, ID) |
 | `LoopResume` | Resume a paused loop (re-adds the trigger; does not touch session bindings) |
-| `LoopDelete` | Permanently delete a loop |
 | `LoopInspect` | Read the latest iteration summary (status, tokens, cost, preview) for a loop — used by the agent to read its own sub-agent runs without opening files |
+
+> **Note:** Loop deletion is intentionally **not** an LLM-callable tool. Use `/loop` → View loops → `x Delete` to delete a loop. The LLM can pause, resume, and update loops, but only the user can delete.
 | `MonitorCreate` | _(retired — see [Retired tools](#retired-tools))_ |
 | `MonitorList` | _(retired)_ |
 | `MonitorStop` | _(retired)_ |
@@ -238,7 +239,7 @@ In `project` scope (default), loop and task files are saved to `.pi/loops/loops.
 
 ### Re-arming loops after a restart
 
-Cron loops re-arm themselves automatically **only if they are bound to this session** (see Per-Session Bindings below). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` (programmatic equivalent: `LoopDelete({id, action: "resume"})`) to re-bind them.
+Cron loops re-arm themselves automatically **only if they are bound to this session** (see Per-Session Bindings below). Event/hybrid loops do **not** auto-re-arm their trigger subscriptions — use `/loop-resume <id>` to re-bind them.
 
 ### Per-session bindings (multi-terminal parallelism)
 

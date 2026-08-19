@@ -51,7 +51,7 @@ TaskCreate 5 ...
 The same pattern applies to **any TUI-bound tool** that triggers a visible state mutation on success — concrete list (all return IPC events that mutate top-level React state):
 
 - `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskDelete`, `TaskGet`, `TaskPrune`
-- `LoopCreate`, `LoopUpdate`, `LoopList`, `LoopDelete`
+- `LoopCreate`, `LoopUpdate`, `LoopList`
 - `MonitorCreate`, `MonitorList`, `MonitorStop`, `MonitorDelete`
 - `TaskCreate` (native fallback)
 - Any pi extension tool registered via `pi.registerTool`

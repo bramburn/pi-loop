@@ -111,7 +111,7 @@ export class SubAgentRuntime {
         loopId: loop.id,
         iterId: this.nextIterId(loop),
         priority: "urgent",
-        preview: `Sub-agent loop #${loop.id} paused: ${reasonLabel}. Use LoopUpdate to change the cap or LoopDelete to remove.`,
+        preview: `Sub-agent loop #${loop.id} paused: ${reasonLabel}. Use LoopUpdate to change the cap, or ask the user to delete it via /loop's View-loops menu.`,
         artifactPath: null,
         sessionPath: "",
       });

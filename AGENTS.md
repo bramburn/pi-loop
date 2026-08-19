@@ -3,7 +3,7 @@
 ## Overview
 `pi-loop` is a pi extension providing cron/event-based agent re-wake loops and background process monitoring. Modeled after Claude Code's `/loop`, `CronCreate`, and `MonitorCreate` tools.
 
-In its current v2.1 build, the `Monitor*` tools, `Task*` tools, `/monitors`, `/tasks`, and `workflow-tools` are **unregistered** (per the upstream constraint that this build runs without `pi-monitor`, `pi-tasks`, and `pi-workflow`). The extension entry point still imports them defensively and exports stub callbacks, so re-enabling is a wiring change, not a refactor. The remaining surface — `LoopCreate` / `LoopList` / `LoopUpdate` / `LoopDelete`, `/loop`, `/loop-resume`, `/loop-settings`, the above-editor widget, and the priority-aware notification queue — is fully functional.
+In its current v2.1 build, the `Monitor*` tools, `Task*` tools, `/monitors`, `/tasks`, and `workflow-tools` are **unregistered** (per the upstream constraint that this build runs without `pi-monitor`, `pi-tasks`, and `pi-workflow`). The extension entry point still imports them defensively and exports stub callbacks, so re-enabling is a wiring change, not a refactor. The remaining surface — `LoopCreate` / `LoopList` / `LoopUpdate` / `LoopPause` / `LoopResume` / `LoopInspect`, `/loop`, `/loop-resume`, `/loop-settings`, the above-editor widget, and the priority-aware notification queue — is fully functional.
 
 ## Stack
 - TypeScript 6.x (strict, ES2022 target, bundler module resolution)
@@ -29,7 +29,7 @@ src/
 │   ├── sentry.ts         # initSentry, captureException, addBreadcrumb, log*, scrubPii, wrapToolExecute
 │   └── index.ts          # Public re-exports
 ├── tools/                # Tool registration and tool-visibility gating
-│   ├── loop-tools.ts     # LoopCreate (with priority) / LoopList / LoopUpdate / LoopDelete
+│   ├── loop-tools.ts     # LoopCreate (with priority) / LoopList / LoopUpdate / LoopPause / LoopResume / LoopInspect
 │   ├── workflow-tools.ts # Workflow state-machine tools (DISABLED in this build)
 │   ├── monitor-tools.ts  # MonitorCreate / MonitorList / MonitorStop / MonitorDelete (DISABLED)
 │   ├── native-task-tools.ts  # Native task CRUD (DISABLED in this build)
@@ -140,11 +140,11 @@ Change scope via `/loop-settings` (no env var override). For per-session isolati
 
 After a process restart in project scope, cron loops re-arm automatically via the 30s heartbeat pump in `session-runtime.ts`. **Event/hybrid trigger subscriptions do NOT auto-re-arm** — call `/loop-resume <id>` to re-bind them. The resume path is idempotent: it re-arms the trigger whether or not the stored loop is paused.
 
-## LoopDelete is not in the LLM's tool surface
+## LoopDelete was removed
 
-`LoopDelete` is registered as a tool (for internal/test use) but is **stripped from the LLM's active tool set** by `computeActiveTools` in `src/tools/tool-visibility.ts` (the `NEVER_AVAILABLE` list). Defense-in-depth: even if `LoopDelete` is present in the initial tool list from a previous version, `computeActiveTools` strips it on every sync.
+There is no `LoopDelete` tool. Deletion is a **user-driven action**; trigger it from the `/loop` command's View-loops menu (`x Delete`), or from internal code paths (e.g. taskBacklog queue-drain auto-deletion) that call `LoopStore.delete` directly. The LLM has no way to delete a loop — it can only pause, resume, update, or ask the user to delete via `/loop`.
 
-Deletion is a **user-driven action**; trigger it from the `/loop` command's View-loops menu (`x Delete`), or from internal code paths (e.g. taskBacklog queue-drain auto-deletion) that call `LoopStore.delete` directly. The tool's own `execute` has no internal authorization guard — the visibility layer is the only barrier.
+If you need to re-introduce a deletion tool in the future, do **not** expose it to the LLM. The LLM lacks the "user explicitly authorized this" signal that deletion requires.
 
 ## Tool Schema Discipline
 - Tool calls must use the exact schema field names from the tool definition. Do not invent aliases.

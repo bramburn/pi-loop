@@ -148,7 +148,6 @@
 - `LoopUpdate` is NOT present (no dynamic loop).
 - `LoopPause` is present (active cron loop exists).
 - `LoopResume` is NOT present (no paused loop).
-- `LoopDelete` is NOT present (no paused or taskBacklog loop).
 - `WorkflowTransition` is NOT present (no workflow loop).
 
 **Steps (continued):**
@@ -158,7 +157,6 @@
 **Expected:**
 - `LoopPause` is NOT present (no active loop now that the only one is paused).
 - `LoopResume` is now present (paused loop exists).
-- `LoopDelete` is now present (paused loop exists).
 
 ## Test 9 — Strict settings schema rejects unknown keys
 

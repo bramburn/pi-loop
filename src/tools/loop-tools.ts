@@ -79,7 +79,6 @@ export interface LoopToolsOptions {
   maybeBootstrapTaskLoop: (entry: LoopEntry) => Promise<boolean>;
   isTaskSystemReady: () => boolean;
   onDynamicLoopActivated?: (entry: LoopEntry) => void;
-  closeWorkflowTask: (taskId: string, claimId?: string) => Promise<boolean>;
 }
 
 function validateTrigger(trigger: Trigger): string | null {
@@ -231,7 +230,6 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     maybeBootstrapTaskLoop,
     isTaskSystemReady,
     onDynamicLoopActivated,
-    closeWorkflowTask,
   } = options;
 
   pi.registerTool({
@@ -239,16 +237,24 @@ export function registerLoopTools(options: LoopToolsOptions): void {
     label: "LoopCreate",
     renderCall: renderToolCall("Loop", (args) => `create · ${String(toolArg(args, "prompt") ?? "scheduled work").slice(0, 56)}`),
     renderResult: renderToolResult,
-    description: `Create a persistent cron, event, hybrid, or idle-driven loop. Use it for recurring checks, reminders, event reactions, or explicit task-backlog processing; never use shell sleep/while loops.
+    description: `Create a persistent cron, event, hybrid, or idle-driven loop for recurring checks, reminders, event reactions, or task-backlog processing.
 
-Set triggerType to cron, event, hybrid, or idle. Polling loops need maxFires; observation-only loops should set readOnly. Use taskBacklog to adopt a queue until it drains; use autoTask to create one task per fire.
+## When to Use
+- Set up a recurring check (e.g. poll a build every 5m, run a health probe every hour).
+- React to a specific pi event source (e.g. \`tool_execution_start\`, \`tasks:created\`, \`monitor:done\`).
+- Adopt a task backlog until it drains (use \`trigger: "tasks:created"\`, \`taskBacklog: true\`, \`recurring: true\`).
+- Drive an idle-paced continuation (use \`trigger: "idle"\` with \`triggerType: "idle"\`).
+- Run a long-running autonomous task across multiple sessions (use \`isolation: "sub-agent"\`).
 
-A completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Recurring loops persist; dynamic loops advance through LoopUpdate.`,
+## When NOT to Use
+- For one-off work or shell sleep/while loops — finish inline instead.
+- After a normal fire, an unchanged check, or one completed iteration — a completed iteration, unchanged result, or temporarily empty check is not a reason to delete the loop. Recurring loops persist; dynamic loops advance through LoopUpdate.
+- For taskBacklog loops — do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.`,
     promptGuidelines: [
       "Prefer event triggers over cron; use triggerType `idle` with trigger `idle` for agent-paced continuation.",
       "Always set maxFires on polling loops and readOnly for observation-only work.",
       "For autonomous backlogs use event `tasks:created`, recurring true, taskBacklog true, and bounded maxFires. It adopts unfinished tasks until terminal. Do not use autoTask.",
-      "Recurring loops are persistent controllers. Do not call LoopDelete after a normal fire, an unchanged check, or one completed iteration; only delete when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
+      "Recurring loops are persistent controllers. Do not delete a loop after a normal fire, an unchanged check, or one completed iteration; only ask the user to delete via /loop's View-loops menu when the user explicitly asks to cancel or the loop's stated stop condition is satisfied.",
       "For taskBacklog loops, do not instruct the agent to delete the loop; pi-loop auto-deletes it when the pending count reaches zero.",
       "Report the created loop ID to the user.",
     ],
@@ -448,9 +454,16 @@ A completed iteration, unchanged result, or temporarily empty check is not a rea
     label: "LoopList",
     renderCall: renderToolCall("Loop", () => "status"),
     renderResult: renderToolResult,
-    description: `List all active scheduled loops with their IDs, triggers, and next-fire times.
+    description: `List all stored loops with their IDs, statuses, triggers, and next-fire times.
 
-Use this before creating new loops to avoid duplicates, or to find IDs for LoopDelete.`,
+## When to Use
+- Before creating a new loop, to avoid duplicates.
+- To find a loop ID for LoopPause, LoopResume, LoopUpdate, LoopInspect, or for a user-driven deletion via the /loop command.
+- After a process restart, to confirm which loops survived and which need /loop-resume.
+
+## When NOT to Use
+- To inspect a sub-agent loop's last iteration — use LoopInspect instead, which returns the structured summary from the result-store.
+- To read the full result of a sub-agent iteration — open \`.pi/loops/sub-agent-results/<id>/iter-*/result.json\` directly.`,
     parameters: Type.Object({}),
     execute() {
       const loops = getStore().list();
@@ -502,7 +515,15 @@ Use this before creating new loops to avoid duplicates, or to find IDs for LoopD
     renderResult: renderToolResult,
     description: `Update progress for a dynamic loop.
 
-Use this exactly once after each dynamic loop wake. Mark status as "continue" with updated state/metrics and optional nextInterval whenever any work remains, "completed" only when the overall goal and done criteria are satisfied, or "paused" when genuinely blocked. Do not use LoopDelete to finish an iteration.`,
+## When to Use
+- After each dynamic-loop wake, exactly once. Mark \`status: "continue"\` with new state/metrics and an optional \`nextInterval\` whenever any work remains.
+- When the dynamic loop's overall goal and done criteria are satisfied, mark \`status: "completed"\` — the loop is removed automatically.
+- When the dynamic loop is genuinely blocked and cannot make progress, mark \`status: "paused"\`.
+
+## When NOT to Use
+- For cron, event, hybrid, or taskBacklog loops — they are not dynamic; LoopUpdate will reject them.
+- For workflow-owned loops — use WorkflowTransition instead.
+- To finish one step of a multi-step goal — use \`status: "continue"\` and let the next wake fire. Use \`status: "completed"\` only when the overall goal and done criteria are satisfied.`,
     parameters: Type.Object({
       id: Type.String({ description: "Dynamic loop ID to update" }),
       status: Type.String({ description: "continue, completed, or paused", enum: ["continue", "completed", "paused"] }),
@@ -522,7 +543,7 @@ Use this exactly once after each dynamic loop wake. Mark status as "continue" wi
         }));
       }
       if (entry.workflow) {
-        const message = `Loop #${params.id} is workflow-owned. Use WorkflowTransition for state changes or LoopDelete to cancel it.`;
+        const message = `Loop #${params.id} is workflow-owned. Use WorkflowTransition for state changes, or ask the user to delete it via /loop's View-loops menu.`;
         return Promise.resolve(textResult(message, {
           kind: "loop", action: "update", tone: "error", summary: `Loop #${params.id} update rejected`, expanded: [message],
         }));
@@ -567,11 +588,19 @@ Use this exactly once after each dynamic loop wake. Mark status as "continue" wi
     label: "LoopPause",
     renderCall: renderToolCall("Loop", (args) => `pause · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Pause a loop by its ID.
+    description: `Pause a loop by its ID. Pausing preserves the loop's history, trigger, and ID.
 
-Use this to temporarily stop a loop without removing it. Pausing preserves the loop's history, trigger, and ID; use LoopResume to make it active again, or LoopDelete to permanently remove it.
+## When to Use
+- The user explicitly asks to halt a loop.
+- The loop's stated stop condition is satisfied and you want to keep the record for later.
+- You need to change the loop's trigger or prompt and want to stop it firing mid-edit.
+- The environment is broken (e.g. a target service is down) and you want to suspend without losing the schedule.
 
-Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Pause only when the user explicitly asks to halt or the loop's stated stop condition is satisfied.`,
+## When NOT to Use
+- After a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate.
+- For dynamic loops mid-iteration — use LoopUpdate with \`status: "paused"\` instead.
+- For one-time work — the loop should not have been created in the first place.
+- Pausing is reversible: use LoopResume to make the loop active again.`,
     promptGuidelines: [
       "Pausing is reversible. Use LoopResume to make a paused loop active again.",
       "Pausing does not write to the session bindings file; that remains /loop-resume's job.",
@@ -608,11 +637,16 @@ Do not use this after a normal loop fire, an unchanged check, an empty iteration
     label: "LoopResume",
     renderCall: renderToolCall("Loop", (args) => `resume · #${String(toolArg(args, "id") ?? "?")}`),
     renderResult: renderToolResult,
-    description: `Resume a paused loop by its ID.
+    description: `Resume a paused loop by its ID. Resuming flips status to "active" and re-arms the trigger.
 
-Use this to make a previously paused loop active again. Resuming flips status back to "active" and re-adds the loop to the trigger system so it can fire on schedule.
+## When to Use
+- The user asks to make a previously paused loop active again.
+- After a fix to the loop's prompt, trigger, or environment that made the user pause it.
+- The blocked condition that triggered the pause has been resolved.
 
-This tool does not write to the session bindings file; for cross-session re-arming after a restart, use /loop-resume <id>.`,
+## When NOT to Use
+- For a loop that was deleted — recreate it via LoopCreate or the /loop command.
+- For cross-session re-arming after a process restart — this tool does NOT write to the session bindings file. Use /loop-resume <id> instead.`,
     promptGuidelines: [
       "Resuming is the inverse of pausing; use LoopPause to halt an active loop.",
       "Resuming does not write to the session bindings file; for that, use /loop-resume <id>.",
@@ -650,51 +684,6 @@ This tool does not write to the session bindings file; for cross-session re-armi
     },
   });
 
-  pi.registerTool({
-    name: "LoopDelete",
-    label: "LoopDelete",
-    renderCall: renderToolCall("Loop", (args) => `delete · #${String(toolArg(args, "id") ?? "?")}`),
-    renderResult: renderToolResult,
-    description: `Delete a loop by its ID.
-
-This permanently removes the loop and tears down its trigger subscription. To temporarily stop a loop without removing it, use LoopPause; to make a paused loop active again, use LoopResume.
-
-Do not use this after a normal loop fire, an unchanged check, an empty iteration, or one step of a dynamic goal. Recurring loops remain active across iterations; dynamic loops use LoopUpdate. Delete only when the user explicitly asks to cancel the loop or its stated stop condition is satisfied.`,
-    parameters: Type.Object({
-      id: Type.String({ description: "Loop ID to delete" }),
-      claimId: Type.Optional(Type.String({ description: "Claim token for an active workflow task" })),
-    }),
-    async execute(_toolCallId, params) {
-      const { id } = params;
-
-      const current = getStore().get(id);
-      const activeTaskId = current?.workflow?.activeTaskId;
-      if (activeTaskId && !await closeWorkflowTask(activeTaskId, params.claimId)) {
-        const message = `Loop #${id} could not close active task #${activeTaskId}; reclaim the task and pass claimId before retrying deletion.`;
-        return textResult(message, {
-          kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} deletion blocked by task #${activeTaskId}`, expanded: [message],
-        });
-      }
-      getTriggerSystem().remove(id);
-      const deleted = getStore().delete(id);
-      updateWidget();
-      if (deleted) {
-        return Promise.resolve(textResult(`Loop #${id} deleted`, {
-          kind: "loop", action: "delete", tone: "success", summary: `Loop #${id} deleted`, expanded: [],
-        }));
-      }
-      const tombstone = getStore().getDeletionTombstone(id);
-      if (tombstone) {
-        return Promise.resolve(textResult(formatDeletionTombstone(id, tombstone), {
-          kind: "loop", action: "delete", tone: "warning", summary: `Loop #${id} was already removed`, expanded: [formatDeletionTombstone(id, tombstone)],
-        }));
-      }
-      return Promise.resolve(textResult(`Loop #${id} not found`, {
-        kind: "loop", action: "delete", tone: "error", summary: `Loop #${id} not found`, expanded: ["Use LoopList to find valid loop IDs."],
-      }));
-    },
-  });
-
   // LoopInspect (v2.5+) — returns a structured summary of a loop's last
   // iteration. For sub-agent loops, the result-store has the full picture
   // (tokens, cost, status, preview). For in-process loops, the last
@@ -705,11 +694,16 @@ Do not use this after a normal loop fire, an unchanged check, an empty iteration
     label: "LoopInspect",
     renderCall: renderToolCall("Loop", (args) => `inspect · #${String(toolArg(args, "loopId") ?? "?")}${toolArg(args, "iterId") !== undefined ? ` iter-${String(toolArg(args, "iterId"))}` : ""}`),
     renderResult: renderToolResult,
-    description: `Inspect a loop's latest iteration.
+    description: `Inspect a loop's latest iteration. Returns a structured summary so the agent can reason about its own loop runs without opening files.
 
-Returns a structured summary so the agent can reason about its own loop runs without opening files. For sub-agent loops, the result-store on disk has the full picture: status, tokens, cost, preview, error message. For in-process loops, the last fireCount and updatedAt are returned.
+## When to Use
+- After a sub-agent loop completes, to read the outcome (status, tokens, cost, preview, error) before deciding what to do next.
+- To inspect a specific iteration — pass \`iterId\`; default is the most recent.
+- To inspect an in-process loop's last fireCount and updatedAt (limited summary).
 
-Optional iterId picks a specific iteration; default is the most recent.`,
+## When NOT to Use
+- For live state of all loops — use LoopList.
+- To read a sub-agent's full result file — open \`.pi/loops/sub-agent-results/<id>/iter-*/result.json\` directly. The tool only returns a structured summary.`,
     promptGuidelines: [
       "Use LoopInspect after a sub-agent loop completes to read the outcome before deciding what to do next.",
       "For in-process loops, the iteration summary is intentionally minimal; use LoopList for live state.",
