@@ -23,8 +23,8 @@ function setup() {
     getBindingsStore: () => bindingsStore as any,
     updateWidget,
   });
-  const resume = commandMap.get("loop-resume");
-  if (!resume) throw new Error("/loop-resume command not registered");
+  const resume = commandMap.get("loop-activate");
+  if (!resume) throw new Error("/loop-activate command not registered");
   return { store, triggerSystem, updateWidget, bindingsStore, resume: resume.handler as (args: string, ctx: any) => Promise<void> };
 }
 
@@ -34,13 +34,13 @@ async function createPausedLoop(store: LoopStore, prompt = "check deploy"): Prom
   return entry.id;
 }
 
-describe("registerLoopCommand — /loop-resume", () => {
+describe("registerLoopCommand — /loop-activate", () => {
   let h: ReturnType<typeof setup>;
   beforeEach(() => {
     h = setup();
   });
 
-  it("registers /loop-resume alongside /loop", () => {
+  it("registers /loop-activate alongside /loop", () => {
     // sanity: setup already asserts this; reaffirm at the suite level
     expect(h.resume).toBeInstanceOf(Function);
   });
@@ -120,7 +120,7 @@ describe("registerLoopCommand — /loop-resume", () => {
     expect(ctx.ui.select).not.toHaveBeenCalled();
     expect(notifications[0]).toEqual({
       level: "info",
-      message: expect.stringContaining("No stored loops to re-arm"),
+      message: expect.stringContaining("No stored loops to activate"),
     });
   });
 

@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * when they are not relevant to the current state — preventing the agent
  * from calling `LoopUpdate` when no dynamic loop is active, calling
  * `LoopPause` when no loop is active, calling `LoopResume` when no loop is
+ * paused (use `/loop-activate` to arm a loop in the current session instead).
  * paused, or calling `WorkflowTransition` when no workflow loop is in
  * flight.
  *

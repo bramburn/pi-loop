@@ -3,7 +3,7 @@ import extension from "../src/index.js";
 import { createMockPi } from "./helpers/mock-pi.js";
 
 const LOOP_TOOLS = ["LoopCreate", "LoopUpdate", "LoopList", "LoopPause", "LoopResume", "LoopInspect"];
-const LOOP_COMMANDS = ["loop", "loop-fire", "loop-resume", "loop-settings", "loop-subagent"];
+const LOOP_COMMANDS = ["loop", "loop-activate", "loop-fire", "loop-settings", "loop-subagent"];
 const DISABLED_TOOLS = [
   "MonitorCreate",
   "MonitorList",
@@ -33,7 +33,7 @@ describe("extension entry (loop family)", () => {
     expect(registered).toEqual([...LOOP_TOOLS].sort());
   });
 
-  it("registers /loop and /loop-resume commands", () => {
+  it("registers /loop and /loop-activate commands", () => {
     const { pi, commandMap } = createMockPi();
     extension(pi as any);
     const registered = Array.from(commandMap.keys()).sort();

@@ -248,9 +248,99 @@ Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it,
 
 **Out of scope:** source-map upload via auth tokens, server-side PII rules (rely on Sentry's defaults), CI-side secret wiring (no production deploy of this package).
 
-## Branch Protection
+## Git Branching & Pull Request Protocol
 
-The **`master`** branch is **protected**. Direct pushes are rejected. All changes must enter via a PR from a release branch (e.g. `release/2.6.4`).
+> **Rule #1 — `master` is off-limits.** Direct commits and pushes to `master` are strictly prohibited. Every change must enter via pull request.
+
+### 1. Branching Strategy
+
+Before starting any task, always start from an up-to-date `master`:
+
+```bash
+git checkout master && git pull origin master
+```
+
+Create a new dedicated branch with a descriptive name using the appropriate prefix:
+
+| Prefix | Use for |
+|--------|---------|
+| `feat/<feature-name>` | New features and enhancements |
+| `fix/<issue-name>` | Bug fixes |
+| `refactor/<target-name>` | Refactoring without behaviour change |
+| `docs/<update-name>` | Documentation-only changes |
+
+```bash
+git checkout -b feat/my-new-feature
+```
+
+### 2. Commit Standards
+
+- Make **focused, atomic commits** — one logical change per commit.
+- Write clear, concise commit messages following [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>: <short summary>
+
+[optional body — explain WHY, not WHAT]
+
+[optional footer — issue #N, BREAKING CHANGE]
+```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`, `ci`
+
+**Examples:**
+
+```
+feat: add user authentication flow
+fix: resolve ENOENT on Windows subprocess spawn
+docs: update AGENTS.md with branching protocol
+chore: remove stale wt-subagent-runtime worktree reference
+```
+
+### 3. Pull Request & Publishing Workflow
+
+When the work is ready for review:
+
+1. **Push the branch** to the remote:
+   ```bash
+   git push -u origin feat/my-new-feature
+   ```
+
+2. **Open a pull request** against `master` using the GitHub CLI:
+   ```bash
+   gh pr create --base master --title "feat: add user authentication flow"
+   ```
+
+   The PR body **must** include:
+   - **Summary of changes** — what does this PR do?
+   - **Motivation / Context** — why is this change needed?
+   - **Verification / Testing** — how was it tested? Steps to reproduce the fix or verify the feature.
+
+3. **Request review** from at least one maintainer. Address feedback on the branch.
+
+4. **Merge** the PR once approved. Use the merge commit strategy:
+   ```bash
+   gh pr merge <N> --merge --delete-branch
+   ```
+
+### 4. Housekeeping
+
+- **Never force-push** (`git push --force`) to shared branches — it rewrites history and breaks teammates' local state.
+- **After a PR is merged**, clean up your local branch:
+  ```bash
+  git checkout master && git pull origin master && git branch -d feat/my-new-feature
+  ```
+
+### 5. Release Flow (special case)
+
+For releasing a new npm version, the release branch naming convention is `release/<version>` (e.g. `release/2.6.4`). Follow the full release checklist in the **Publishing to npm** section below.
+
+### What NOT to do
+
+- **Do not `git push` directly to `master`** — the branch is protected; the push will be rejected.
+- **Do not force-push to shared branches** — it breaks history for everyone.
+- **Do not push a tag without first merging the release commit to `master`** — CI picks up the tag and the branch tip; a tag on a non-merged commit publishes a version that doesn't match `master`. Since `master` is protected, the commit must arrive via PR merge first.
+- **Do not run `npm publish` locally** — it conflicts with the CI OIDC trusted publisher (403 on re-publish; risk of publishing without provenance if a stale `NODE_AUTH_TOKEN` is present).
 
 ## Publishing to npm
 
@@ -260,9 +350,7 @@ The repo has a CI publish workflow at `.github/workflows/publish.yml` that auto-
 - Environment: `npm-publish`
 - Permissions: `id-token: write` + `environment: npm-publish` on the job
 
-**Do not run `npm publish` locally** — it conflicts with the CI workflow (403 "cannot publish over the previously published versions").
-
-### Release flow
+### Release flow (npx version bump)
 
 1. **Bump version** in `package.json` (semver: `major.minor.patch`).
 2. **Update `CHANGELOG.md`** with a new entry above the current top entry. Reference the PRs that landed since the last release.
@@ -313,8 +401,6 @@ Conventions for the research workspace:
 
 `npm run lint && npm run typecheck && npm test && npm run build` mirrors the CI pipeline. The full test suite (`npm run test:all`) includes `injection.test.ts` and `harness-state-steering.test.ts` which `npm test` excludes — run the full suite before tagging to catch integration regressions. Verify `npm pack --dry-run` shows the expected file count (currently ~228) and size (~1.6 MB unpacked) before pushing the tag.
 
-### What NOT to do
+### What NOT to do (Publishing)
 
-- **Do not run `npm publish` locally.** It will conflict with the OIDC trusted publisher (the local `npm` invocation has no OIDC token, so the publish attempt fails or — worse — pushes without provenance if a stale `NODE_AUTH_TOKEN` is present in the env).
-- **Do not push a tag without first merging the release commit to master.** CI picks up the tag and the branch tip, and a tag on a non-merged commit leads to a published version that doesn't match what's in `master`. Also: master is protected, so the commit must arrive via PR merge first.
-- **Do not skip the `files` whitelist.** Without it, `wt/` (27 MB of worktrees) ends up in the published tarball.
+- **Do not skip the `files` whitelist.** Without it, `wt/` (27 MB of worktrees) ends up in the published tarball. See the whitelist above.
