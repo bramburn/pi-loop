@@ -17,7 +17,7 @@
  * Commands (registered):
  *   /loop         — Schedule or manage re-wake loops: /loop [interval] [prompt]
  *   /loop-subagent — Create a sub-agent loop: /loop-subagent [interval] [prompt] [flags]
- *   /loop-resume  — Re-arm a stored loop by ID (or open the picker with no args)
+ *   /loop-activate — Activate a stored loop in this session so it fires here (or open the picker with no args)
  *   /loop-fire    — Fire a stored loop's prompt as a new user message into chat
  *
  * DISABLED (per upstream constraint): MonitorXxx, TaskXxx, /monitors, /tasks,

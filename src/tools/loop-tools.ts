@@ -459,7 +459,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
 ## When to Use
 - Before creating a new loop, to avoid duplicates.
 - To find a loop ID for LoopPause, LoopResume, LoopUpdate, LoopInspect, or for a user-driven deletion via the /loop command.
-- After a process restart, to confirm which loops survived and which need /loop-resume.
+- After a process restart, to confirm which loops survived and which need /loop-activate.
 
 ## When NOT to Use
 - To inspect a sub-agent loop's last iteration — use LoopInspect instead, which returns the structured summary from the result-store.
@@ -603,7 +603,7 @@ export function registerLoopTools(options: LoopToolsOptions): void {
 - Pausing is reversible: use LoopResume to make the loop active again.`,
     promptGuidelines: [
       "Pausing is reversible. Use LoopResume to make a paused loop active again.",
-      "Pausing does not write to the session bindings file; that remains /loop-resume's job.",
+      "Pausing does not write to the session bindings file; that remains /loop-activate's job.",
       "Pausing tears down the trigger subscription so the loop will not fire until resumed.",
     ],
     parameters: Type.Object({
@@ -646,10 +646,10 @@ export function registerLoopTools(options: LoopToolsOptions): void {
 
 ## When NOT to Use
 - For a loop that was deleted — recreate it via LoopCreate or the /loop command.
-- For cross-session re-arming after a process restart — this tool does NOT write to the session bindings file. Use /loop-resume <id> instead.`,
+- For cross-session re-arming after a process restart — this tool does NOT write to the session bindings file. Use /loop-activate <id> instead.`,
     promptGuidelines: [
       "Resuming is the inverse of pausing; use LoopPause to halt an active loop.",
-      "Resuming does not write to the session bindings file; for that, use /loop-resume <id>.",
+      "Resuming does not write to the session bindings file; for that, use /loop-activate <id>.",
       "Resuming re-adds the loop to the trigger system so subscriptions (event sources, cron timers) are re-armed.",
     ],
     parameters: Type.Object({

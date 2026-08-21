@@ -275,8 +275,8 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
     },
   });
 
-  pi.registerCommand("loop-resume", {
-    description: "Re-arm a stored loop by ID (e.g., after a session restart). Usage: /loop-resume <id>",
+  pi.registerCommand("loop-activate", {
+    description: "Activate a stored loop in this session so it fires here. Usage: /loop-activate <id> (or no args for the picker)",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const trimmed = args.trim();
       const ui = ctx.ui;
@@ -284,7 +284,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
       if (!trimmed) {
         const loops = getStore().list();
         if (loops.length === 0) {
-          ui.notify("No stored loops to re-arm. Use /loop to create one first.", "info");
+          ui.notify("No stored loops to activate. Use /loop to create one first.", "info");
           return;
         }
 
@@ -304,11 +304,14 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
 
         while (true) {
           const choices = loops.map(formatRow);
+        choices.unshift("[ Select all ]");
           choices.push("< OK>", "< Cancel>");
           const selected = await ui.select("Arm loops for this session", choices);
           if (!selected || selected === "< Cancel>") return;
 
-          if (selected === "< OK>") {
+          if (selected === "[ Select all ]") {
+            for (const l of loops) pending.add(l.id);
+          } else if (selected === "< OK>") {
             const current = new Set(getBindingsStore().list());
             for (const id of pending) {
               if (!current.has(id)) {
@@ -345,7 +348,7 @@ export function registerLoopCommand(options: LoopCommandOptions): void {
 
       const id = trimmed.split(/\s+/)[0];
       if (!id || !/^\d+$/.test(id)) {
-        ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-resume <id>.`, "error");
+        ui.notify(`Expected a numeric loop ID, got "${id}". Try /loop-activate <id>.`, "error");
         return;
       }
       const ok = await rearmLoop(ui, id);

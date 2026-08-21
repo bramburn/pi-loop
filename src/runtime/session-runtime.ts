@@ -193,7 +193,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
       bindings.save();
       if (ui) {
         ui.notify(
-          "No bindings for this session — run /loop-resume to choose which loops this terminal arms.",
+          "No bindings for this session — run /loop-activate to choose which loops this terminal arms.",
           "info",
         );
       }
