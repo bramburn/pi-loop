@@ -248,6 +248,10 @@ Crash analytics is **opt-in**. End users set `SENTRY_DSN` to enable; without it,
 
 **Out of scope:** source-map upload via auth tokens, server-side PII rules (rely on Sentry's defaults), CI-side secret wiring (no production deploy of this package).
 
+## Branch Protection
+
+The **`master`** branch is **protected**. Direct pushes are rejected. All changes must enter via a PR from a release branch (e.g. `release/2.6.4`).
+
 ## Publishing to npm
 
 The repo has a CI publish workflow at `.github/workflows/publish.yml` that auto-publishes to npm on every `v*.*.*` tag push using **OIDC Trusted Publishing** — no `NPM_TOKEN` secret is required. The OIDC token issued by GitHub Actions is exchanged for a short-lived npm token by the registry at publish time. The trusted-publisher config (set on https://www.npmjs.com) binds the workflow file name and the `environment` to the repo:
@@ -312,5 +316,5 @@ Conventions for the research workspace:
 ### What NOT to do
 
 - **Do not run `npm publish` locally.** It will conflict with the OIDC trusted publisher (the local `npm` invocation has no OIDC token, so the publish attempt fails or — worse — pushes without provenance if a stale `NODE_AUTH_TOKEN` is present in the env).
-- **Do not push a tag without first merging the release commit to master.** CI picks up the tag and the branch tip, and a tag on a non-merged commit leads to a published version that doesn't match what's in `master`.
+- **Do not push a tag without first merging the release commit to master.** CI picks up the tag and the branch tip, and a tag on a non-merged commit leads to a published version that doesn't match what's in `master`. Also: master is protected, so the commit must arrive via PR merge first.
 - **Do not skip the `files` whitelist.** Without it, `wt/` (27 MB of worktrees) ends up in the published tarball.
