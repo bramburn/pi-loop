@@ -46,10 +46,17 @@ export interface SubAgentSettings {
   showCostInStatusLine?: boolean;
   /** Whether to use the optional LLM-call evaluator (stretch). Default false. */
   useLlmEvaluator?: boolean;
+  /**
+   * Default model for sub-agent children, as `provider/model-id` (the
+   * format pi's `--model` flag takes). Set via /loop-settings → Sub-agent
+   * model (searchable picker over pi's catalogue). Omit to inherit the
+   * parent's model. Per-loop `LoopSubAgentConfig.model` wins over this.
+   */
+  model?: string;
 }
 
 /** Defaults for the subAgent settings block. Single source of truth. */
-export const DEFAULT_SUB_AGENT_SETTINGS: Required<Omit<SubAgentSettings, "envOverrides">> = {
+export const DEFAULT_SUB_AGENT_SETTINGS: Required<Omit<SubAgentSettings, "envOverrides" | "model">> = {
   defaultIsolation: "in-process",
   activeIterationsMax: 4,
   defaultIterationTimeoutMs: 600_000, // 10 min
@@ -224,6 +231,7 @@ function asSubAgentSettings(value: unknown): SubAgentSettings | undefined {
     "defaultIterationTokenBudget", "piBinary", "envOverrides",
     "registerBackgroundWorkProvider", "honorCapabilityCeiling",
     "criticalInterruptsAll", "showCostInStatusLine", "useLlmEvaluator",
+    "model",
   ];
   const unknownKeys = Object.keys(obj).filter((k) => !knownKeys.includes(k));
   if (unknownKeys.length > 0) {
@@ -274,6 +282,11 @@ function asSubAgentSettings(value: unknown): SubAgentSettings | undefined {
   if (obj.useLlmEvaluator !== undefined) {
     const b = asBool(obj.useLlmEvaluator);
     if (b !== undefined) out.useLlmEvaluator = b;
+  }
+  if (obj.model !== undefined) {
+    if (typeof obj.model === "string" && obj.model.trim().length > 0 && obj.model.includes("/")) {
+      out.model = obj.model.trim();
+    }
   }
   return out;
 }

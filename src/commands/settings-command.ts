@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ModelCatalogLike, pickModelFromCatalog } from "../model-picker.js";
 import { resolveLoopStorePath } from "../runtime/scope.js";
 import {
   DEFAULT_SETTINGS,
@@ -181,7 +182,7 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
   const { pi, getCwd, getStore, getTriggerSystem, load = loadSettings, save = saveSettings } = options;
 
   pi.registerCommand("loop-settings", {
-    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold, urgentFlushThresholds). Also has a 'Shared loops' sub-screen for promoting/adopting cross-repo loops.",
+    description: "Open the unified pi-loop settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold, urgentFlushThresholds). Also has a 'Sub-agent model' picker (searchable, same UX as /model) and a 'Shared loops' sub-screen for promoting/adopting cross-repo loops.",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const ui = ctx.ui;
       let settings: PiLoopSettings;
@@ -196,11 +197,41 @@ export function registerSettingsCommand(options: SettingsCommandOptions): void {
           const value = settings[key];
           return `${settingLabel(key)}: ${formatValue(key, value)}`;
         });
+        // Sub-agent model is a picker (same searchable UX as /model), not
+        // a cycling value — handled before the KEY_ORDER index math.
+        choices.push(`Sub-agent model: ${settings.subAgent?.model ?? "(inherit parent)"}`);
+        if (settings.subAgent?.model) {
+          choices.push("Clear sub-agent model");
+        }
         choices.push("Shared loops: \u2192");
         choices.push("< Back");
 
         const selected = await ui.select("Settings", choices);
         if (!selected || selected === "< Back") return;
+        if (selected.startsWith("Sub-agent model:")) {
+          const pick = await pickModelFromCatalog(
+            { ui },
+            (ctx as { modelRegistry?: unknown }).modelRegistry as ModelCatalogLike | undefined,
+            "Select sub-agent model (pi catalogue)",
+          );
+          if (pick) {
+            const model = `${pick.provider}/${pick.modelId}`;
+            settings = { ...settings, subAgent: { ...settings.subAgent, model } };
+            save(getCwd(), settings);
+            ctx.ui.notify(`Sub-agent model -> ${model} (stored in .pi/pi-loop-settings.json)`, "info");
+          } else {
+            ctx.ui.notify("Sub-agent model unchanged", "info");
+          }
+          continue;
+        }
+        if (selected === "Clear sub-agent model") {
+          const subAgent = { ...settings.subAgent };
+          delete subAgent.model;
+          settings = { ...settings, subAgent };
+          save(getCwd(), settings);
+          ctx.ui.notify("Sub-agent model -> inherit parent", "info");
+          continue;
+        }
         if (selected === "Shared loops: \u2192") {
           await openSharedLoopsSubScreen(ui, getCwd, getStore, getTriggerSystem);
           continue;
