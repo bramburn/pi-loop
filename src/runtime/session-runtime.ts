@@ -182,6 +182,7 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
 
   async function showPersistedLoops(ui?: ExtensionContext["ui"], _isResume = false) {
     if (persistedShown) return;
+    // Set synchronously before any async work to prevent re-entrancy from racing event handlers
     persistedShown = true;
     const sessionStartedAt = Date.now();
     migrateTaskBacklogLoops();
@@ -189,17 +190,20 @@ export function registerSessionRuntimeHooks(options: SessionRuntimeOptions): voi
     const bindings = getBindingsStore();
     const hadFile = bindings.fileExists();
     bindings.load();
+    const loops = getStore().list();
     if (!hadFile) {
-      bindings.save();
-      if (ui) {
-        ui.notify(
-          "No bindings for this session — run /loop-activate to choose which loops this terminal arms.",
-          "info",
-        );
+      if (loops.length > 0) {
+        // Only create a bindings file when there are loops that could be bound.
+        // If no loops exist yet, don't leave an empty file on disk.
+        bindings.save();
+        if (ui) {
+          ui.notify(
+            "No bindings for this session — run /loop-activate to choose which loops this terminal arms.",
+            "info",
+          );
+        }
       }
     }
-
-    const loops = getStore().list();
     if (loops.length > 0) {
       getStore().clearExpired();
       getStore().expireEventLoops(sessionStartedAt);

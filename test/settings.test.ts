@@ -64,6 +64,22 @@ describe("parseSettings", () => {
     expect(() => parseSettings({ foo: 1, bar: 2 })).toThrow(/Unknown pi-loop-settings.json key/);
   });
 
+  it("accepts a subAgent.model pick and round-trips it", () => {
+    const out = parseSettings({
+      subAgent: { model: "openrouter/moonshot/kimi-k3" },
+    });
+    expect(out.subAgent?.model).toBe("openrouter/moonshot/kimi-k3");
+    // Absent model stays undefined (inherit parent).
+    expect(parseSettings({}).subAgent?.model).toBeUndefined();
+  });
+
+  it("rejects malformed subAgent.model values silently (falls back to inherit)", () => {
+    for (const bad of ["no-slash", "", 42, null]) {
+      const out = parseSettings({ subAgent: { model: bad } });
+      expect(out.subAgent?.model).toBeUndefined();
+    }
+  });
+
   it("rejects invalid enum values silently (falls back to default)", () => {
     const out = parseSettings({
       loopScope: "bogus",

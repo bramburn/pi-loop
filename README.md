@@ -50,7 +50,7 @@ When a loop fires, the row shows `→ firing (Ns ago)` for 5 seconds, refreshing
 
 `/loop-resume <id>` — re-arm a stored loop by ID and re-add it to the trigger system. Use this after a session/process restart when a stored event/hybrid loop's trigger subscription was lost. Idempotent: re-arming an already-active loop just refreshes the trigger.
 
-`/loop-settings` — open the unified settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold). Includes a `Shared loops` sub-screen for promoting loops to the cross-repo shared store and adopting shared loops into the current project.
+`/loop-settings` — open the unified settings TUI editor (loopScope, taskScope, debug, autoClear, sortOrder, hiddenAt, maxVisible, showAll, taskThreshold). Includes a **Sub-agent model** row that opens the same searchable model picker as pi's `/model` (fuzzy search over every provider/model you configured via `/login` or `models.json`); the pick is stored as `subAgent.model` in `.pi/pi-loop-settings.json` and becomes the default model for spawned sub-agent children (per-loop `LoopSubAgentConfig.model` still wins; clear the row to inherit the parent's model). Also includes a `Shared loops` sub-screen for promoting loops to the cross-repo shared store and adopting shared loops into the current project.
 
 ```text
 /loop-resume 5        # re-arm loop #5 by id
@@ -201,7 +201,7 @@ Only task counts and the single active/next task are shown there so attention st
 
 ### `subAgent` block (v2.5+, sub-agent execution mode)
 
-Session-wide defaults for [sub-agent loops](#sub-agent-execution-mode-v25). Edit the JSON directly (the cyclic TUI editor shows the block as a read-only summary).
+Session-wide defaults for [sub-agent loops](#sub-agent-execution-mode-v25). Edit the JSON directly (the cyclic TUI editor shows the block as a read-only summary), except `model` which has a dedicated *Sub-agent model* picker row in `/loop-settings`.
 
 | Field | Effect | Default |
 |---|---|---|
@@ -216,6 +216,7 @@ Session-wide defaults for [sub-agent loops](#sub-agent-execution-mode-v25). Edit
 | `criticalInterruptsAll` | If true, a `critical`-priority fire can preempt in-flight iterations | `false` |
 | `showCostInStatusLine` | Show accumulated sub-agent cost in the widget status line | `true` |
 | `useLlmEvaluator` | Use the LLM-evaluator (in addition to the regex evaluator) when a `result.md` is present | `false` |
+| `model` | Default model for sub-agent children, as `provider/model-id` (the format pi's `--model` flag takes). Pick it interactively via `/loop-settings` → *Sub-agent model* (searchable, same UX as `/model`); only `provider/model` strings are accepted, anything else falls back to inheriting the parent. Per-loop `LoopSubAgentConfig.model` wins. | unset → inherit parent |
 
 A one-shot migration (`src/migration/v2-to-v2.5.ts`) inserts the default `subAgent` block into existing settings files on first v2.5+ load — idempotent.
 

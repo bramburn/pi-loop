@@ -282,8 +282,9 @@ describe("/loop-settings command", () => {
     });
     await pi.handler!("", { ui });
     expect(observedOptions).toBeDefined();
-    expect(observedOptions!.length).toBe(13); // 11 settings + Shared loops sub-screen entry + < Back
+    expect(observedOptions!.length).toBe(14); // 11 settings + Sub-agent model + Shared loops sub-screen entry + < Back
     expect(observedOptions!).toContain("Loop storage: project");
+    expect(observedOptions!).toContain("Sub-agent model: (inherit parent)");
     expect(observedOptions!).toContain("Task storage: session");
     expect(observedOptions!).toContain("Debug logging: false");
     expect(observedOptions!).toContain("Auto-clear completed: on_list_complete");
@@ -321,5 +322,72 @@ describe("/loop-settings command", () => {
     await pi.handler!("", { ui });
     // saveFn not called because the selection wasn't in the menu
     expect(saveFn).not.toHaveBeenCalled();
+  });
+
+  it("saves a picked sub-agent model via the searchable picker fallback", async () => {
+    const { pi, ui } = setupCommand();
+    const catalog = {
+      getModelsOfType: () => [
+        { id: "deepseek-chat", provider: "deepseek", api: "openai-completions" },
+        { id: "moonshot/kimi-k3", provider: "openrouter", api: "openai-completions" },
+      ],
+      hasConfiguredAuth: () => true,
+    };
+    // First select: the model row. Second select: the flat picker fallback
+    // (ui.custom is absent in the mock, so the picker degrades to select).
+    (ui.select as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce("Sub-agent model: (inherit parent)")
+      .mockResolvedValueOnce("openrouter/moonshot/kimi-k3")
+      .mockResolvedValueOnce(undefined);
+    await pi.handler!("", { ui, modelRegistry: catalog });
+    expect(saveFn).toHaveBeenCalledWith("/tmp/test", expect.objectContaining({
+      subAgent: expect.objectContaining({ model: "openrouter/moonshot/kimi-k3" }),
+    }));
+    expect(ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("openrouter/moonshot/kimi-k3"),
+      "info",
+    );
+  });
+
+  it("keeps the model unchanged when the picker is cancelled", async () => {
+    const { pi, ui } = setupCommand();
+    (ui.select as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce("Sub-agent model: (inherit parent)")
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    await pi.handler!("", { ui });
+    expect(saveFn).not.toHaveBeenCalled();
+    expect(ui.notify).toHaveBeenCalledWith("Sub-agent model unchanged", "info");
+  });
+
+  it("notifies when the catalogue is empty and saves nothing", async () => {
+    const { pi, ui } = setupCommand();
+    (ui.select as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce("Sub-agent model: (inherit parent)")
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    await pi.handler!("", { ui, modelRegistry: { getModelsOfType: () => [] } });
+    expect(saveFn).not.toHaveBeenCalled();
+    expect(ui.notify).toHaveBeenCalledWith("Sub-agent model unchanged", "info");
+  });
+
+  it("clear sub-agent model removes it and hides the clear row", async () => {
+    settings.subAgent = { model: "deepseek/deepseek-chat" };
+    const { pi, ui } = setupCommand();
+    let firstRenderOptions: string[] | undefined;
+    let calls = 0;
+    (ui.select as ReturnType<typeof vi.fn>).mockImplementation(async (_t: string, options: string[]) => {
+      calls++;
+      firstRenderOptions ??= options;
+      return calls === 1 ? "Clear sub-agent model" : undefined;
+    });
+    await pi.handler!("", { ui });
+    expect(saveFn).toHaveBeenCalledWith("/tmp/test", expect.objectContaining({
+      subAgent: expect.not.objectContaining({ model: expect.anything() }),
+    }));
+    // The pre-clear render showed the stored model and the clear row.
+    expect(firstRenderOptions!).toContain("Sub-agent model: deepseek/deepseek-chat");
+    expect(firstRenderOptions!).toContain("Clear sub-agent model");
+    expect(ui.notify).toHaveBeenCalledWith("Sub-agent model -> inherit parent", "info");
   });
 });
